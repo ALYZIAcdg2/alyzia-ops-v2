@@ -8,7 +8,7 @@
     {
       "binding": "DB",
       "database_name": "alyzia-ops-db",
-      "preview_database_id": "alyzia-ops-db-local",
+      "database_id": "2881327d-f2dd-4037-a395-f7095b32c69c",
       "migrations_dir": "migrations"
     }
   ],

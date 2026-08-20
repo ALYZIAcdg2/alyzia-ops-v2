@@ -75,30 +75,28 @@ ignoré par Git.
 
 ## Configuration D1
 
-Le binding applicatif est `DB` et le nom logique est `alyzia-ops-db`. La valeur
-`preview_database_id: alyzia-ops-db-local` identifie uniquement la base locale
-de développement ; ce n’est ni une ressource distante ni un credential.
+Le binding applicatif est `DB` et le nom logique est `alyzia-ops-db`. Le
+`database_id` versionné rattache le Worker à la base D1 créée dans le compte
+Cloudflare du projet. Cet identifiant de ressource n’est pas un secret.
 
-Le fichier `wrangler.jsonc` ne contient volontairement aucun faux
-`database_id`. Les versions récentes de Wrangler peuvent provisionner la
-ressource quand l’identifiant est absent. Pour un rattachement explicite et
-contrôlé à une base existante :
+En développement local, Wrangler utilise par défaut son stockage local dans
+`.wrangler/` ; aucun `preview_database_id` fictif n’est nécessaire. Pour créer
+une base équivalente dans un autre compte Cloudflare :
 
 ```bash
 npx wrangler d1 create alyzia-ops-db
 ```
 
 Reporter ensuite le `database_id` retourné dans l’entrée `d1_databases` de
-`wrangler.jsonc`, puis appliquer la migration :
+`wrangler.jsonc`, puis appliquer les migrations :
 
 ```bash
 npx wrangler d1 migrations apply DB --local
 npx wrangler d1 migrations apply alyzia-ops-db --remote
 ```
 
-Un identifiant de base D1 n’est pas un secret, mais aucun identifiant inventé
-n’est livré dans le dépôt. Les futurs secrets devront être ajoutés avec
-`wrangler secret put`, jamais dans le code ou la configuration versionnée.
+Les futurs secrets devront être ajoutés avec `wrangler secret put`, jamais dans
+le code ou la configuration versionnée.
 
 ## Schéma initial
 
