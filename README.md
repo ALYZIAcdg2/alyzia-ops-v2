@@ -7,6 +7,28 @@ d’import et un Worker HTTP minimal.
 
 Version du socle : `0.1.0`.
 
+## État de production
+
+Le socle est déployé sur Cloudflare Workers :
+
+- URL publique : <https://alyzia-ops-v2.alyzia-cdg2.workers.dev> ;
+- contrôle de santé :
+  <https://alyzia-ops-v2.alyzia-cdg2.workers.dev/api/health> ;
+- branche de production : `main` ;
+- commande de déploiement Cloudflare Builds : `npx wrangler deploy` ;
+- binding D1 : `DB` vers `alyzia-ops-db` ;
+- migration appliquée : `0001_initial_schema.sql`.
+
+Le déploiement initial a été vérifié le 21 août 2026 : la page d’accueil et
+la route de santé répondent en HTTP 200, tandis qu’un vol ou un import absent
+renvoie correctement HTTP 404.
+
+La base contenait auparavant 13 lignes issues d’un ancien schéma incompatible
+(`flight_identity`, `flight_date`, `data_json`). Elles ont été conservées sans
+transformation dans la table technique `legacy_flights_pre_v2`. Cette archive
+n’est pas lue par les repositories V2 et ne doit pas être assimilée aux vols du
+nouveau modèle.
+
 ## Périmètre
 
 Ce dépôt contient uniquement le Lot 1 :
@@ -191,6 +213,39 @@ npx wrangler deploy
 
 Un déploiement GitHub peut exécuter les mêmes commandes dans l’environnement de
 build Cloudflare. Aucun Node.js n’est alors requis sur le poste opérationnel.
+
+La configuration de production utilise normalement un champ **Build command**
+vide et la commande **Deploy command** suivante :
+
+```text
+npx wrangler deploy
+```
+
+Cette séparation empêche une branche de prévisualisation d’appliquer une
+migration à la base de production avant sa fusion.
+
+### Procédure pour une future migration D1
+
+1. Ajouter une migration SQL versionnée dans `migrations/` et la valider
+   localement avec `npm run validate`.
+2. Fusionner la modification validée dans `main`.
+3. Vérifier que le jeton Cloudflare Builds du projet possède la permission
+   `D1 Edit`.
+4. Renseigner temporairement cette commande dans **Settings → Build → Build
+   command** :
+
+   ```text
+   npx wrangler d1 migrations apply alyzia-ops-db --remote
+   ```
+
+5. Relancer un build de `main`, contrôler le journal de migration puis vérifier
+   `/api/health` et les routes D1 concernées.
+6. Vider de nouveau **Build command** après succès. Ne pas laisser cette
+   commande active pour les builds de branches de prévisualisation.
+
+Wrangler enregistre chaque migration appliquée dans `d1_migrations`. Il ne faut
+ni modifier cette table manuellement ni rejouer directement le contenu SQL dans
+la console D1.
 
 Les emplacements des futurs bindings R2 et Queues sont documentés dans
 `wrangler.jsonc`, sans ressource, credential ou logique fictive.
