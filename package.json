@@ -1,0 +1,20 @@
+{
+  "name": "alyzia-ops-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fondation Cloudflare Workers et D1 pour ALYZIA OPS.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "node --test tests/**/*.test.js",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "check:worker": "wrangler deploy --dry-run --experimental-provision=false --outdir .wrangler/dry-run",
+    "validate": "npm test && npm run db:migrate:local && npm run check:worker"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "wrangler": "^4.124.0"
+  }
+}
