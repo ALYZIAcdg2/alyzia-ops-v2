@@ -8,7 +8,7 @@ import {
 import { ServiceError } from "./services/serviceErrors.js";
 
 const SERVICE_NAME = "ALYZIA OPS";
-const SERVICE_VERSION = "0.5.0";
+const SERVICE_VERSION = "0.6.0";
 
 const ASSET_SECURITY_HEADERS = Object.freeze({
   "Content-Security-Policy":

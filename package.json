@@ -1,12 +1,13 @@
 {
   "name": "alyzia-ops-v2",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "API, Import Center et parser SQ prudent sur Cloudflare Workers et D1.",
   "scripts": {
     "dev": "wrangler dev",
     "test": "node --test tests/**/*.test.js",
+    "test:sq": "node --test tests/parsers/*.test.js",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "check:worker": "wrangler deploy --dry-run --experimental-provision=false --outdir .wrangler/dry-run",
     "validate": "npm test && npm run db:migrate:local && npm run check:worker"
