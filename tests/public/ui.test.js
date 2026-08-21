@@ -7,6 +7,7 @@ import { renderFlightDetail } from "../../public/js/renderFlight.js";
 import {
   renderImportDetail,
   renderImportList,
+  renderImportSummary,
 } from "../../public/js/renderImport.js";
 import { renderSqParse } from "../../public/js/renderSqParse.js";
 import { normalizeFlightCreationInput } from "../../src/services/flightValidation.js";
@@ -91,7 +92,7 @@ test("import rendering escapes technical records and exposes Lot 3 status", () =
       completed_at: null,
     },
     sources: [{ source_name: "<SOURCE>", source_type: "STRUCTURED_JSON", file_status: "RECOGNIZED" }],
-    issues: [{ severity: "REVIEW", issue_code: "FIXTURE_ISSUE", field_path: "timings.std", message: "<MESSAGE>" }],
+    issues: [{ id: 7, severity: "REVIEW", issue_code: "FIXTURE_ISSUE", field_path: "timings.std", message: "<MESSAGE>", resolution_status: "OPEN" }],
     history: [],
   });
 
@@ -100,6 +101,20 @@ test("import rendering escapes technical records and exposes Lot 3 status", () =
   assert.match(detailContainer.innerHTML, /&lt;MESSAGE&gt;/u);
   assert.doesNotMatch(detailContainer.innerHTML, /<SOURCE>|<MESSAGE>/u);
   assert.match(detailContainer.innerHTML, /value-unknown">Inconnu/u);
+  assert.match(detailContainer.innerHTML, /data-issue-id="7"/u);
+  assert.match(detailContainer.innerHTML, /data-resolution="RESOLVED"/u);
+});
+
+test("Import Center summary renders numeric counters", () => {
+  const container = { innerHTML: "" };
+  renderImportSummary(container, {
+    total: 12,
+    review_required: 3,
+    open_issues: 4,
+    error: 1,
+  });
+  assert.match(container.innerHTML, /À réviser/u);
+  assert.match(container.innerHTML, /<dd>4<\/dd>/u);
 });
 
 test("browser fixture is explicit, unique and accepted by Lot 2 validation", () => {

@@ -24,14 +24,14 @@ function jsonPost(path, body, token = WRITE_TOKEN) {
   });
 }
 
-test("GET /api/health returns the Lot 3 service contract", async () => {
+test("GET /api/health returns the Lot 4 service contract", async () => {
   const response = await worker.fetch(request("/api/health"), {});
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "ALYZIA OPS",
-    version: "0.4.0",
+    version: "0.5.0",
   });
 });
 
@@ -384,6 +384,94 @@ test("import API requires write authorization and rejects duplicate ids", async 
       duplicateBody.details.result.issues[0].issue_code,
       "IMPORT_ID_ALREADY_EXISTS",
     );
+  } finally {
+    database.close();
+  }
+});
+
+test("Import Center API filters, summarizes and records human issue decisions", async () => {
+  const database = createSQLiteD1();
+  const env = { DB: database.db, API_WRITE_TOKEN: WRITE_TOKEN };
+  try {
+    await database.db
+      .prepare(
+        `INSERT INTO imports (
+          id, import_mode, import_status, data_scope, parser_name, created_by
+        ) VALUES (?1, 'MANUAL', 'REVIEW_REQUIRED', 'PARTIAL', 'sq-editing', ?2)`,
+      )
+      .bind("IMPORT-CENTER-FIXTURE", "CENTER_TEST_USER")
+      .run();
+    await database.db
+      .prepare(
+        `INSERT INTO import_issues (
+          import_id, severity, issue_code, message, resolution_status
+        ) VALUES (?1, 'REVIEW', 'FIXTURE_REVIEW', 'Fixture review issue', 'OPEN')`,
+      )
+      .bind("IMPORT-CENTER-FIXTURE")
+      .run();
+
+    const filtered = await worker.fetch(
+      request("/api/imports?status=REVIEW_REQUIRED&mode=MANUAL&q=CENTER"),
+      env,
+    );
+    const filteredBody = await filtered.json();
+    assert.equal(filteredBody.imports.length, 1);
+    assert.equal(filteredBody.filters.status, "REVIEW_REQUIRED");
+    assert.equal(filteredBody.pagination.has_previous, false);
+
+    const summary = await worker.fetch(request("/api/imports/summary"), env);
+    assert.deepEqual((await summary.json()).summary, {
+      total: 1,
+      pending: 0,
+      processed: 0,
+      no_change: 0,
+      review_required: 1,
+      error: 0,
+      open_issues: 1,
+    });
+
+    const detailBefore = await worker.fetch(
+      request("/api/imports/IMPORT-CENTER-FIXTURE"),
+      env,
+    );
+    const issueId = (await detailBefore.json()).issues[0].id;
+    const decided = await worker.fetch(
+      jsonPost(
+        `/api/imports/IMPORT-CENTER-FIXTURE/issues/${issueId}`,
+        {
+          resolution_status: "RESOLVED",
+          resolved_by: "CENTER_REVIEWER",
+        },
+      ),
+      env,
+    );
+    assert.equal(decided.status, 405);
+
+    const patchResponse = await worker.fetch(
+      request(`/api/imports/IMPORT-CENTER-FIXTURE/issues/${issueId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${WRITE_TOKEN}`,
+        },
+        body: JSON.stringify({
+          resolution_status: "RESOLVED",
+          resolved_by: "CENTER_REVIEWER",
+        }),
+      }),
+      env,
+    );
+    assert.equal(patchResponse.status, 200);
+    const decision = await patchResponse.json();
+    assert.equal(decision.issue.resolution_status, "RESOLVED");
+    assert.equal(decision.issue.resolved_by, "CENTER_REVIEWER");
+
+    const detailAfter = await worker.fetch(
+      request("/api/imports/IMPORT-CENTER-FIXTURE"),
+      env,
+    );
+    const after = await detailAfter.json();
+    assert.equal(after.import.import_status, "REVIEW_REQUIRED");
   } finally {
     database.close();
   }

@@ -1,9 +1,9 @@
 {
   "name": "alyzia-ops-v2",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "Consultation opérationnelle, parser SQ prudent et imports D1 sur Cloudflare Workers.",
+  "description": "API, Import Center et parser SQ prudent sur Cloudflare Workers et D1.",
   "scripts": {
     "dev": "wrangler dev",
     "test": "node --test tests/**/*.test.js",

@@ -68,12 +68,25 @@ export function createFlight(model, writeToken) {
   });
 }
 
-export function listImports({ limit = 25, offset = 0 } = {}) {
+export function listImports({
+  limit = 25,
+  offset = 0,
+  status = "",
+  mode = "",
+  query = "",
+} = {}) {
   const parameters = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
   });
+  if (status) parameters.set("status", status);
+  if (mode) parameters.set("mode", mode);
+  if (query.trim()) parameters.set("q", query.trim());
   return apiRequest(`/api/imports?${parameters}`);
+}
+
+export function getImportSummary() {
+  return apiRequest("/api/imports/summary");
 }
 
 export function getImport(importId) {
@@ -89,6 +102,26 @@ export function createStructuredImport({ model, context }, writeToken) {
     },
     body: JSON.stringify({ model, context }),
   });
+}
+
+export function resolveImportIssue(
+  { importId, issueId, resolutionStatus, resolvedBy },
+  writeToken,
+) {
+  return apiRequest(
+    `/api/imports/${encodeURIComponent(importId)}/issues/${encodeURIComponent(issueId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${writeToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        resolution_status: resolutionStatus,
+        resolved_by: resolvedBy,
+      }),
+    },
+  );
 }
 
 export function previewSqSource({ sourceText, options }, writeToken) {

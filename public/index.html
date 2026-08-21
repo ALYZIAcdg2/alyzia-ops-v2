@@ -47,7 +47,7 @@
     <main id="workspace">
       <section class="intro" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">LOT 3 · PARSER SQ PRUDENT</p>
+          <p class="eyebrow">LOT 4 · API + IMPORT CENTER</p>
           <h1 id="page-title">Tableau des vols</h1>
           <p class="intro-copy">
             Recherchez un vol par identité canonique, compagnie, numéro,
@@ -164,6 +164,50 @@
             ↻
           </button>
         </div>
+        <dl id="import-summary" class="import-summary" aria-label="Synthèse des imports">
+          <div><dt>Total</dt><dd>—</dd></div>
+          <div><dt>À réviser</dt><dd>—</dd></div>
+          <div><dt>Issues ouvertes</dt><dd>—</dd></div>
+          <div><dt>Erreurs</dt><dd>—</dd></div>
+        </dl>
+        <form id="import-filters" class="import-filters" role="search">
+          <label>
+            Rechercher un import
+            <input id="import-search" type="search" maxlength="100" autocomplete="off" placeholder="Identifiant, vol, parser, opérateur…" />
+          </label>
+          <label>
+            Statut
+            <select id="import-status-filter">
+              <option value="">Tous</option>
+              <option value="PENDING">En attente</option>
+              <option value="PROCESSED">Traité</option>
+              <option value="NO_CHANGE">Sans changement</option>
+              <option value="REVIEW_REQUIRED">Révision requise</option>
+              <option value="ERROR">Erreur</option>
+            </select>
+          </label>
+          <label>
+            Mode
+            <select id="import-mode-filter">
+              <option value="">Tous</option>
+              <option value="MANUAL">Manuel</option>
+              <option value="AUTOMATIC">Automatique</option>
+            </select>
+          </label>
+          <button class="button button-primary" type="submit">Filtrer</button>
+          <button class="button button-quiet" id="reset-import-filters" type="button">Réinitialiser</button>
+        </form>
+        <div class="import-review-controls">
+          <label>
+            Opérateur de décision
+            <input id="issue-resolved-by" type="text" maxlength="100" autocomplete="off" placeholder="Identifiant utilisateur" />
+          </label>
+          <label>
+            Jeton d’écriture
+            <input id="issue-write-token" type="password" autocomplete="off" spellcheck="false" placeholder="Non conservé" />
+          </label>
+          <p>Une décision clôt uniquement l’issue sélectionnée. Elle ne relance pas l’import et ne modifie pas son statut.</p>
+        </div>
         <div class="imports-grid">
           <div id="import-list" class="import-list" aria-live="polite">
             <p class="empty-block">Chargement des imports…</p>
@@ -171,6 +215,11 @@
           <div id="import-detail" class="import-detail" aria-live="polite">
             <p class="empty-block">Sélectionnez un import pour consulter ses sources, issues et changements.</p>
           </div>
+        </div>
+        <div class="import-pagination" aria-label="Pagination des imports">
+          <button class="button button-quiet" id="previous-imports" type="button">Page précédente</button>
+          <span id="import-page-label">Page 1</span>
+          <button class="button button-quiet" id="next-imports" type="button">Page suivante</button>
         </div>
       </section>
     </main>

@@ -863,6 +863,81 @@ h3 {
   box-shadow: var(--shadow);
 }
 
+.import-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0 1rem 1rem;
+}
+
+.import-summary div {
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: var(--panel-soft);
+}
+
+.import-summary dt,
+.import-summary dd {
+  margin: 0;
+}
+
+.import-summary dt {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.import-summary dd {
+  margin-top: 0.25rem;
+  font-size: 1.15rem;
+  font-weight: 850;
+}
+
+.import-filters,
+.import-review-controls {
+  display: grid;
+  grid-template-columns: minmax(13rem, 2fr) repeat(2, minmax(9rem, 1fr)) auto auto;
+  align-items: end;
+  gap: 0.65rem;
+  padding: 0 1rem 1rem;
+}
+
+.import-filters label,
+.import-review-controls label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted-strong);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.import-filters input,
+.import-filters select,
+.import-review-controls input {
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.68rem;
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.import-review-controls {
+  grid-template-columns: minmax(11rem, 1fr) minmax(11rem, 1fr) 2fr;
+  align-items: center;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.import-review-controls p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
 .imports-grid {
   display: grid;
   grid-template-columns: minmax(17rem, 0.8fr) minmax(0, 1.6fr);
@@ -985,6 +1060,35 @@ h3 {
   border-left: 2px solid var(--line-strong);
   background: var(--panel-soft);
   font-size: 0.72rem;
+}
+
+.issue-record > div,
+.issue-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.issue-actions {
+  margin-top: 0.4rem;
+}
+
+.issue-actions .button {
+  min-height: 2.1rem;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.68rem;
+}
+
+.import-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted-strong);
+  font-size: 0.75rem;
 }
 
 .import-records span {
@@ -1264,6 +1368,22 @@ footer {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
+
+  .import-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .import-filters label:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .import-review-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .import-review-controls p {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 48rem) {
@@ -1309,6 +1429,10 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .import-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .dialog-actions-split {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1333,6 +1457,16 @@ footer {
 
   .import-meta {
     grid-template-columns: 1fr;
+  }
+
+  .import-filters,
+  .import-review-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .import-filters label:first-child,
+  .import-review-controls p {
+    grid-column: auto;
   }
 
   .topbar .button-accent span {
