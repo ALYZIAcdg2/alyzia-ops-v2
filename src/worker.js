@@ -1,43 +1,36 @@
-import { createFlightRepository } from "./database/flightRepository.js";
 import { createImportRepository } from "./database/importRepository.js";
+import { handleFlightApi } from "./http/flightApi.js";
+import {
+  jsonResponse,
+  methodNotAllowed,
+  routeIdentifier,
+} from "./http/httpUtils.js";
+import { ServiceError } from "./services/serviceErrors.js";
 
 const SERVICE_NAME = "ALYZIA OPS";
-const SERVICE_VERSION = "0.1.0";
+const SERVICE_VERSION = "0.2.0";
 
-function jsonResponse(body, { status = 200, headers = {} } = {}) {
-  return Response.json(body, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-      ...headers,
-    },
+const ASSET_SECURITY_HEADERS = Object.freeze({
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+  "Permissions-Policy":
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+});
+
+async function serveAsset(request, assets) {
+  const response = await assets.fetch(request);
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(ASSET_SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
-}
-
-function routeIdentifier(pathname, prefix) {
-  if (!pathname.startsWith(prefix)) {
-    return null;
-  }
-
-  const encodedId = pathname.slice(prefix.length);
-  if (!encodedId || encodedId.includes("/")) {
-    return null;
-  }
-
-  try {
-    return decodeURIComponent(encodedId);
-  } catch {
-    return null;
-  }
-}
-
-async function handleFlightRequest(env, flightId) {
-  const flight = await createFlightRepository(env.DB).findById(flightId);
-
-  return flight
-    ? jsonResponse({ flight })
-    : jsonResponse({ error: "Flight not found" }, { status: 404 });
 }
 
 async function handleImportRequest(env, importId) {
@@ -56,14 +49,10 @@ async function handleImportRequest(env, importId) {
 async function handleRequest(request, env) {
   const url = new URL(request.url);
 
-  if (request.method !== "GET") {
-    return jsonResponse(
-      { error: "Method not allowed" },
-      { status: 405, headers: { Allow: "GET" } },
-    );
-  }
-
   if (url.pathname === "/api/health") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
     return jsonResponse({
       ok: true,
       service: SERVICE_NAME,
@@ -71,13 +60,16 @@ async function handleRequest(request, env) {
     });
   }
 
-  const flightId = routeIdentifier(url.pathname, "/api/flights/");
-  if (flightId !== null) {
-    return handleFlightRequest(env, flightId);
+  const flightResponse = await handleFlightApi(request, env, url);
+  if (flightResponse) {
+    return flightResponse;
   }
 
   const importId = routeIdentifier(url.pathname, "/api/imports/");
   if (importId !== null) {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
     return handleImportRequest(env, importId);
   }
 
@@ -86,7 +78,7 @@ async function handleRequest(request, env) {
   }
 
   if (env.ASSETS && typeof env.ASSETS.fetch === "function") {
-    return env.ASSETS.fetch(request);
+    return serveAsset(request, env.ASSETS);
   }
 
   return new Response("ALYZIA OPS foundation", {
@@ -99,6 +91,16 @@ export default {
     try {
       return await handleRequest(request, env);
     } catch (error) {
+      if (error instanceof ServiceError) {
+        return jsonResponse(
+          {
+            error: error.message,
+            code: error.code,
+            ...(error.details === undefined ? {} : { details: error.details }),
+          },
+          { status: error.status },
+        );
+      }
       console.error(
         JSON.stringify({
           message: "request failed",

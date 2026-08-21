@@ -128,6 +128,21 @@ export function createConnectionRepository(db) {
       return result.results ?? [];
     },
 
+    async getOutboundLoadsByFlightId(flightId) {
+      const result = await db
+        .prepare(
+          `SELECT outbound_load.*
+           FROM flight_outbound_load AS outbound_load
+           INNER JOIN flight_outbound_connections AS outbound
+             ON outbound.id = outbound_load.outbound_connection_id
+           WHERE outbound.flight_id = ?1
+           ORDER BY outbound_load.id`,
+        )
+        .bind(flightId)
+        .all();
+      return result.results ?? [];
+    },
+
     upsertOutboundLoad(outboundConnectionId, classCode, paxCount) {
       return db
         .prepare(
@@ -170,6 +185,21 @@ export function createConnectionRepository(db) {
            ORDER BY connection.id`,
         )
         .bind(passengerId)
+        .all();
+      return result.results ?? [];
+    },
+
+    async getPassengerConnectionsByFlightId(flightId) {
+      const result = await db
+        .prepare(
+          `SELECT connection.*
+           FROM passenger_connections AS connection
+           INNER JOIN flight_passengers AS passenger
+             ON passenger.id = connection.passenger_id
+           WHERE passenger.flight_id = ?1
+           ORDER BY connection.id`,
+        )
+        .bind(flightId)
         .all();
       return result.results ?? [];
     },

@@ -4,50 +4,212 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>ALYZIA OPS</title>
-    <style>
-      :root {
-        color: #eef6ff;
-        background: #07111f;
-        font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-          "Segoe UI", sans-serif;
-      }
-
-      body {
-        min-height: 100vh;
-        margin: 0;
-        display: grid;
-        place-items: center;
-        background:
-          radial-gradient(circle at top, #163e63 0, transparent 45%),
-          #07111f;
-      }
-
-      main {
-        width: min(38rem, calc(100% - 3rem));
-        padding: 2.5rem;
-        border: 1px solid #2c5878;
-        border-radius: 1.25rem;
-        background: rgb(8 24 41 / 88%);
-        box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 35%);
-      }
-
-      p {
-        color: #a9c3d7;
-        line-height: 1.6;
-      }
-
-      code {
-        color: #81d4fa;
-      }
-    </style>
+    <meta
+      name="description"
+      content="Interface opérationnelle de consultation ALYZIA OPS V2."
+    />
+    <title>ALYZIA OPS V2</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/js/app.js"></script>
   </head>
   <body>
-    <main>
-      <h1>ALYZIA OPS</h1>
-      <p>Fondation Cloudflare Workers + D1 — version 0.1.0.</p>
-      <p>État du service : <code>GET /api/health</code></p>
+    <a class="skip-link" href="#workspace">Aller au contenu</a>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Accueil ALYZIA OPS">
+        <span class="brand-mark" aria-hidden="true">AO</span>
+        <span>
+          <strong>ALYZIA OPS</strong>
+          <small>Flight operations · V2</small>
+        </span>
+      </a>
+
+      <div class="topbar-actions">
+        <span class="service-state is-loading" id="service-state">
+          <span class="state-dot" aria-hidden="true"></span>
+          <span id="service-state-label">Connexion…</span>
+        </span>
+        <button class="button button-accent" id="open-fixture" type="button">
+          <span aria-hidden="true">＋</span>
+          Créer une fixture
+        </button>
+      </div>
+    </header>
+
+    <main id="workspace">
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">LOT 2 · CONSULTATION D1</p>
+          <h1 id="page-title">Tableau des vols</h1>
+          <p class="intro-copy">
+            Recherchez un vol par identité canonique, compagnie, numéro,
+            escale ou date interne.
+          </p>
+        </div>
+        <dl class="summary-strip" aria-label="Résumé de la vue">
+          <div>
+            <dt>Vols affichés</dt>
+            <dd id="visible-count">—</dd>
+          </div>
+          <div>
+            <dt>Version API</dt>
+            <dd id="api-version">—</dd>
+          </div>
+          <div>
+            <dt>Source</dt>
+            <dd>D1</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="search-panel" aria-label="Recherche de vols">
+        <form id="search-form" role="search">
+          <label for="flight-search">Rechercher</label>
+          <div class="search-control">
+            <span aria-hidden="true">⌕</span>
+            <input
+              id="flight-search"
+              name="q"
+              type="search"
+              maxlength="100"
+              autocomplete="off"
+              placeholder="Ex. ZZ-TEST21-20991231-TST-LAB, ZZTEST21, TST…"
+            />
+            <button
+              class="icon-button is-hidden"
+              id="clear-search"
+              type="button"
+              aria-label="Effacer la recherche"
+            >
+              ×
+            </button>
+          </div>
+          <button class="button button-primary" type="submit">Rechercher</button>
+        </form>
+      </section>
+
+      <div class="workspace-grid">
+        <aside class="flight-browser" aria-labelledby="flight-list-title">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">RÉSULTATS</p>
+              <h2 id="flight-list-title">Vols</h2>
+            </div>
+            <button
+              class="icon-button"
+              id="refresh-flights"
+              type="button"
+              aria-label="Actualiser la liste"
+              title="Actualiser"
+            >
+              ↻
+            </button>
+          </div>
+
+          <div id="flight-list" class="flight-list" aria-live="polite">
+            <div class="list-skeleton" aria-label="Chargement des vols">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+
+          <button
+            class="button button-quiet load-more is-hidden"
+            id="load-more"
+            type="button"
+          >
+            Afficher plus de vols
+          </button>
+        </aside>
+
+        <section
+          class="flight-detail"
+          id="flight-detail"
+          aria-labelledby="detail-title"
+          aria-live="polite"
+        >
+          <div class="empty-state">
+            <span class="empty-icon" aria-hidden="true">✈</span>
+            <p class="eyebrow">FICHE VOL</p>
+            <h2 id="detail-title">Sélectionnez un vol</h2>
+            <p>
+              La fiche structurée affichera les horaires, l’appareil, la
+              charge, les passagers et les correspondances sans recalculer les
+              données absentes.
+            </p>
+          </div>
+        </section>
+      </div>
     </main>
+
+    <footer>
+      <p>
+        ALYZIA OPS V2 · Les valeurs absentes, inconnues et égales à zéro sont
+        affichées distinctement.
+      </p>
+    </footer>
+
+    <dialog id="fixture-dialog" aria-labelledby="fixture-title">
+      <form id="fixture-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">OUTIL DE VALIDATION LOT 2</p>
+            <h2 id="fixture-title">Créer un vol de test</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="close-fixture"
+            type="button"
+            aria-label="Fermer"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="warning-box" role="note">
+          <strong>Fixture uniquement</strong>
+          <p>
+            Cette action écrit dans D1 des données clairement marquées
+            <code>FIXTURE</code>. Ne saisissez aucune donnée réelle ou
+            personnelle.
+          </p>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Date interne fiable
+            <input id="fixture-date" name="fixture_date" type="date" required />
+            <small>Cette date explicite entre dans l’identité canonique.</small>
+          </label>
+          <label>
+            Jeton d’écriture Cloudflare
+            <input
+              id="write-token"
+              name="write_token"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              required
+            />
+            <small>Utilisé pour cette requête uniquement, jamais enregistré.</small>
+          </label>
+        </div>
+
+        <label class="confirmation">
+          <input id="fixture-confirmation" type="checkbox" required />
+          <span>Je confirme qu’il s’agit exclusivement de données de test.</span>
+        </label>
+
+        <div class="dialog-actions">
+          <button class="button button-quiet" id="cancel-fixture" type="button">
+            Annuler
+          </button>
+          <button class="button button-accent" id="submit-fixture" type="submit">
+            Créer la fixture D1
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
   </body>
 </html>
