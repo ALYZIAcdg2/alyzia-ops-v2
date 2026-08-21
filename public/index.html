@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark" />
     <meta
       name="description"
-      content="Interface opérationnelle de consultation et d’import structuré ALYZIA OPS V2."
+          content="Interface opérationnelle de consultation et d’import SQ ALYZIA OPS V2."
     />
     <title>ALYZIA OPS V2</title>
     <link rel="stylesheet" href="/styles.css" />
@@ -37,13 +37,17 @@
           <span aria-hidden="true">⇧</span>
           Import structuré
         </button>
+        <button class="button button-primary" id="open-sq" type="button">
+          <span aria-hidden="true">SQ</span>
+          Parser un editing
+        </button>
       </div>
     </header>
 
     <main id="workspace">
       <section class="intro" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">LOT 3 · IMPORTS STRUCTURÉS D1</p>
+          <p class="eyebrow">LOT 3 · PARSER SQ PRUDENT</p>
           <h1 id="page-title">Tableau des vols</h1>
           <p class="intro-copy">
             Recherchez un vol par identité canonique, compagnie, numéro,
@@ -147,7 +151,7 @@
       <section class="imports-panel" aria-labelledby="imports-title">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">HISTORIQUE LOT 3</p>
+            <p class="eyebrow">HISTORIQUE D’IMPORT</p>
             <h2 id="imports-title">Imports structurés</h2>
           </div>
           <button
@@ -243,14 +247,14 @@
       <form id="import-form" method="dialog">
         <div class="dialog-heading">
           <div>
-            <p class="eyebrow">MOTEUR D’IMPORT LOT 3</p>
+            <p class="eyebrow">MOTEUR D’IMPORT LOT 2</p>
             <h2 id="import-dialog-title">Importer un modèle structuré</h2>
           </div>
           <button class="icon-button" id="close-import" type="button" aria-label="Fermer">×</button>
         </div>
 
         <div class="warning-box" role="note">
-          <strong>Pas de parser compagnie dans ce lot</strong>
+          <strong>Import structuré sans parsing</strong>
           <p>Collez uniquement un objet <code>FlightImportModel</code> JSON déjà structuré. Une modification ambiguë sera placée en révision.</p>
         </div>
 
@@ -290,6 +294,87 @@
         <div class="dialog-actions">
           <button class="button button-quiet" id="cancel-import" type="button">Annuler</button>
           <button class="button button-primary" id="submit-import" type="submit">Exécuter l’import</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="sq-dialog" aria-labelledby="sq-dialog-title" class="dialog-wide">
+      <form id="sq-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">PARSER SQ · PRÉVISUALISATION AVANT D1</p>
+            <h2 id="sq-dialog-title">Analyser un editing SQ</h2>
+          </div>
+          <button class="icon-button" id="close-sq" type="button" aria-label="Fermer">×</button>
+        </div>
+
+        <div class="warning-box" role="note">
+          <strong>Aucune déduction silencieuse</strong>
+          <p>L’année et le mouvement sont saisis explicitement. Les SSR inconnus sont conservés sous <code>OTHER</code>, les meals restent ouverts et un document ambigu reste non classé.</p>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Année fiable
+            <input id="sq-year" name="service_year" type="number" min="2000" max="2200" inputmode="numeric" required />
+          </label>
+          <label>
+            Mouvement
+            <select id="sq-movement" name="movement_type" required>
+              <option value="">Choisir explicitement</option>
+              <option value="DEPARTURE">DEPARTURE</option>
+              <option value="ARRIVAL">ARRIVAL</option>
+            </select>
+          </label>
+          <label>
+            Origine de complément
+            <input id="sq-origin" name="origin" type="text" maxlength="3" autocomplete="off" placeholder="Si absente de la source" />
+          </label>
+          <label>
+            Destination de complément
+            <input id="sq-destination" name="destination" type="text" maxlength="3" autocomplete="off" placeholder="Si absente de la source" />
+          </label>
+          <label>
+            Nom technique de la source
+            <input id="sq-source-name" name="source_name" type="text" maxlength="200" autocomplete="off" value="SQ editing text" required />
+          </label>
+          <label>
+            Utilisateur
+            <input id="sq-user" name="user_id" type="text" maxlength="100" autocomplete="off" required />
+          </label>
+          <label>
+            Portée
+            <select id="sq-scope" name="data_scope" required>
+              <option value="PARTIAL">PARTIAL — recommandé</option>
+              <option value="FULL">FULL — suppressions toujours protégées</option>
+            </select>
+          </label>
+          <label>
+            Jeton d’écriture Cloudflare
+            <input id="sq-token" name="write_token" type="password" autocomplete="off" spellcheck="false" required />
+          </label>
+        </div>
+
+        <label class="json-field">
+          Texte de l’editing SQ
+          <textarea id="sq-source" name="source_text" rows="16" spellcheck="false" required placeholder="Collez ici le texte source SQ…"></textarea>
+          <small>Le texte brut n’est pas copié dans la fiche passager ni dans les issues.</small>
+        </label>
+
+        <div id="sq-preview" class="parse-preview" aria-live="polite">
+          <p class="empty-block">Analysez la source pour vérifier le modèle avant toute écriture D1.</p>
+        </div>
+
+        <label class="confirmation">
+          <input id="sq-confirmation" type="checkbox" required />
+          <span>Je confirme l’année, le mouvement, la portée et la source avant import.</span>
+        </label>
+
+        <div class="dialog-actions dialog-actions-split">
+          <button class="button button-quiet" id="cancel-sq" type="button">Annuler</button>
+          <span></span>
+          <button class="button button-quiet" id="preview-sq" type="button">Analyser sans écrire</button>
+          <button class="button button-primary" id="submit-sq" type="submit" disabled>Importer dans D1</button>
         </div>
       </form>
     </dialog>

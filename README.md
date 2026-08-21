@@ -2,11 +2,13 @@
 
 ALYZIA OPS V2 est une application Cloudflare Workers + D1 destinée à stocker
 et consulter une représentation structurée des vols. Le Lot 1 fournit le socle
-de données commun. Le Lot 2 ajoute une API de consultation/création, la
-recherche et une fiche vol opérationnelle sans framework frontend lourd. Le
-Lot 3 livre le moteur prudent d’import de modèles déjà structurés.
+de données commun. Le Lot 2 ajoute les repositories D1 et le moteur prudent
+d’import de modèles déjà structurés. Le Lot 3 ajoute le parser SQ textuel avec
+prévisualisation obligatoire avant écriture. Une première API et un centre
+d’import technique permettent de tester ce socle ; leur extension
+opérationnelle complète appartient au Lot 4.
 
-Version applicative : `0.3.0`.
+Version applicative : `0.4.0`.
 
 ## Accès
 
@@ -27,10 +29,10 @@ opérationnel.
 - modèle `FlightImportModel` commun et indépendant d’une compagnie ;
 - migration D1 initiale et 24 tables structurées ;
 - modèles, repositories D1 et utilitaires ES Modules ;
-- contrat initial de `importFlightData`, finalisé au Lot 3 ;
+- contrat initial de `importFlightData`, finalisé au Lot 2 ;
 - historique et corrections manuelles préparés dans le schéma.
 
-### Lot 2 — consultation et test
+### Lot 2 — repositories et moteur d’import
 
 - `GET /api/flights` avec recherche et pagination ;
 - `GET /api/flights/:id` avec agrégat complet ;
@@ -42,9 +44,6 @@ opérationnel.
 - générateur manuel de fixture, toujours clairement marqué comme donnée de
   test et jamais exécuté automatiquement ;
 - tests D1 en mémoire sur le schéma réel.
-
-### Lot 3 — import structuré
-
 - import manuel d’un `FlightImportModel` JSON déjà structuré ;
 - validation du contrat et matching exact de l’identité canonique ;
 - snapshot D1, comparaison stricte et plan d’exécution ;
@@ -55,8 +54,27 @@ opérationnel.
 - statuts `PROCESSED`, `NO_CHANGE`, `REVIEW_REQUIRED` et `ERROR` ;
 - consultation des imports depuis l’API et l’interface.
 
-Ne sont pas inclus : parser SQ complet, Gmail, IA, logique R2, logique Queues
-ou upload de fichiers bruts/PDF. Aucun codeshare SQ V1 n’est ajouté.
+### Lot 3 — parser SQ prudent
+
+- parser SQ séparé des composants communs et versionné `sq-editing@0.1.0` ;
+- extraction des identités, horaires explicitement libellés, appareil, cabines,
+  charges, passagers explicitement typés, SSR et documents ;
+- conservation des SSR multiples d’une même catégorie avec le détail exact et
+  le compte par code ;
+- catégorie `OTHER` pour les SSR inconnus et catégorie `MEAL` seulement avec
+  un contexte meal explicite ;
+- ETKT et EMD classés uniquement lorsque leur type est explicite, sinon
+  stockage non classé ;
+- année et mouvement fournis explicitement, sans choix automatique de l’année
+  courante ;
+- prévisualisation sans écriture, diagnostic des lignes non mappées et blocage
+  de l’import en cas d’issue `REVIEW` ou `BLOCKING` ;
+- import D1 protégé par le même secret, avec métadonnées et issues du parser.
+
+Ne sont pas inclus dans les Lots 1 à 3 : extraction PDF/ZIP, Gmail, IA, logique
+R2 ou logique Queues. Aucun codeshare SQ V1 n’est ajouté. Les formats
+SQ335/SQ337 réels restent à valider au Lot 5 à partir des fichiers
+opérationnels de référence.
 
 ## Architecture
 
@@ -73,6 +91,7 @@ alyzia-ops-v2/
 │   ├── http/                # contrat HTTP et autorisation d’écriture
 │   ├── import/              # comparaison, plan et moteur d’import structuré
 │   ├── models/              # structures métier communes
+│   ├── parsers/sq/          # parser SQ isolé et prudent
 │   ├── services/            # validation, création et agrégation
 │   ├── utils/               # normalisation et comparaisons pures
 │   └── worker.js            # routeur Cloudflare Worker
@@ -165,7 +184,7 @@ GET /api/health
 {
   "ok": true,
   "service": "ALYZIA OPS",
-  "version": "0.3.0"
+  "version": "0.4.0"
 }
 ```
 
@@ -239,6 +258,33 @@ passagers, particularités, documents, connexions, groupes ou commentaires sont
 comparés de façon stable mais placés en `REVIEW_REQUIRED` tant que leur matching
 métier n’est pas finalisé.
 
+### Parser SQ
+
+```http
+POST /api/sq/parse
+POST /api/sq/import
+Content-Type: application/json
+Authorization: Bearer <API_WRITE_TOKEN>
+```
+
+`/api/sq/parse` retourne une prévisualisation sans écrire dans D1. Le corps
+contient `source_text` et des options explicites :
+
+```json
+{
+  "source_text": "SQ335/19AUG CDGSIN\nMOVEMENT: DEPARTURE",
+  "options": {
+    "service_year": 2026,
+    "movement_type": "DEPARTURE"
+  }
+}
+```
+
+`/api/sq/import` reprend ces champs et ajoute `source_name` et le `context`
+d’import. Une source comportant une ambiguïté `REVIEW` ou `BLOCKING` est
+refusée avec `SQ_REVIEW_REQUIRED` et ne crée aucun import. Le texte brut n’est
+pas recopié dans les issues ni dans la fiche passager.
+
 ## Tester la V2 dans le navigateur
 
 1. Configurer `API_WRITE_TOKEN` dans Cloudflare.
@@ -248,11 +294,16 @@ métier n’est pas finalisé.
    données sont des données de test.
 5. Vérifier la nouvelle fiche, la recherche par identité et les blocs détaillés.
 
-Pour tester le Lot 3, cliquer sur **Import structuré**, fournir un
+Pour tester le moteur du Lot 2, cliquer sur **Import structuré**, fournir un
 `FlightImportModel` JSON valide, une portée et un identifiant utilisateur. Le
 secret n’est ni conservé dans `localStorage`, ni dans `sessionStorage`. Le
 résultat peut être consulté dans la section **Imports structurés** avec ses
 sources techniques, issues et entrées d’historique.
+
+Pour tester le Lot 3, cliquer sur **Parser un editing**, coller le texte SQ,
+saisir une année fiable et choisir explicitement `DEPARTURE` ou `ARRIVAL`.
+Cliquer d’abord sur **Analyser sans écrire**. Le bouton d’import reste désactivé
+tant que le parser signale une ambiguïté nécessitant une révision.
 
 La fixture utilise une compagnie `ZZ`, des escales `TST`/`LAB`, des noms
 `FIXTURE/...` et des classes `TEST_*`. Elle ne contient aucun faux passager
@@ -276,9 +327,10 @@ La suite couvre notamment :
 - création complète sur SQLite avec l’API D1 simulée ;
 - sécurité du `POST`, doublon, recherche et fiche agrégée ;
 - interface modulaire et fixture explicite ;
-- pipeline Lot 3, absence/null/0, replay sans changement et historique ;
+- pipeline Lot 2, absence/null/0, replay sans changement et historique ;
 - protections FULL/PARTIAL, overrides et modifications structurelles ;
 - routes de liste, création et détail des imports ;
+- parser SQ, SSR multiples, documents explicites et blocage des ambiguïtés ;
 - résolution de tous les imports ES Modules.
 
 Pour tester aussi la migration locale et le bundle Worker :

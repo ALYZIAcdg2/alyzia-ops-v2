@@ -8,6 +8,7 @@ import {
   renderImportDetail,
   renderImportList,
 } from "../../public/js/renderImport.js";
+import { renderSqParse } from "../../public/js/renderSqParse.js";
 import { normalizeFlightCreationInput } from "../../src/services/flightValidation.js";
 
 const publicUrl = new URL("../../public/", import.meta.url);
@@ -26,9 +27,45 @@ test("static UI loads modular CSS and JavaScript without a frontend framework", 
   assert.match(html, /id="flight-detail"/u);
   assert.match(html, /id="import-list"/u);
   assert.match(html, /id="import-model"/u);
+  assert.match(html, /id="sq-source"/u);
+  assert.match(html, /id="preview-sq"/u);
+  assert.match(html, /Choisir explicitement/u);
   assert.match(html, /Fixture uniquement/u);
   assert.doesNotMatch(html, /<script[^>]+src="https?:\/\//iu);
   assert.doesNotMatch(app, /localStorage|sessionStorage/u);
+});
+
+test("SQ preview escapes parser issues and exposes the import gate", () => {
+  const container = { innerHTML: "" };
+  renderSqParse(container, {
+    can_import: false,
+    parser: {
+      name: "sq-editing",
+      version: "0.1.0",
+      detection_confidence: 0.8,
+    },
+    model: {
+      flight: { flight_id: "SQ-<FIXTURE>" },
+      passengers: [],
+      particularities: [],
+      tickets_documents: { etkt: [], emds: [], unclassified: [] },
+    },
+    diagnostics: { matched_line_count: 4, line_count: 5 },
+    issues: [
+      {
+        severity: "REVIEW",
+        issue_code: "FIXTURE_<ISSUE>",
+        field_path: "flight.fixture",
+        message: "<MESSAGE>",
+      },
+    ],
+  });
+
+  assert.match(container.innerHTML, /Révision requise/u);
+  assert.match(container.innerHTML, /SQ-&lt;FIXTURE&gt;/u);
+  assert.match(container.innerHTML, /FIXTURE_&lt;ISSUE&gt;/u);
+  assert.match(container.innerHTML, /&lt;MESSAGE&gt;/u);
+  assert.doesNotMatch(container.innerHTML, /<MESSAGE>/u);
 });
 
 test("import rendering escapes technical records and exposes Lot 3 status", () => {

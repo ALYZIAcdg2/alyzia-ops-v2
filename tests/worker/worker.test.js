@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import worker from "../../src/worker.js";
 import { createLot2FlightFixture } from "../fixtures/lot2FlightFixture.js";
+import { createSqEditingFixture } from "../fixtures/sqEditingFixture.js";
 import { createD1Mock } from "../repositories/d1Mock.js";
 import { createSQLiteD1 } from "../repositories/sqliteD1.js";
 
@@ -30,8 +31,100 @@ test("GET /api/health returns the Lot 3 service contract", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "ALYZIA OPS",
-    version: "0.3.0",
+    version: "0.4.0",
   });
+});
+
+test("SQ parser API previews a source without writing to D1", async () => {
+  const database = createSQLiteD1();
+  const env = { DB: database.db, API_WRITE_TOKEN: WRITE_TOKEN };
+  try {
+    const response = await worker.fetch(
+      jsonPost("/api/sq/parse", {
+        source_text: createSqEditingFixture(),
+        options: { service_year: 2026 },
+      }),
+      env,
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.parse.can_import, true);
+    assert.equal(body.parse.model.flight.flight_id, "SQ-335-20260819-CDG-SIN");
+
+    const imports = await worker.fetch(request("/api/imports"), env);
+    assert.deepEqual((await imports.json()).imports, []);
+  } finally {
+    database.close();
+  }
+});
+
+test("SQ parser API refuses import when the date year is ambiguous", async () => {
+  const database = createSQLiteD1();
+  const env = { DB: database.db, API_WRITE_TOKEN: WRITE_TOKEN };
+  try {
+    const response = await worker.fetch(
+      jsonPost("/api/sq/import", {
+        source_text: createSqEditingFixture(),
+        context: {
+          import_id: "IMPORT-SQ-AMBIGUOUS",
+          import_mode: "MANUAL",
+          data_scope: "PARTIAL",
+          user_id: "SQ_FIXTURE_USER",
+        },
+      }),
+      env,
+    );
+    assert.equal(response.status, 422);
+    const body = await response.json();
+    assert.equal(body.code, "SQ_REVIEW_REQUIRED");
+    assert.ok(
+      body.details.parse.issues.some(
+        (issue) => issue.issue_code === "DATE_AMBIGUOUS",
+      ),
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("SQ parser API imports a reviewed fixture and records parser metadata", async () => {
+  const database = createSQLiteD1();
+  const env = { DB: database.db, API_WRITE_TOKEN: WRITE_TOKEN };
+  try {
+    const response = await worker.fetch(
+      jsonPost("/api/sq/import", {
+        source_text: createSqEditingFixture(),
+        source_name: "SQ FIXTURE EDITING",
+        options: { service_year: 2026 },
+        context: {
+          import_id: "IMPORT-SQ-FIXTURE",
+          import_mode: "MANUAL",
+          data_scope: "PARTIAL",
+          user_id: "SQ_FIXTURE_USER",
+        },
+      }),
+      env,
+    );
+    assert.equal(response.status, 201);
+    const body = await response.json();
+    assert.equal(body.result.status, "PROCESSED");
+    assert.equal(body.result.flight.flight.flight_id, "SQ-335-20260819-CDG-SIN");
+
+    const detailResponse = await worker.fetch(
+      request("/api/imports/IMPORT-SQ-FIXTURE"),
+      env,
+    );
+    const detail = await detailResponse.json();
+    assert.equal(detail.import.parser_name, "sq-editing");
+    assert.equal(detail.sources[0].detected_type, "SQ_EDITING_TEXT");
+    assert.ok(
+      detail.issues.some(
+        (issue) => issue.issue_code === "SQ_SOURCE_LINES_UNPARSED",
+      ),
+    );
+  } finally {
+    database.close();
+  }
 });
 
 test("flight API creates, searches and returns a complete D1 aggregate", async () => {

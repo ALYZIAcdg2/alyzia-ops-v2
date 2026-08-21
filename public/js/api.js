@@ -90,3 +90,33 @@ export function createStructuredImport({ model, context }, writeToken) {
     body: JSON.stringify({ model, context }),
   });
 }
+
+export function previewSqSource({ sourceText, options }, writeToken) {
+  return apiRequest("/api/sq/parse", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${writeToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ source_text: sourceText, options }),
+  });
+}
+
+export function importSqSource(
+  { sourceText, sourceName, options, context },
+  writeToken,
+) {
+  return apiRequest("/api/sq/import", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${writeToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      source_text: sourceText,
+      source_name: sourceName,
+      options,
+      context,
+    }),
+  });
+}

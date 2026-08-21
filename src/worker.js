@@ -1,5 +1,6 @@
 import { handleFlightApi } from "./http/flightApi.js";
 import { handleImportApi } from "./http/importApi.js";
+import { handleSqParserApi } from "./http/sqParserApi.js";
 import {
   jsonResponse,
   methodNotAllowed,
@@ -7,7 +8,7 @@ import {
 import { ServiceError } from "./services/serviceErrors.js";
 
 const SERVICE_NAME = "ALYZIA OPS";
-const SERVICE_VERSION = "0.3.0";
+const SERVICE_VERSION = "0.4.0";
 
 const ASSET_SECURITY_HEADERS = Object.freeze({
   "Content-Security-Policy":
@@ -54,6 +55,11 @@ async function handleRequest(request, env) {
   const importResponse = await handleImportApi(request, env, url);
   if (importResponse) {
     return importResponse;
+  }
+
+  const sqParserResponse = await handleSqParserApi(request, env, url);
+  if (sqParserResponse) {
+    return sqParserResponse;
   }
 
   if (url.pathname.startsWith("/api/")) {
