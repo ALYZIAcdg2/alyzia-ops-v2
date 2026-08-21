@@ -153,3 +153,40 @@ export function importSqSource(
     }),
   });
 }
+
+function authorizedHeaders(writeToken) {
+  return { Authorization: `Bearer ${writeToken}` };
+}
+
+export function listIngestions({ limit = 25, offset = 0 } = {}, writeToken) {
+  const parameters = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return apiRequest(`/api/ingestions?${parameters}`, {
+    headers: authorizedHeaders(writeToken),
+  });
+}
+
+export function getIngestion(ingestionId, writeToken) {
+  return apiRequest(`/api/ingestions/${encodeURIComponent(ingestionId)}`, {
+    headers: authorizedHeaders(writeToken),
+  });
+}
+
+export function archiveGmailSource(payload, writeToken) {
+  return apiRequest("/api/ingestions/gmail", {
+    method: "POST",
+    headers: {
+      ...authorizedHeaders(writeToken),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getOpsSummary(writeToken) {
+  return apiRequest("/api/ops/summary", {
+    headers: authorizedHeaders(writeToken),
+  });
+}

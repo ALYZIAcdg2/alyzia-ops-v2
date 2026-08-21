@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark" />
     <meta
       name="description"
-          content="Interface opérationnelle de consultation et d’import SQ ALYZIA OPS V2."
+      content="Interface opérationnelle de consultation, d’import SQ et d’ingestion ALYZIA OPS V2."
     />
     <title>ALYZIA OPS V2</title>
     <link rel="stylesheet" href="/styles.css" />
@@ -41,13 +41,17 @@
           <span aria-hidden="true">SQ</span>
           Parser un editing
         </button>
+        <button class="button button-quiet" id="open-ingestion" type="button">
+          <span aria-hidden="true">R2</span>
+          Archiver une source
+        </button>
       </div>
     </header>
 
     <main id="workspace">
       <section class="intro" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">LOT 4 · API + IMPORT CENTER</p>
+          <p class="eyebrow">LOT 7 · INTERFACE OPÉRATIONNELLE</p>
           <h1 id="page-title">Tableau des vols</h1>
           <p class="intro-copy">
             Recherchez un vol par identité canonique, compagnie, numéro,
@@ -68,6 +72,26 @@
             <dd>D1</dd>
           </div>
         </dl>
+      </section>
+
+      <section class="ops-panel" aria-labelledby="ops-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">LOT 8 · SUPERVISION ET EXTENSIONS</p>
+            <h2 id="ops-title">État opérationnel</h2>
+          </div>
+          <span class="status-pill is-info">Accès protégé</span>
+        </div>
+        <div class="ops-toolbar">
+          <label>
+            Jeton d’écriture
+            <input id="ops-token" type="password" autocomplete="off" spellcheck="false" placeholder="Requis pour les métriques" />
+          </label>
+          <button class="button button-primary" id="load-ops" type="button">Actualiser la supervision</button>
+        </div>
+        <div id="ops-summary" class="ops-summary" aria-live="polite">
+          <p class="empty-block">Saisissez le jeton pour charger l’état D1, R2 et des extensions.</p>
+        </div>
       </section>
 
       <section class="search-panel" aria-label="Recherche de vols">
@@ -220,6 +244,37 @@
           <button class="button button-quiet" id="previous-imports" type="button">Page précédente</button>
           <span id="import-page-label">Page 1</span>
           <button class="button button-quiet" id="next-imports" type="button">Page suivante</button>
+        </div>
+      </section>
+
+      <section class="ingestions-panel" aria-labelledby="ingestions-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">SOURCES R2 · ACCÈS PROTÉGÉ</p>
+            <h2 id="ingestions-title">Centre d’ingestion</h2>
+          </div>
+          <button class="icon-button" id="refresh-ingestions" type="button" aria-label="Actualiser les ingestions" title="Actualiser">↻</button>
+        </div>
+        <div class="ingestion-toolbar">
+          <label>
+            Jeton d’écriture
+            <input id="ingestion-list-token" type="password" autocomplete="off" spellcheck="false" placeholder="Requis pour consulter les sources" />
+          </label>
+          <button class="button button-primary" id="load-ingestions" type="button">Charger les ingestions</button>
+          <p>Le jeton reste uniquement dans cette page et n’est jamais enregistré.</p>
+        </div>
+        <div class="ingestions-grid">
+          <div id="ingestion-list" class="import-list" aria-live="polite">
+            <p class="empty-block">Saisissez le jeton pour consulter les ingestions.</p>
+          </div>
+          <div id="ingestion-detail" class="import-detail" aria-live="polite">
+            <p class="empty-block">Sélectionnez une ingestion pour voir ses objets archivés.</p>
+          </div>
+        </div>
+        <div class="import-pagination" aria-label="Pagination des ingestions">
+          <button class="button button-quiet" id="previous-ingestions" type="button" disabled>Page précédente</button>
+          <span id="ingestion-page-label">Page 1</span>
+          <button class="button button-quiet" id="next-ingestions" type="button" disabled>Page suivante</button>
         </div>
       </section>
     </main>
@@ -424,6 +479,53 @@
           <span></span>
           <button class="button button-quiet" id="preview-sq" type="button">Analyser sans écrire</button>
           <button class="button button-primary" id="submit-sq" type="submit" disabled>Importer dans D1</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="ingestion-dialog" aria-labelledby="ingestion-dialog-title">
+      <form id="ingestion-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">LOT 7 · TEST MANUEL DU RELAIS</p>
+            <h2 id="ingestion-dialog-title">Archiver une source Gmail</h2>
+          </div>
+          <button class="icon-button" id="close-ingestion" type="button" aria-label="Fermer">×</button>
+        </div>
+        <div class="warning-box" role="note">
+          <strong>Archivage uniquement</strong>
+          <p>Ce formulaire n’accède pas à Gmail et ne lance aucun import métier. Il permet de tester le stockage R2 avec une source autorisée.</p>
+        </div>
+        <div class="form-grid">
+          <label>
+            Identifiant technique du message
+            <input id="ingestion-message-id" type="text" maxlength="200" autocomplete="off" required />
+          </label>
+          <label>
+            Opérateur ou relais
+            <input id="ingestion-created-by" type="text" maxlength="100" autocomplete="off" required />
+          </label>
+          <label>
+            Date de réception UTC
+            <input id="ingestion-received-at" type="datetime-local" step="1" />
+          </label>
+          <label>
+            Jeton d’écriture Cloudflare
+            <input id="ingestion-token" type="password" autocomplete="off" spellcheck="false" required />
+          </label>
+        </div>
+        <label class="json-field">
+          Contenu source exact
+          <textarea id="ingestion-source" rows="12" spellcheck="false" required placeholder="Collez une source explicitement autorisée…"></textarea>
+          <small>Les espaces et retours à la ligne sont conservés. Aucune donnée n’est ajoutée à la fiche passager.</small>
+        </label>
+        <label class="confirmation">
+          <input id="ingestion-confirmation" type="checkbox" required />
+          <span>Je confirme être autorisé à archiver cette source.</span>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-quiet" id="cancel-ingestion" type="button">Annuler</button>
+          <button class="button button-primary" id="submit-ingestion" type="submit">Archiver dans R2</button>
         </div>
       </form>
     </dialog>

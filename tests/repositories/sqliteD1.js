@@ -1,11 +1,11 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-const migrationUrl = new URL(
-  "../../migrations/0001_initial_schema.sql",
-  import.meta.url,
-);
-const migration = readFileSync(migrationUrl, "utf8");
+const migrationsUrl = new URL("../../migrations/", import.meta.url);
+const migrations = readdirSync(migrationsUrl)
+  .filter((name) => name.endsWith(".sql"))
+  .sort()
+  .map((name) => readFileSync(new URL(name, migrationsUrl), "utf8"));
 
 class SQLiteD1Statement {
   constructor(database, sql, values = []) {
@@ -49,7 +49,7 @@ class SQLiteD1Statement {
 
 export function createSQLiteD1() {
   const database = new DatabaseSync(":memory:");
-  database.exec(migration);
+  for (const migration of migrations) database.exec(migration);
 
   return {
     db: {

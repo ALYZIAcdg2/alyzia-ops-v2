@@ -1,4 +1,4 @@
-# ALYZIA OPS V2 — Lots 1 à 5
+# ALYZIA OPS V2 — Lots 1 à 8
 
 ALYZIA OPS V2 est une application Cloudflare Workers + D1 destinée à stocker
 et consulter une représentation structurée des vols. Le Lot 1 fournit le socle
@@ -6,9 +6,12 @@ de données commun. Le Lot 2 ajoute les repositories D1 et le moteur prudent
 d’import de modèles déjà structurés. Le Lot 3 ajoute le parser SQ textuel avec
 prévisualisation obligatoire avant écriture. Le Lot 4 livre l’API de suivi et
 un Import Center filtrable avec décisions humaines explicites sur les issues.
-Le Lot 5 ajoute une matrice reproductible pour SQ335 et SQ337.
+Le Lot 5 ajoute une matrice reproductible pour SQ335 et SQ337. Le Lot 6 ajoute
+l'archivage R2 et un contrat d'ingestion Gmail sans OAuth embarqué. Le Lot 7
+livre l'interface opérationnelle et le Lot 8 la supervision et le registre
+d'extensions.
 
-Version applicative : `0.6.0`.
+Version applicative : `0.9.0`.
 
 ## Accès
 
@@ -16,7 +19,8 @@ Version applicative : `0.6.0`.
 - santé : <https://alyzia-ops-v2.alyzia-cdg2.workers.dev/api/health> ;
 - dépôt : <https://github.com/ALYZIAcdg2/alyzia-ops-v2> ;
 - branche de production : `main` ;
-- binding D1 : `DB` vers `alyzia-ops-db`.
+- binding D1 : `DB` vers `alyzia-ops-db` ;
+- binding R2 : `SOURCE_ARCHIVE` vers `alyzia-ops-sources`.
 
 L’utilisateur final a uniquement besoin d’un navigateur. Node.js et Wrangler
 sont des outils de développement et de déploiement, pas des prérequis du poste
@@ -92,8 +96,38 @@ opérationnel.
 - validation des fichiers opérationnels réels réservée à leur rattachement
   sécurisé, sans commit de données personnelles.
 
-Ne sont pas inclus dans les Lots 1 à 5 : extraction PDF/ZIP, Gmail, IA, logique
-R2 ou logique Queues. Aucun codeshare SQ V1 n’est ajouté. Les formats
+### Lot 6 — R2 et ingestion Gmail
+
+- binding R2 `SOURCE_ARCHIVE` vers `alyzia-ops-sources` ;
+- migration D1 séparée pour les messages et objets d'ingestion ;
+- endpoint Gmail protégé, idempotent et indépendant du fournisseur OAuth ;
+- archivage du corps exact, du message RFC 822 et des pièces jointes ;
+- clés R2 hachées sans identifiant Gmail ni nom de fichier ;
+- ZIP archivé sans extraction ou classification fictive ;
+- import SQ désactivé par défaut et exécution uniquement sur demande explicite ;
+- limites de taille et validation intégrale avant la première écriture D1.
+
+### Lot 7 — interface opérationnelle
+
+- tableau de vols, Import Center et centre d'ingestion réunis dans une interface
+  responsive en HTML, CSS et JavaScript natifs ;
+- archivage manuel d'une source autorisée pour tester R2 sans accès direct à
+  Gmail ni import métier implicite ;
+- consultation protégée et paginée des ingestions et objets R2 ;
+- secrets conservés uniquement dans les champs de la page courante, jamais en
+  stockage local ou de session ;
+- états vides, erreurs explicites et échappement de toutes les valeurs externes.
+
+### Lot 8 — supervision et extensions
+
+- synthèse protégée des volumes D1, erreurs, issues et overrides actifs ;
+- visibilité sur la disponibilité des bindings D1, R2 et Queues ;
+- registre explicite des extensions actives ou planifiées ;
+- identifiant `X-Request-Id` sur chaque réponse et corrélation des erreurs ;
+- logs d'erreur structurés sans contenu source ou donnée passager.
+
+Ne sont pas inclus dans les Lots 1 à 8 : extraction PDF/ZIP, connexion OAuth
+directe à Gmail, IA ou logique Queues. Aucun codeshare SQ V1 n’est ajouté. Les formats
 SQ335/SQ337 réels restent à valider dès que les fichiers opérationnels de
 référence sont accessibles hors de la copie publique du chat partagé.
 
@@ -102,13 +136,15 @@ référence sont accessibles hors de la copie publique du chat partagé.
 ```text
 alyzia-ops-v2/
 ├── migrations/
-│   └── 0001_initial_schema.sql
+│   ├── 0001_initial_schema.sql
+│   └── 0002_ingestion_sources.sql
 ├── public/
 │   ├── index.html
 │   ├── styles.css
 │   └── js/                  # interface navigateur ES Modules
 ├── src/
 │   ├── database/            # requêtes D1, sans décision métier
+│   ├── extensions/          # registre déclaratif des adaptateurs
 │   ├── http/                # contrat HTTP et autorisation d’écriture
 │   ├── import/              # comparaison, plan et moteur d’import structuré
 │   ├── models/              # structures métier communes
@@ -165,8 +201,21 @@ npx wrangler d1 migrations apply DB --local
 npx wrangler d1 migrations apply alyzia-ops-db --remote
 ```
 
-La migration `0001_initial_schema.sql` est déjà appliquée à la base du projet.
-Le Lot 2 ne requiert aucune nouvelle migration.
+Les migrations `0001_initial_schema.sql` et `0002_ingestion_sources.sql` sont
+appliquées dans l'ordre. La seconde ajoute uniquement les métadonnées
+d'ingestion ; le contenu source est conservé dans R2.
+
+## Configuration R2
+
+Créer le bucket avant le premier déploiement de la version `0.9.0` :
+
+```bash
+npx wrangler r2 bucket create alyzia-ops-sources
+```
+
+Le binding `SOURCE_ARCHIVE` est déclaré dans `wrangler.jsonc`. Le nom du bucket
+est un identifiant de ressource et non un secret. Aucun objet R2 n'est public et
+aucune route de téléchargement n'est exposée.
 
 La base contenait auparavant 13 lignes d’un ancien schéma incompatible. Elles
 ont été préservées sans transformation dans `legacy_flights_pre_v2`. Cette
@@ -174,9 +223,10 @@ archive n’est jamais lue par les repositories V2.
 
 ## Secret d’écriture
 
-Les lectures sont publiques. Toute création exige le secret Worker
-`API_WRITE_TOKEN`. Il ne doit jamais être ajouté à Git, à `wrangler.jsonc`, à
-une fixture ou à une capture d’écran.
+Les lectures des vols et imports sont publiques. Les ingestions, la supervision
+et toutes les écritures exigent le secret Worker `API_WRITE_TOKEN`. Il ne doit
+jamais être ajouté à Git, à `wrangler.jsonc`, à une fixture ou à une capture
+d’écran.
 
 Configuration en ligne de commande :
 
@@ -205,7 +255,7 @@ GET /api/health
 {
   "ok": true,
   "service": "ALYZIA OPS",
-  "version": "0.6.0"
+  "version": "0.9.0"
 }
 ```
 
@@ -329,6 +379,32 @@ d’import. Une source comportant une ambiguïté `REVIEW` ou `BLOCKING` est
 refusée avec `SQ_REVIEW_REQUIRED` et ne crée aucun import. Le texte brut n’est
 pas recopié dans les issues ni dans la fiche passager.
 
+### Ingestion Gmail et R2
+
+```http
+POST /api/ingestions/gmail
+GET /api/ingestions?limit=25&offset=0
+GET /api/ingestions/:ingestion_id
+Authorization: Bearer <API_WRITE_TOKEN>
+```
+
+Les trois routes sont protégées. Le `POST` archive les sources dans R2 et leurs
+métadonnées dans D1. Par défaut, aucune écriture métier n'est déclenchée. Un
+import SQ exige `sq_import.execute: true` et un contexte complet. Le contrat
+du relais et les limites sont détaillés dans
+`docs/gmail-relay-contract.md`.
+
+### Supervision
+
+```http
+GET /api/ops/summary
+Authorization: Bearer <API_WRITE_TOKEN>
+```
+
+La synthèse retourne des compteurs techniques D1, l'état des bindings et le
+registre d'extensions. Elle ne modifie aucune donnée et n'interprète aucun
+statut métier. Le contrat détaillé se trouve dans `docs/operations.md`.
+
 ## Tester la V2 dans le navigateur
 
 1. Configurer `API_WRITE_TOKEN` dans Cloudflare.
@@ -348,6 +424,12 @@ Pour tester le Lot 3, cliquer sur **Parser un editing**, coller le texte SQ,
 saisir une année fiable et choisir explicitement `DEPARTURE` ou `ARRIVAL`.
 Cliquer d’abord sur **Analyser sans écrire**. Le bouton d’import reste désactivé
 tant que le parser signale une ambiguïté nécessitant une révision.
+
+Pour tester les Lots 6 à 8, utiliser **Archiver une source** avec une source
+explicitement autorisée, puis saisir le jeton dans le **Centre d'ingestion**.
+La section **État opérationnel** charge les métriques D1/R2 et les extensions.
+Le formulaire manuel archive seulement la source : il ne se connecte pas à
+Gmail et ne déclenche aucun import SQ.
 
 La fixture utilise une compagnie `ZZ`, des escales `TST`/`LAB`, des noms
 `FIXTURE/...` et des classes `TEST_*`. Elle ne contient aucun faux passager
@@ -375,6 +457,10 @@ La suite couvre notamment :
 - protections FULL/PARTIAL, overrides et modifications structurelles ;
 - routes de liste, création et détail des imports ;
 - parser SQ, SSR multiples, documents explicites et blocage des ambiguïtés ;
+- ingestion Gmail idempotente, validation base64 et conservation exacte ;
+- références R2 sans identifiant fournisseur et import SQ explicitement activé ;
+- interface d'ingestion responsive et secrets non persistés ;
+- supervision protégée, registre d'extensions et corrélation des requêtes ;
 - résolution de tous les imports ES Modules.
 
 Pour tester aussi la migration locale et le bundle Worker :
@@ -398,14 +484,15 @@ La configuration Cloudflare Builds recommandée est :
 - **Deploy command** : `npx wrangler deploy` ;
 - **Root directory** : `/`.
 
-Une future migration D1 doit être ajoutée dans `migrations/`, testée localement,
+Une migration D1 doit être ajoutée dans `migrations/`, testée localement,
 fusionnée dans `main`, puis appliquée explicitement à distance. Ne pas laisser
 une commande de migration distante active sur les previews. Les Preview URLs
 sont désactivées dans `wrangler.jsonc` et `workers.dev` reste activé pour l’URL
 opérationnelle actuelle.
 
-Les emplacements des futurs bindings R2 et Queues restent documentés, sans
-ressource, credential ou logique fictive.
+Le bucket R2 `alyzia-ops-sources` est relié au binding `SOURCE_ARCHIVE`. Le
+binding ne contient aucun credential. L'emplacement du futur binding Queues
+reste commenté, sans ressource ou logique fictive.
 
 ## Principes critiques de données
 
