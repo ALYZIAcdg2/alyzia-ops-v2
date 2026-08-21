@@ -23,14 +23,14 @@ function jsonPost(path, body, token = WRITE_TOKEN) {
   });
 }
 
-test("GET /api/health returns the Lot 2 service contract", async () => {
+test("GET /api/health returns the Lot 3 service contract", async () => {
   const response = await worker.fetch(request("/api/health"), {});
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "ALYZIA OPS",
-    version: "0.2.0",
+    version: "0.3.0",
   });
 });
 
@@ -185,11 +185,15 @@ test("flight API validates pagination, payloads and unknown identifiers", async 
   }
 });
 
-test("GET /api/imports/:id returns import, sources and issues", async () => {
+test("GET /api/imports/:id returns import, sources, issues and history", async () => {
   const importFixture = { id: "IMPORT-FIXTURE", import_status: "PENDING" };
   const { db } = createD1Mock({
     first: [importFixture],
-    all: [{ results: [{ id: 1 }] }, { results: [{ id: 2 }] }],
+    all: [
+      { results: [{ id: 1 }] },
+      { results: [{ id: 2 }] },
+      { results: [{ id: 3 }] },
+    ],
   });
   const response = await worker.fetch(
     request("/api/imports/IMPORT-FIXTURE"),
@@ -201,7 +205,95 @@ test("GET /api/imports/:id returns import, sources and issues", async () => {
     import: importFixture,
     sources: [{ id: 1 }],
     issues: [{ id: 2 }],
+    history: [{ id: 3 }],
   });
+});
+
+test("import API creates, lists and exposes a structured import", async () => {
+  const database = createSQLiteD1();
+  const env = { DB: database.db, API_WRITE_TOKEN: WRITE_TOKEN };
+  const model = createLot2FlightFixture();
+  const payload = {
+    model,
+    context: {
+      import_id: "IMPORT-API-LOT3",
+      import_mode: "MANUAL",
+      data_scope: "PARTIAL",
+      user_id: "WORKER_TEST_USER",
+    },
+  };
+
+  try {
+    const createdResponse = await worker.fetch(
+      jsonPost("/api/imports", payload),
+      env,
+    );
+    assert.equal(createdResponse.status, 201);
+    assert.match(
+      createdResponse.headers.get("Location"),
+      /\/api\/imports\/IMPORT-API-LOT3$/u,
+    );
+    const created = (await createdResponse.json()).result;
+    assert.equal(created.status, "PROCESSED");
+    assert.equal(created.flight.flight.flight_id, model.flight.flight_id);
+
+    const listResponse = await worker.fetch(request("/api/imports"), env);
+    assert.equal(listResponse.status, 200);
+    const list = await listResponse.json();
+    assert.equal(list.imports.length, 1);
+    assert.equal(list.imports[0].id, "IMPORT-API-LOT3");
+
+    const detailResponse = await worker.fetch(
+      request("/api/imports/IMPORT-API-LOT3"),
+      env,
+    );
+    const detail = await detailResponse.json();
+    assert.equal(detail.import.import_status, "PROCESSED");
+    assert.equal(detail.sources.length, 1);
+    assert.equal(detail.history.length, 1);
+  } finally {
+    database.close();
+  }
+});
+
+test("import API requires write authorization and rejects duplicate ids", async () => {
+  const database = createSQLiteD1();
+  const env = { DB: database.db, API_WRITE_TOKEN: WRITE_TOKEN };
+  const payload = {
+    model: createLot2FlightFixture(),
+    context: {
+      import_id: "IMPORT-API-UNIQUE",
+      import_mode: "MANUAL",
+      data_scope: "PARTIAL",
+      user_id: "WORKER_TEST_USER",
+    },
+  };
+
+  try {
+    const unauthorized = await worker.fetch(
+      jsonPost("/api/imports", payload, "wrong-token"),
+      env,
+    );
+    assert.equal(unauthorized.status, 401);
+
+    assert.equal(
+      (await worker.fetch(jsonPost("/api/imports", payload), env)).status,
+      201,
+    );
+    const duplicate = await worker.fetch(
+      jsonPost("/api/imports", payload),
+      env,
+    );
+    assert.equal(duplicate.status, 409);
+    const duplicateBody = await duplicate.json();
+    assert.equal(duplicateBody.code, "IMPORT_ID_ALREADY_EXISTS");
+    assert.equal(
+      duplicateBody.details.result.issues[0].issue_code,
+      "IMPORT_ID_ALREADY_EXISTS",
+    );
+  } finally {
+    database.close();
+  }
 });
 
 test("root requests are delegated to the static assets binding", async () => {
