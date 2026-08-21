@@ -69,6 +69,30 @@ test("operational summary is protected and reports D1, R2 and extensions", async
   }
 });
 
+test("readiness confirms the ingestion schema and R2 binding without exposing data", async () => {
+  const database = createSQLiteD1();
+  const r2 = createR2Mock();
+  try {
+    const ready = await worker.fetch(request("/api/readiness"), {
+      DB: database.db,
+      SOURCE_ARCHIVE: r2.bucket,
+    });
+    assert.equal(ready.status, 200);
+    assert.deepEqual((await ready.json()).dependencies, {
+      d1: true,
+      ingestion_schema: true,
+      r2: true,
+    });
+
+    const notReady = await worker.fetch(request("/api/readiness"), {
+      DB: database.db,
+    });
+    assert.equal(notReady.status, 503);
+  } finally {
+    database.close();
+  }
+});
+
 test("Gmail ingestion API is protected, archives content and exposes a safe detail", async () => {
   const database = createSQLiteD1();
   const r2 = createR2Mock();

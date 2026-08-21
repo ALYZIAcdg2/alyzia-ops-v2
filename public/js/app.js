@@ -9,6 +9,7 @@ import {
   getImportSummary,
   getIngestion,
   getOpsSummary,
+  getReadiness,
   importSqSource,
   listFlights,
   listImports,
@@ -480,10 +481,12 @@ async function loadFlightList({
 
 async function checkHealth() {
   try {
-    const health = await getHealth();
+    const [health, readiness] = await Promise.all([getHealth(), getReadiness()]);
     elements.serviceState.classList.remove("is-loading", "is-offline");
-    elements.serviceState.classList.add("is-online");
-    elements.serviceStateLabel.textContent = "Service opérationnel";
+    elements.serviceState.classList.add(readiness.ok ? "is-online" : "is-loading");
+    elements.serviceStateLabel.textContent = readiness.ok
+      ? "Service opérationnel"
+      : "Configuration requise";
     elements.apiVersion.textContent = health.version;
   } catch {
     elements.serviceState.classList.remove("is-loading", "is-online");

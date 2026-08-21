@@ -42,6 +42,15 @@ export function getHealth() {
   return apiRequest("/api/health");
 }
 
+export async function getReadiness() {
+  const response = await fetch("/api/readiness", {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (response.status === 503) return response.json();
+  return decodeResponse(response);
+}
+
 export function listFlights({ query = "", limit = 25, offset = 0 } = {}) {
   const parameters = new URLSearchParams({
     limit: String(limit),
