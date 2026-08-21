@@ -67,3 +67,26 @@ export function createFlight(model, writeToken) {
     body: JSON.stringify(model),
   });
 }
+
+export function listImports({ limit = 25, offset = 0 } = {}) {
+  const parameters = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return apiRequest(`/api/imports?${parameters}`);
+}
+
+export function getImport(importId) {
+  return apiRequest(`/api/imports/${encodeURIComponent(importId)}`);
+}
+
+export function createStructuredImport({ model, context }, writeToken) {
+  return apiRequest("/api/imports", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${writeToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model, context }),
+  });
+}

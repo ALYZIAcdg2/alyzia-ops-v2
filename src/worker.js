@@ -1,14 +1,13 @@
-import { createImportRepository } from "./database/importRepository.js";
 import { handleFlightApi } from "./http/flightApi.js";
+import { handleImportApi } from "./http/importApi.js";
 import {
   jsonResponse,
   methodNotAllowed,
-  routeIdentifier,
 } from "./http/httpUtils.js";
 import { ServiceError } from "./services/serviceErrors.js";
 
 const SERVICE_NAME = "ALYZIA OPS";
-const SERVICE_VERSION = "0.2.0";
+const SERVICE_VERSION = "0.3.0";
 
 const ASSET_SECURITY_HEADERS = Object.freeze({
   "Content-Security-Policy":
@@ -33,19 +32,6 @@ async function serveAsset(request, assets) {
   });
 }
 
-async function handleImportRequest(env, importId) {
-  const repository = createImportRepository(env.DB);
-  const [importRecord, sources, issues] = await Promise.all([
-    repository.getImportById(importId),
-    repository.getSourcesByImportId(importId),
-    repository.getIssuesByImportId(importId),
-  ]);
-
-  return importRecord
-    ? jsonResponse({ import: importRecord, sources, issues })
-    : jsonResponse({ error: "Import not found" }, { status: 404 });
-}
-
 async function handleRequest(request, env) {
   const url = new URL(request.url);
 
@@ -65,12 +51,9 @@ async function handleRequest(request, env) {
     return flightResponse;
   }
 
-  const importId = routeIdentifier(url.pathname, "/api/imports/");
-  if (importId !== null) {
-    if (request.method !== "GET") {
-      return methodNotAllowed(["GET"]);
-    }
-    return handleImportRequest(env, importId);
+  const importResponse = await handleImportApi(request, env, url);
+  if (importResponse) {
+    return importResponse;
   }
 
   if (url.pathname.startsWith("/api/")) {

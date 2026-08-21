@@ -1,9 +1,12 @@
 import {
   ApiError,
   createFlight,
+  createStructuredImport,
   getFlight,
   getHealth,
+  getImport,
   listFlights,
+  listImports,
 } from "./api.js";
 import { createBrowserFixture } from "./fixture.js";
 import {
@@ -11,6 +14,11 @@ import {
   renderFlightDetail,
   renderFlightList,
 } from "./renderFlight.js";
+import {
+  renderImportDetail,
+  renderImportError,
+  renderImportList,
+} from "./renderImport.js";
 
 const PAGE_SIZE = 25;
 
@@ -35,6 +43,21 @@ const elements = {
   writeToken: document.querySelector("#write-token"),
   fixtureConfirmation: document.querySelector("#fixture-confirmation"),
   submitFixture: document.querySelector("#submit-fixture"),
+  openImport: document.querySelector("#open-import"),
+  refreshImports: document.querySelector("#refresh-imports"),
+  importList: document.querySelector("#import-list"),
+  importDetail: document.querySelector("#import-detail"),
+  importDialog: document.querySelector("#import-dialog"),
+  importForm: document.querySelector("#import-form"),
+  closeImport: document.querySelector("#close-import"),
+  cancelImport: document.querySelector("#cancel-import"),
+  importId: document.querySelector("#import-id"),
+  importUser: document.querySelector("#import-user"),
+  importScope: document.querySelector("#import-scope"),
+  importToken: document.querySelector("#import-token"),
+  importModel: document.querySelector("#import-model"),
+  importConfirmation: document.querySelector("#import-confirmation"),
+  submitImport: document.querySelector("#submit-import"),
   toastRegion: document.querySelector("#toast-region"),
 };
 
@@ -46,6 +69,10 @@ const state = {
   selectedFlightId: null,
   listRequest: 0,
   detailRequest: 0,
+  imports: [],
+  selectedImportId: null,
+  importListRequest: 0,
+  importDetailRequest: 0,
 };
 
 function errorMessage(error) {
@@ -59,9 +86,53 @@ function errorMessage(error) {
     if (error.code === "FLIGHT_CONFLICT") {
       return "Cette identité de vol existe déjà dans D1.";
     }
+    if (error.code === "IMPORT_NOT_FOUND") return "Import introuvable.";
+    if (error.code === "IMPORT_ID_ALREADY_EXISTS") return "Cet identifiant d’import existe déjà.";
     return error.message;
   }
   return "Le service est momentanément inaccessible.";
+}
+
+function renderImports() {
+  renderImportList(elements.importList, state.imports, state.selectedImportId);
+}
+
+async function selectImport(importId) {
+  if (!importId) return;
+  state.selectedImportId = importId;
+  renderImports();
+  const requestId = ++state.importDetailRequest;
+  try {
+    const payload = await getImport(importId);
+    if (requestId === state.importDetailRequest) {
+      renderImportDetail(elements.importDetail, payload);
+    }
+  } catch (error) {
+    if (requestId === state.importDetailRequest) {
+      renderImportError(elements.importDetail, errorMessage(error));
+    }
+  }
+}
+
+async function loadImports({ selectLatest = false } = {}) {
+  const requestId = ++state.importListRequest;
+  elements.refreshImports.disabled = true;
+  try {
+    const result = await listImports({ limit: 25 });
+    if (requestId !== state.importListRequest) return;
+    state.imports = result.imports;
+    renderImports();
+    const candidate = selectLatest
+      ? state.imports[0]?.id
+      : state.selectedImportId ?? state.imports[0]?.id;
+    if (candidate) await selectImport(candidate);
+  } catch (error) {
+    if (requestId === state.importListRequest) {
+      renderImportError(elements.importList, errorMessage(error));
+    }
+  } finally {
+    if (requestId === state.importListRequest) elements.refreshImports.disabled = false;
+  }
 }
 
 function showToast(message, tone = "info") {
@@ -206,6 +277,66 @@ function closeFixtureDialog() {
   elements.fixtureDialog.close();
 }
 
+function resetImportForm() {
+  elements.importToken.value = "";
+  elements.importConfirmation.checked = false;
+  elements.submitImport.disabled = false;
+  elements.submitImport.textContent = "Lancer l’import";
+}
+
+function closeImportDialog() {
+  resetImportForm();
+  elements.importDialog.close();
+}
+
+function openImportDialog() {
+  elements.importId.value = `IMPORT-${crypto.randomUUID().toUpperCase()}`;
+  elements.importScope.value = "PARTIAL";
+  elements.importDialog.showModal();
+}
+
+async function submitImport(event) {
+  event.preventDefault();
+  if (!elements.importForm.reportValidity()) return;
+  let model;
+  try {
+    model = JSON.parse(elements.importModel.value);
+  } catch {
+    showToast("Le modèle doit être un objet JSON valide.", "error");
+    elements.importModel.focus();
+    return;
+  }
+  const token = elements.importToken.value;
+  elements.submitImport.disabled = true;
+  elements.submitImport.textContent = "Import en cours…";
+  try {
+    const { result } = await createStructuredImport(
+      {
+        model,
+        context: {
+          import_id: elements.importId.value,
+          import_mode: "MANUAL",
+          data_scope: elements.importScope.value,
+          user_id: elements.importUser.value.trim(),
+        },
+      },
+      token,
+    );
+    closeImportDialog();
+    state.selectedImportId = result.import_id;
+    const tone = result.status === "REVIEW_REQUIRED" ? "info" : "success";
+    showToast(`Import ${result.import_id} : ${result.status}.`, tone);
+    await Promise.all([loadImports(), loadFlightList()]);
+  } catch (error) {
+    showToast(errorMessage(error), "error");
+    elements.importToken.value = "";
+    elements.importToken.focus();
+  } finally {
+    elements.submitImport.disabled = false;
+    elements.submitImport.textContent = "Lancer l’import";
+  }
+}
+
 async function submitFixture(event) {
   event.preventDefault();
   if (!elements.fixtureForm.reportValidity()) {
@@ -289,8 +420,19 @@ elements.closeFixture.addEventListener("click", closeFixtureDialog);
 elements.cancelFixture.addEventListener("click", closeFixtureDialog);
 elements.fixtureForm.addEventListener("submit", submitFixture);
 elements.fixtureDialog.addEventListener("cancel", () => resetFixtureForm());
+elements.refreshImports.addEventListener("click", () => loadImports());
+elements.importList.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-import-id]");
+  if (item) selectImport(item.dataset.importId);
+});
+elements.openImport.addEventListener("click", openImportDialog);
+elements.closeImport.addEventListener("click", closeImportDialog);
+elements.cancelImport.addEventListener("click", closeImportDialog);
+elements.importForm.addEventListener("submit", submitImport);
+elements.importDialog.addEventListener("cancel", resetImportForm);
 
 await Promise.all([
   checkHealth(),
   loadFlightList({ autoSelect: true, useHash: true }),
+  loadImports(),
 ]);

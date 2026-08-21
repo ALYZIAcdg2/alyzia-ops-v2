@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark" />
     <meta
       name="description"
-      content="Interface opérationnelle de consultation ALYZIA OPS V2."
+      content="Interface opérationnelle de consultation et d’import structuré ALYZIA OPS V2."
     />
     <title>ALYZIA OPS V2</title>
     <link rel="stylesheet" href="/styles.css" />
@@ -33,13 +33,17 @@
           <span aria-hidden="true">＋</span>
           Créer une fixture
         </button>
+        <button class="button button-primary" id="open-import" type="button">
+          <span aria-hidden="true">⇧</span>
+          Import structuré
+        </button>
       </div>
     </header>
 
     <main id="workspace">
       <section class="intro" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">LOT 2 · CONSULTATION D1</p>
+          <p class="eyebrow">LOT 3 · IMPORTS STRUCTURÉS D1</p>
           <h1 id="page-title">Tableau des vols</h1>
           <p class="intro-copy">
             Recherchez un vol par identité canonique, compagnie, numéro,
@@ -139,12 +143,37 @@
           </div>
         </section>
       </div>
+
+      <section class="imports-panel" aria-labelledby="imports-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">HISTORIQUE LOT 3</p>
+            <h2 id="imports-title">Imports structurés</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="refresh-imports"
+            type="button"
+            aria-label="Actualiser les imports"
+            title="Actualiser"
+          >
+            ↻
+          </button>
+        </div>
+        <div class="imports-grid">
+          <div id="import-list" class="import-list" aria-live="polite">
+            <p class="empty-block">Chargement des imports…</p>
+          </div>
+          <div id="import-detail" class="import-detail" aria-live="polite">
+            <p class="empty-block">Sélectionnez un import pour consulter ses sources, issues et changements.</p>
+          </div>
+        </div>
+      </section>
     </main>
 
     <footer>
       <p>
-        ALYZIA OPS V2 · Les valeurs absentes, inconnues et égales à zéro sont
-        affichées distinctement.
+        ALYZIA OPS V2 · Les imports ambigus ou protégés ne sont jamais appliqués automatiquement.
       </p>
     </footer>
 
@@ -206,6 +235,61 @@
           <button class="button button-accent" id="submit-fixture" type="submit">
             Créer la fixture D1
           </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="import-dialog" aria-labelledby="import-dialog-title">
+      <form id="import-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">MOTEUR D’IMPORT LOT 3</p>
+            <h2 id="import-dialog-title">Importer un modèle structuré</h2>
+          </div>
+          <button class="icon-button" id="close-import" type="button" aria-label="Fermer">×</button>
+        </div>
+
+        <div class="warning-box" role="note">
+          <strong>Pas de parser compagnie dans ce lot</strong>
+          <p>Collez uniquement un objet <code>FlightImportModel</code> JSON déjà structuré. Une modification ambiguë sera placée en révision.</p>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Identifiant d’import
+            <input id="import-id" name="import_id" type="text" readonly required />
+          </label>
+          <label>
+            Utilisateur
+            <input id="import-user" name="user_id" type="text" maxlength="100" autocomplete="off" required />
+          </label>
+          <label>
+            Portée des données
+            <select id="import-scope" name="data_scope" required>
+              <option value="PARTIAL">PARTIAL — aucune suppression implicite</option>
+              <option value="FULL">FULL — suppressions toujours protégées par bloc</option>
+            </select>
+          </label>
+          <label>
+            Jeton d’écriture Cloudflare
+            <input id="import-token" name="write_token" type="password" autocomplete="off" spellcheck="false" required />
+          </label>
+        </div>
+
+        <label class="json-field">
+          FlightImportModel JSON
+          <textarea id="import-model" name="model" rows="15" spellcheck="false" required placeholder='{"flight":{"airline":"ZZ",...},"timings":{...}}'></textarea>
+          <small>L’absence d’un champ signifie « non fourni » et non « à supprimer ».</small>
+        </label>
+
+        <label class="confirmation">
+          <input id="import-confirmation" type="checkbox" required />
+          <span>Je confirme que ce JSON est structuré et que sa portée est correctement déclarée.</span>
+        </label>
+
+        <div class="dialog-actions">
+          <button class="button button-quiet" id="cancel-import" type="button">Annuler</button>
+          <button class="button button-primary" id="submit-import" type="submit">Exécuter l’import</button>
         </div>
       </form>
     </dialog>

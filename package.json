@@ -1,9 +1,9 @@
 {
   "name": "alyzia-ops-v2",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Consultation opérationnelle Cloudflare Workers et D1 pour ALYZIA OPS.",
+  "description": "Consultation opérationnelle et imports structurés Cloudflare Workers + D1 pour ALYZIA OPS.",
   "scripts": {
     "dev": "wrangler dev",
     "test": "node --test tests/**/*.test.js",

@@ -46,7 +46,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -850,6 +852,144 @@ h3 {
   font-size: 0.78rem;
 }
 
+.imports-panel {
+  margin-top: 1rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgb(10 23 38 / 82%);
+  box-shadow: var(--shadow);
+}
+
+.imports-grid {
+  display: grid;
+  grid-template-columns: minmax(17rem, 0.8fr) minmax(0, 1.6fr);
+  min-height: 18rem;
+}
+
+.import-list {
+  max-height: 34rem;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+
+.import-list-item {
+  display: grid;
+  width: 100%;
+  gap: 0.45rem;
+  padding: 0.9rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.import-list-item:hover,
+.import-list-item.is-selected {
+  background: var(--panel-hover);
+}
+
+.import-list-item.is-selected {
+  box-shadow: inset 3px 0 var(--cyan);
+}
+
+.import-list-primary,
+.import-list-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.import-list-primary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.78rem;
+}
+
+.import-list-secondary {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.import-detail {
+  padding: 1.1rem;
+}
+
+.import-detail-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.import-detail-heading h3 {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.import-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 1rem 0;
+}
+
+.import-meta div {
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: var(--panel-soft);
+}
+
+.import-meta dt,
+.import-meta dd {
+  margin: 0;
+}
+
+.import-meta dt {
+  color: var(--muted);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.import-meta dd {
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}
+
+.import-section {
+  margin-top: 1rem;
+}
+
+.import-section h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.import-records {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.import-records article {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border-left: 2px solid var(--line-strong);
+  background: var(--panel-soft);
+  font-size: 0.72rem;
+}
+
+.import-records span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 dialog {
   width: min(100% - 2rem, 39rem);
   padding: 0;
@@ -918,7 +1058,9 @@ dialog form {
   font-weight: 700;
 }
 
-.form-grid input {
+.form-grid input,
+.form-grid select,
+.json-field textarea {
   width: 100%;
   min-height: 2.8rem;
   padding: 0.65rem 0.75rem;
@@ -927,6 +1069,28 @@ dialog form {
   outline: 0;
   color: var(--text);
   background: var(--bg-elevated);
+}
+
+.json-field {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+  color: var(--muted-strong);
+  font-size: 0.77rem;
+  font-weight: 700;
+}
+
+.json-field textarea {
+  min-height: 13rem;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.json-field small {
+  color: var(--muted);
+  font-weight: 450;
 }
 
 .form-grid small {
@@ -1023,6 +1187,16 @@ footer {
   .two-columns {
     grid-template-columns: 1fr;
   }
+
+  .imports-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .import-list {
+    max-height: 20rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 @media (max-width: 48rem) {
@@ -1063,6 +1237,10 @@ footer {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
+  .import-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 35rem) {
@@ -1072,6 +1250,14 @@ footer {
 
   .topbar {
     padding-inline: 0.75rem;
+  }
+
+  .topbar-actions {
+    gap: 0.35rem;
+  }
+
+  .import-meta {
+    grid-template-columns: 1fr;
   }
 
   .topbar .button-accent span {

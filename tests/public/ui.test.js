@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 
 import { createBrowserFixture } from "../../public/js/fixture.js";
 import { renderFlightDetail } from "../../public/js/renderFlight.js";
+import {
+  renderImportDetail,
+  renderImportList,
+} from "../../public/js/renderImport.js";
 import { normalizeFlightCreationInput } from "../../src/services/flightValidation.js";
 
 const publicUrl = new URL("../../public/", import.meta.url);
@@ -20,9 +24,45 @@ test("static UI loads modular CSS and JavaScript without a frontend framework", 
   assert.match(html, /type="module" src="\/js\/app\.js"/u);
   assert.match(html, /id="flight-list"/u);
   assert.match(html, /id="flight-detail"/u);
+  assert.match(html, /id="import-list"/u);
+  assert.match(html, /id="import-model"/u);
   assert.match(html, /Fixture uniquement/u);
   assert.doesNotMatch(html, /<script[^>]+src="https?:\/\//iu);
   assert.doesNotMatch(app, /localStorage|sessionStorage/u);
+});
+
+test("import rendering escapes technical records and exposes Lot 3 status", () => {
+  const listContainer = { innerHTML: "" };
+  const detailContainer = { innerHTML: "" };
+  renderImportList(listContainer, [
+    {
+      id: "IMPORT-<TEST>",
+      import_status: "REVIEW_REQUIRED",
+      flight_id: null,
+      created_at: "2099-12-31T12:00:00.000Z",
+    },
+  ]);
+  renderImportDetail(detailContainer, {
+    import: {
+      id: "IMPORT-<TEST>",
+      import_status: "REVIEW_REQUIRED",
+      flight_id: null,
+      data_scope: "PARTIAL",
+      import_mode: "MANUAL",
+      created_by: "FIXTURE-USER",
+      started_at: "2099-12-31T12:00:00.000Z",
+      completed_at: null,
+    },
+    sources: [{ source_name: "<SOURCE>", source_type: "STRUCTURED_JSON", file_status: "RECOGNIZED" }],
+    issues: [{ severity: "REVIEW", issue_code: "FIXTURE_ISSUE", field_path: "timings.std", message: "<MESSAGE>" }],
+    history: [],
+  });
+
+  assert.match(listContainer.innerHTML, /Révision requise/u);
+  assert.match(detailContainer.innerHTML, /&lt;SOURCE&gt;/u);
+  assert.match(detailContainer.innerHTML, /&lt;MESSAGE&gt;/u);
+  assert.doesNotMatch(detailContainer.innerHTML, /<SOURCE>|<MESSAGE>/u);
+  assert.match(detailContainer.innerHTML, /value-unknown">Inconnu/u);
 });
 
 test("browser fixture is explicit, unique and accepted by Lot 2 validation", () => {

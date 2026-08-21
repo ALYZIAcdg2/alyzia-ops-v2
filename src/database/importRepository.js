@@ -76,11 +76,30 @@ export function createImportRepository(db) {
         .run();
     },
 
+    attachFlight(importId, flightId) {
+      return db
+        .prepare("UPDATE imports SET flight_id = ?1 WHERE id = ?2")
+        .bind(flightId, importId)
+        .run();
+    },
+
     getImportById(importId) {
       return db
         .prepare("SELECT * FROM imports WHERE id = ?1 LIMIT 1")
         .bind(importId)
         .first();
+    },
+
+    async listImports({ limit = 25, offset = 0 } = {}) {
+      const result = await db
+        .prepare(
+          `SELECT * FROM imports
+           ORDER BY created_at DESC, id DESC
+           LIMIT ?1 OFFSET ?2`,
+        )
+        .bind(limit, offset)
+        .all();
+      return result.results ?? [];
     },
 
     addSource(importId, source) {
