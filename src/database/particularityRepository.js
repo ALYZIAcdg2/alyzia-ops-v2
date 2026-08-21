@@ -14,6 +14,21 @@ export function createParticularityRepository(db) {
       return result.results ?? [];
     },
 
+    async getPassengerParticularitiesByFlightId(flightId) {
+      const result = await db
+        .prepare(
+          `SELECT particularity.*
+           FROM passenger_particularities AS particularity
+           INNER JOIN flight_passengers AS passenger
+             ON passenger.id = particularity.passenger_id
+           WHERE passenger.flight_id = ?1
+           ORDER BY particularity.id`,
+        )
+        .bind(flightId)
+        .all();
+      return result.results ?? [];
+    },
+
     async getFlightParticularityCounts(flightId) {
       const result = await db
         .prepare(

@@ -20,6 +20,10 @@ const UPDATE_COLUMNS = Object.freeze({
   service_date_raw: "service_date_raw",
 });
 
+function escapeLikePattern(value) {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
 export function createFlightRepository(db) {
   assertD1Database(db);
 
@@ -57,6 +61,41 @@ export function createFlightRepository(db) {
         .first();
     },
 
+    async list({ query, limit, offset }) {
+      const hasQuery = typeof query === "string" && query.length > 0;
+      const whereClause = hasQuery
+        ? `WHERE UPPER(flight.id) LIKE ?1 ESCAPE '\\'
+             OR UPPER(flight.airline || flight.flight_number) LIKE ?1 ESCAPE '\\'
+             OR UPPER(flight.origin) LIKE ?1 ESCAPE '\\'
+             OR UPPER(flight.destination) LIKE ?1 ESCAPE '\\'
+             OR flight.service_date_internal LIKE ?1 ESCAPE '\\'`
+        : "";
+      const limitPlaceholder = hasQuery ? "?2" : "?1";
+      const offsetPlaceholder = hasQuery ? "?3" : "?2";
+      const sql = `SELECT
+          flight.*,
+          timing.id AS timing_id,
+          timing.std,
+          timing.etd,
+          timing.atd,
+          timing.boarding_time,
+          timing.flight_status,
+          timing.acceptance_status,
+          aircraft.id AS aircraft_id,
+          aircraft.aircraft_type
+        FROM flights AS flight
+        LEFT JOIN flight_timings AS timing ON timing.flight_id = flight.id
+        LEFT JOIN flight_aircraft AS aircraft ON aircraft.flight_id = flight.id
+        ${whereClause}
+        ORDER BY flight.service_date_internal DESC, flight.airline, flight.flight_number
+        LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`;
+      const values = hasQuery
+        ? [`%${escapeLikePattern(query.toUpperCase())}%`, limit, offset]
+        : [limit, offset];
+      const result = await db.prepare(sql).bind(...values).all();
+      return result.results ?? [];
+    },
+
     create(data) {
       if (!Object.hasOwn(data, "flight_id")) {
         throw new TypeError("flight_id is required");
@@ -80,6 +119,10 @@ export function createFlightRepository(db) {
         value: serviceDateRaw,
         columnMap: UPDATE_COLUMNS,
       });
+    },
+
+    remove(flightId) {
+      return db.prepare("DELETE FROM flights WHERE id = ?1").bind(flightId).run();
     },
   };
 }
