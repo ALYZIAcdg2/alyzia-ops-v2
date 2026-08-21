@@ -10,6 +10,16 @@ import {
 } from "./httpUtils.js";
 import { requireWriteAuthorization } from "./writeAuthorization.js";
 
+const IMPORT_STATUSES = new Set([
+  "PENDING",
+  "PROCESSED",
+  "NO_CHANGE",
+  "REVIEW_REQUIRED",
+  "ERROR",
+]);
+const IMPORT_MODES = new Set(["MANUAL", "AUTOMATIC"]);
+const ISSUE_RESOLUTIONS = new Set(["RESOLVED", "IGNORED"]);
+
 function parseInteger(value, { field, minimum, maximum, fallback }) {
   if (value === null || value === "") {
     return fallback;
@@ -40,13 +50,55 @@ async function listImports(env, url) {
     maximum: 100_000,
     fallback: 0,
   });
+  const importStatus = url.searchParams.get("status") || undefined;
+  const importMode = url.searchParams.get("mode") || undefined;
+  const query = url.searchParams.get("q")?.trim() || undefined;
+  if (importStatus !== undefined && !IMPORT_STATUSES.has(importStatus)) {
+    throw new ValidationError("query.status is invalid", {
+      field: "query.status",
+      allowed: [...IMPORT_STATUSES],
+    });
+  }
+  if (importMode !== undefined && !IMPORT_MODES.has(importMode)) {
+    throw new ValidationError("query.mode is invalid", {
+      field: "query.mode",
+      allowed: [...IMPORT_MODES],
+    });
+  }
+  if (query !== undefined && query.length > 100) {
+    throw new ValidationError("query.q must not exceed 100 characters", {
+      field: "query.q",
+    });
+  }
   const rows = await createImportRepository(env.DB).listImports({
     limit: limit + 1,
     offset,
+    import_status: importStatus,
+    import_mode: importMode,
+    query,
   });
   return jsonResponse({
     imports: rows.slice(0, limit),
-    pagination: { limit, offset, has_more: rows.length > limit },
+    filters: {
+      status: importStatus ?? null,
+      mode: importMode ?? null,
+      q: query ?? null,
+    },
+    pagination: {
+      limit,
+      offset,
+      has_more: rows.length > limit,
+      has_previous: offset > 0,
+    },
+  });
+}
+
+async function getImportSummary(env) {
+  const summary = await createImportRepository(env.DB).getImportSummary();
+  return jsonResponse({
+    summary: Object.fromEntries(
+      Object.entries(summary).map(([key, value]) => [key, Number(value ?? 0)]),
+    ),
   });
 }
 
@@ -120,7 +172,80 @@ async function createImport(request, env, url) {
   );
 }
 
+function nestedIssueRoute(pathname) {
+  const match = pathname.match(/^\/api\/imports\/([^/]+)\/issues\/(\d+)$/u);
+  if (!match) return null;
+  try {
+    return {
+      importId: decodeURIComponent(match[1]),
+      issueId: Number(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveIssue(request, env, { importId, issueId }) {
+  await requireWriteAuthorization(request, env);
+  const payload = await readJsonBody(request, { maximumBytes: 16_000 });
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new ValidationError("Issue resolution payload must be an object", {
+      field: "body",
+    });
+  }
+  const resolutionStatus = payload.resolution_status;
+  const resolvedBy = payload.resolved_by?.trim();
+  if (!ISSUE_RESOLUTIONS.has(resolutionStatus)) {
+    throw new ValidationError("resolution_status is invalid", {
+      field: "body.resolution_status",
+      allowed: [...ISSUE_RESOLUTIONS],
+    });
+  }
+  if (!resolvedBy || resolvedBy.length > 100) {
+    throw new ValidationError("resolved_by is required and limited to 100 characters", {
+      field: "body.resolved_by",
+    });
+  }
+  const repository = createImportRepository(env.DB);
+  if (!(await repository.getImportById(importId))) {
+    return jsonResponse(
+      { error: "Import not found", code: "IMPORT_NOT_FOUND" },
+      { status: 404 },
+    );
+  }
+  const result = await repository.resolveImportIssue(importId, issueId, {
+    resolution_status: resolutionStatus,
+    resolved_by: resolvedBy,
+  });
+  if (Number(result.meta?.changes ?? 0) === 0) {
+    return jsonResponse(
+      { error: "Import issue not found", code: "IMPORT_ISSUE_NOT_FOUND" },
+      { status: 404 },
+    );
+  }
+  const issues = await repository.getIssuesByImportId(importId);
+  return jsonResponse({
+    import_id: importId,
+    issue: issues.find((issue) => Number(issue.id) === issueId) ?? null,
+  });
+}
+
 export async function handleImportApi(request, env, url) {
+  if (url.pathname === "/api/imports/summary") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    return getImportSummary(env);
+  }
+
+  const issueRoute = nestedIssueRoute(url.pathname);
+  if (issueRoute) {
+    if (request.method !== "PATCH") {
+      return methodNotAllowed(["PATCH"]);
+    }
+    return resolveIssue(request, env, issueRoute);
+  }
+
   if (url.pathname === "/api/imports" || url.pathname === "/api/imports/") {
     if (request.method === "GET") {
       return listImports(env, url);

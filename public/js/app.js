@@ -5,10 +5,12 @@ import {
   getFlight,
   getHealth,
   getImport,
+  getImportSummary,
   importSqSource,
   listFlights,
   listImports,
   previewSqSource,
+  resolveImportIssue,
 } from "./api.js";
 import { createBrowserFixture } from "./fixture.js";
 import {
@@ -20,6 +22,7 @@ import {
   renderImportDetail,
   renderImportError,
   renderImportList,
+  renderImportSummary,
 } from "./renderImport.js";
 import { renderSqParse, resetSqParse } from "./renderSqParse.js";
 
@@ -48,6 +51,17 @@ const elements = {
   submitFixture: document.querySelector("#submit-fixture"),
   openImport: document.querySelector("#open-import"),
   refreshImports: document.querySelector("#refresh-imports"),
+  importSummary: document.querySelector("#import-summary"),
+  importFilters: document.querySelector("#import-filters"),
+  importSearch: document.querySelector("#import-search"),
+  importStatusFilter: document.querySelector("#import-status-filter"),
+  importModeFilter: document.querySelector("#import-mode-filter"),
+  resetImportFilters: document.querySelector("#reset-import-filters"),
+  issueResolvedBy: document.querySelector("#issue-resolved-by"),
+  issueWriteToken: document.querySelector("#issue-write-token"),
+  previousImports: document.querySelector("#previous-imports"),
+  nextImports: document.querySelector("#next-imports"),
+  importPageLabel: document.querySelector("#import-page-label"),
   importList: document.querySelector("#import-list"),
   importDetail: document.querySelector("#import-detail"),
   importDialog: document.querySelector("#import-dialog"),
@@ -94,6 +108,11 @@ const state = {
   selectedImportId: null,
   importListRequest: 0,
   importDetailRequest: 0,
+  importOffset: 0,
+  importHasMore: false,
+  importQuery: "",
+  importStatus: "",
+  importMode: "",
   sqParse: null,
 };
 
@@ -143,20 +162,65 @@ async function loadImports({ selectLatest = false } = {}) {
   const requestId = ++state.importListRequest;
   elements.refreshImports.disabled = true;
   try {
-    const result = await listImports({ limit: 25 });
+    const [result, summaryResult] = await Promise.all([
+      listImports({
+        limit: PAGE_SIZE,
+        offset: state.importOffset,
+        status: state.importStatus,
+        mode: state.importMode,
+        query: state.importQuery,
+      }),
+      getImportSummary(),
+    ]);
     if (requestId !== state.importListRequest) return;
     state.imports = result.imports;
+    state.importHasMore = result.pagination.has_more;
+    renderImportSummary(elements.importSummary, summaryResult.summary);
     renderImports();
+    elements.previousImports.disabled = state.importOffset === 0;
+    elements.nextImports.disabled = !state.importHasMore;
+    elements.importPageLabel.textContent = `Page ${Math.floor(state.importOffset / PAGE_SIZE) + 1}`;
     const candidate = selectLatest
       ? state.imports[0]?.id
-      : state.selectedImportId ?? state.imports[0]?.id;
-    if (candidate) await selectImport(candidate);
+      : state.imports.some((item) => item.id === state.selectedImportId)
+        ? state.selectedImportId
+        : state.imports[0]?.id;
+    if (candidate) {
+      await selectImport(candidate);
+    } else {
+      state.selectedImportId = null;
+      renderImportError(elements.importDetail, "Aucun import ne correspond aux filtres.");
+    }
   } catch (error) {
     if (requestId === state.importListRequest) {
       renderImportError(elements.importList, errorMessage(error));
     }
   } finally {
     if (requestId === state.importListRequest) elements.refreshImports.disabled = false;
+  }
+}
+
+async function decideImportIssue(issueId, resolutionStatus) {
+  const importId = state.selectedImportId;
+  const resolvedBy = elements.issueResolvedBy.value.trim();
+  const writeToken = elements.issueWriteToken.value;
+  if (!importId || !resolvedBy || !writeToken) {
+    showToast("Renseignez l’opérateur et le jeton d’écriture avant la décision.", "error");
+    return;
+  }
+  const action = resolutionStatus === "RESOLVED" ? "résoudre" : "ignorer";
+  if (!window.confirm(`Confirmer : ${action} explicitement cette issue ?`)) return;
+  try {
+    await resolveImportIssue(
+      { importId, issueId, resolutionStatus, resolvedBy },
+      writeToken,
+    );
+    elements.issueWriteToken.value = "";
+    showToast("Décision enregistrée. Le statut de l’import reste inchangé.", "success");
+    await loadImports();
+  } catch (error) {
+    elements.issueWriteToken.value = "";
+    showToast(errorMessage(error), "error");
   }
 }
 
@@ -578,6 +642,41 @@ elements.refreshImports.addEventListener("click", () => loadImports());
 elements.importList.addEventListener("click", (event) => {
   const item = event.target.closest("[data-import-id]");
   if (item) selectImport(item.dataset.importId);
+});
+elements.importDetail.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-issue-id][data-resolution]");
+  if (button) decideImportIssue(button.dataset.issueId, button.dataset.resolution);
+});
+elements.importFilters.addEventListener("submit", (event) => {
+  event.preventDefault();
+  state.importQuery = elements.importSearch.value.trim();
+  state.importStatus = elements.importStatusFilter.value;
+  state.importMode = elements.importModeFilter.value;
+  state.importOffset = 0;
+  state.selectedImportId = null;
+  loadImports({ selectLatest: true });
+});
+elements.resetImportFilters.addEventListener("click", () => {
+  elements.importSearch.value = "";
+  elements.importStatusFilter.value = "";
+  elements.importModeFilter.value = "";
+  state.importQuery = "";
+  state.importStatus = "";
+  state.importMode = "";
+  state.importOffset = 0;
+  state.selectedImportId = null;
+  loadImports({ selectLatest: true });
+});
+elements.previousImports.addEventListener("click", () => {
+  state.importOffset = Math.max(0, state.importOffset - PAGE_SIZE);
+  state.selectedImportId = null;
+  loadImports({ selectLatest: true });
+});
+elements.nextImports.addEventListener("click", () => {
+  if (!state.importHasMore) return;
+  state.importOffset += PAGE_SIZE;
+  state.selectedImportId = null;
+  loadImports({ selectLatest: true });
 });
 elements.openImport.addEventListener("click", openImportDialog);
 elements.closeImport.addEventListener("click", closeImportDialog);

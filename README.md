@@ -1,14 +1,13 @@
-# ALYZIA OPS V2 — Lots 1 à 3
+# ALYZIA OPS V2 — Lots 1 à 4
 
 ALYZIA OPS V2 est une application Cloudflare Workers + D1 destinée à stocker
 et consulter une représentation structurée des vols. Le Lot 1 fournit le socle
 de données commun. Le Lot 2 ajoute les repositories D1 et le moteur prudent
 d’import de modèles déjà structurés. Le Lot 3 ajoute le parser SQ textuel avec
-prévisualisation obligatoire avant écriture. Une première API et un centre
-d’import technique permettent de tester ce socle ; leur extension
-opérationnelle complète appartient au Lot 4.
+prévisualisation obligatoire avant écriture. Le Lot 4 livre l’API de suivi et
+un Import Center filtrable avec décisions humaines explicites sur les issues.
 
-Version applicative : `0.4.0`.
+Version applicative : `0.5.0`.
 
 ## Accès
 
@@ -71,7 +70,18 @@ opérationnel.
   de l’import en cas d’issue `REVIEW` ou `BLOCKING` ;
 - import D1 protégé par le même secret, avec métadonnées et issues du parser.
 
-Ne sont pas inclus dans les Lots 1 à 3 : extraction PDF/ZIP, Gmail, IA, logique
+### Lot 4 — API et Import Center
+
+- filtres d’import par statut, mode et recherche textuelle bornée ;
+- pagination stable avec navigation précédente/suivante ;
+- synthèse des imports et des issues ouvertes ;
+- détail complet des sources, issues et changements d’historique ;
+- résolution humaine explicite d’une issue en `RESOLVED` ou `IGNORED` ;
+- protection de chaque décision par `API_WRITE_TOKEN` et identifiant opérateur ;
+- aucune relance d’import ni modification automatique du statut après décision ;
+- interface responsive sans framework frontend lourd.
+
+Ne sont pas inclus dans les Lots 1 à 4 : extraction PDF/ZIP, Gmail, IA, logique
 R2 ou logique Queues. Aucun codeshare SQ V1 n’est ajouté. Les formats
 SQ335/SQ337 réels restent à valider au Lot 5 à partir des fichiers
 opérationnels de référence.
@@ -184,7 +194,7 @@ GET /api/health
 {
   "ok": true,
   "service": "ALYZIA OPS",
-  "version": "0.4.0"
+  "version": "0.5.0"
 }
 ```
 
@@ -231,6 +241,7 @@ Elle reste disponible pour les fixtures techniques du Lot 2.
 
 ```http
 GET /api/imports?limit=25&offset=0
+GET /api/imports/summary
 GET /api/imports/:import_id
 POST /api/imports
 Content-Type: application/json
@@ -257,6 +268,28 @@ fiable, présent, non ambigu et non protégé. Les changements structurels de
 passagers, particularités, documents, connexions, groupes ou commentaires sont
 comparés de façon stable mais placés en `REVIEW_REQUIRED` tant que leur matching
 métier n’est pas finalisé.
+
+La liste accepte les filtres optionnels `status`, `mode` et `q`. La recherche
+porte uniquement sur l’identifiant d’import, le vol, le parser et l’opérateur.
+La synthèse retourne des compteurs globaux et ne modifie aucune donnée.
+
+Une décision humaine sur une issue utilise :
+
+```http
+PATCH /api/imports/:import_id/issues/:issue_id
+Content-Type: application/json
+Authorization: Bearer <API_WRITE_TOKEN>
+```
+
+```json
+{
+  "resolution_status": "RESOLVED",
+  "resolved_by": "identifiant-operateur"
+}
+```
+
+Les seules décisions acceptées sont `RESOLVED` et `IGNORED`. Cette route ne
+relance pas le moteur et ne change pas le statut de l’import.
 
 ### Parser SQ
 

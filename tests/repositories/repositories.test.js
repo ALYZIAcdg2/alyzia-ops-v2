@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createFlightRepository } from "../../src/database/flightRepository.js";
+import { createImportRepository } from "../../src/database/importRepository.js";
 import { createTimingRepository } from "../../src/database/timingRepository.js";
 import { createD1Mock } from "./d1Mock.js";
 
@@ -67,4 +68,29 @@ test("flightRepository rejects non-persistent create fields", () => {
       }),
     /unsupported repository fields/u,
   );
+});
+
+test("importRepository uses bound filters and stable pagination", async () => {
+  const { db, calls } = createD1Mock({ all: [{ results: [] }] });
+  const repository = createImportRepository(db);
+
+  await repository.listImports({
+    limit: 26,
+    offset: 25,
+    import_status: "REVIEW_REQUIRED",
+    import_mode: "MANUAL",
+    query: "SQ-335",
+  });
+
+  assert.match(calls[0].sql, /import_status = \?1/u);
+  assert.match(calls[0].sql, /import_mode = \?2/u);
+  assert.match(calls[0].sql, /instr\(lower\(id\), lower\(\?3\)\)/u);
+  assert.match(calls[0].sql, /LIMIT \?4 OFFSET \?5/u);
+  assert.deepEqual(calls[0].values, [
+    "REVIEW_REQUIRED",
+    "MANUAL",
+    "SQ-335",
+    26,
+    25,
+  ]);
 });

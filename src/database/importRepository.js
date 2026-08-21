@@ -90,16 +90,73 @@ export function createImportRepository(db) {
         .first();
     },
 
-    async listImports({ limit = 25, offset = 0 } = {}) {
+    async listImports({
+      limit = 25,
+      offset = 0,
+      import_status,
+      import_mode,
+      query,
+    } = {}) {
+      const predicates = [];
+      const values = [];
+      if (import_status !== undefined) {
+        values.push(import_status);
+        predicates.push(`import_status = ?${values.length}`);
+      }
+      if (import_mode !== undefined) {
+        values.push(import_mode);
+        predicates.push(`import_mode = ?${values.length}`);
+      }
+      if (query !== undefined) {
+        values.push(query);
+        const placeholder = `?${values.length}`;
+        predicates.push(`(
+          instr(lower(id), lower(${placeholder})) > 0 OR
+          instr(lower(COALESCE(flight_id, '')), lower(${placeholder})) > 0 OR
+          instr(lower(COALESCE(parser_name, '')), lower(${placeholder})) > 0 OR
+          instr(lower(COALESCE(created_by, '')), lower(${placeholder})) > 0
+        )`);
+      }
+      const where = predicates.length === 0
+        ? ""
+        : `WHERE ${predicates.join(" AND ")}`;
+      values.push(limit, offset);
       const result = await db
         .prepare(
           `SELECT * FROM imports
+           ${where}
            ORDER BY created_at DESC, id DESC
-           LIMIT ?1 OFFSET ?2`,
+           LIMIT ?${values.length - 1} OFFSET ?${values.length}`,
         )
-        .bind(limit, offset)
+        .bind(...values)
         .all();
       return result.results ?? [];
+    },
+
+    async getImportSummary() {
+      return (
+        (await db
+          .prepare(
+            `SELECT
+               COUNT(*) AS total,
+               SUM(CASE WHEN import_status = 'PENDING' THEN 1 ELSE 0 END) AS pending,
+               SUM(CASE WHEN import_status = 'PROCESSED' THEN 1 ELSE 0 END) AS processed,
+               SUM(CASE WHEN import_status = 'NO_CHANGE' THEN 1 ELSE 0 END) AS no_change,
+               SUM(CASE WHEN import_status = 'REVIEW_REQUIRED' THEN 1 ELSE 0 END) AS review_required,
+               SUM(CASE WHEN import_status = 'ERROR' THEN 1 ELSE 0 END) AS error,
+               (SELECT COUNT(*) FROM import_issues WHERE resolution_status = 'OPEN') AS open_issues
+             FROM imports`,
+          )
+          .first()) ?? {
+          total: 0,
+          pending: 0,
+          processed: 0,
+          no_change: 0,
+          review_required: 0,
+          error: 0,
+          open_issues: 0,
+        }
+      );
     },
 
     addSource(importId, source) {
@@ -155,6 +212,29 @@ export function createImportRepository(db) {
           resolved_by ?? null,
           resolved_at ?? null,
           issueId,
+        )
+        .run();
+    },
+
+    resolveImportIssue(
+      importId,
+      issueId,
+      { resolution_status, resolved_by, resolved_at } = {},
+    ) {
+      return db
+        .prepare(
+          `UPDATE import_issues
+           SET resolution_status = ?1,
+               resolved_by = ?2,
+               resolved_at = COALESCE(?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+           WHERE id = ?4 AND import_id = ?5`,
+        )
+        .bind(
+          resolution_status,
+          resolved_by,
+          resolved_at ?? null,
+          issueId,
+          importId,
         )
         .run();
     },
