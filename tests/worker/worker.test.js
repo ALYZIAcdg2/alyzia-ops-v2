@@ -24,14 +24,14 @@ function jsonPost(path, body, token = WRITE_TOKEN) {
   });
 }
 
-test("GET /api/health returns the Lot 4 service contract", async () => {
+test("GET /api/health returns the Lot 5 service contract", async () => {
   const response = await worker.fetch(request("/api/health"), {});
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "ALYZIA OPS",
-    version: "0.5.0",
+    version: "0.6.0",
   });
 });
 

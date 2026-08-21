@@ -1,4 +1,4 @@
-# ALYZIA OPS V2 — Lots 1 à 4
+# ALYZIA OPS V2 — Lots 1 à 5
 
 ALYZIA OPS V2 est une application Cloudflare Workers + D1 destinée à stocker
 et consulter une représentation structurée des vols. Le Lot 1 fournit le socle
@@ -6,8 +6,9 @@ de données commun. Le Lot 2 ajoute les repositories D1 et le moteur prudent
 d’import de modèles déjà structurés. Le Lot 3 ajoute le parser SQ textuel avec
 prévisualisation obligatoire avant écriture. Le Lot 4 livre l’API de suivi et
 un Import Center filtrable avec décisions humaines explicites sur les issues.
+Le Lot 5 ajoute une matrice reproductible pour SQ335 et SQ337.
 
-Version applicative : `0.5.0`.
+Version applicative : `0.6.0`.
 
 ## Accès
 
@@ -81,10 +82,20 @@ opérationnel.
 - aucune relance d’import ni modification automatique du statut après décision ;
 - interface responsive sans framework frontend lourd.
 
-Ne sont pas inclus dans les Lots 1 à 4 : extraction PDF/ZIP, Gmail, IA, logique
+### Lot 5 — tests SQ335 / SQ337
+
+- cas automatisés distincts SQ335 et SQ337, uniquement avec données fixture ;
+- validation de l’identité, de la date raw et du mouvement explicite ;
+- doubles et triples SSR d’une même catégorie conservés par code ;
+- contrôle des passagers uniques, meals ouverts, SSR inconnus et documents ;
+- matrice de validation documentée dans `docs/lot5-validation.md` ;
+- validation des fichiers opérationnels réels réservée à leur rattachement
+  sécurisé, sans commit de données personnelles.
+
+Ne sont pas inclus dans les Lots 1 à 5 : extraction PDF/ZIP, Gmail, IA, logique
 R2 ou logique Queues. Aucun codeshare SQ V1 n’est ajouté. Les formats
-SQ335/SQ337 réels restent à valider au Lot 5 à partir des fichiers
-opérationnels de référence.
+SQ335/SQ337 réels restent à valider dès que les fichiers opérationnels de
+référence sont accessibles hors de la copie publique du chat partagé.
 
 ## Architecture
 
@@ -194,7 +205,7 @@ GET /api/health
 {
   "ok": true,
   "service": "ALYZIA OPS",
-  "version": "0.5.0"
+  "version": "0.6.0"
 }
 ```
 
