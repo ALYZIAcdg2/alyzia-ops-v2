@@ -17,6 +17,7 @@ Version applicative : `0.9.0`.
 
 - application : <https://alyzia-ops-v2.alyzia-cdg2.workers.dev> ;
 - santé : <https://alyzia-ops-v2.alyzia-cdg2.workers.dev/api/health> ;
+- disponibilité : <https://alyzia-ops-v2.alyzia-cdg2.workers.dev/api/readiness> ;
 - dépôt : <https://github.com/ALYZIAcdg2/alyzia-ops-v2> ;
 - branche de production : `main` ;
 - binding D1 : `DB` vers `alyzia-ops-db` ;
@@ -258,6 +259,9 @@ GET /api/health
   "version": "0.9.0"
 }
 ```
+
+`GET /api/readiness` vérifie uniquement la présence de D1, du schéma
+d'ingestion et du binding R2. Il ne retourne aucun compteur ni aucune donnée.
 
 ### Liste et recherche
 

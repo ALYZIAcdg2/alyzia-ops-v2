@@ -21,5 +21,16 @@ export function createOpsRepository(db) {
         )
         .first();
     },
+
+    getIngestionSchemaState() {
+      return db
+        .prepare(
+          `SELECT COUNT(*) AS table_count
+           FROM sqlite_schema
+           WHERE type = 'table'
+             AND name IN ('ingestion_messages', 'ingestion_objects')`,
+        )
+        .first();
+    },
   };
 }

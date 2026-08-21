@@ -8,6 +8,7 @@ import {
   methodNotAllowed,
 } from "./http/httpUtils.js";
 import { ServiceError } from "./services/serviceErrors.js";
+import { getReadiness } from "./services/opsSupervisionService.js";
 
 const SERVICE_NAME = "ALYZIA OPS";
 const SERVICE_VERSION = "0.9.0";
@@ -47,6 +48,20 @@ async function handleRequest(request, env) {
       service: SERVICE_NAME,
       version: SERVICE_VERSION,
     });
+  }
+
+  if (url.pathname === "/api/readiness") {
+    if (request.method !== "GET") {
+      return methodNotAllowed(["GET"]);
+    }
+    const readiness = await getReadiness({
+      db: env.DB,
+      bindings: { r2: Boolean(env.SOURCE_ARCHIVE) },
+    });
+    return jsonResponse(
+      { ...readiness, service: SERVICE_NAME, version: SERVICE_VERSION },
+      { status: readiness.ok ? 200 : 503 },
+    );
   }
 
   const flightResponse = await handleFlightApi(request, env, url);

@@ -24,3 +24,20 @@ export async function getOpsSummary({ db, bindings = {} }) {
     extensions: listExtensions(),
   };
 }
+
+export async function getReadiness({ db, bindings = {} }) {
+  try {
+    const schema = await createOpsRepository(db).getIngestionSchemaState();
+    const ingestionSchema = Number(schema?.table_count ?? 0) === 2;
+    const r2 = bindings.r2 === true;
+    return {
+      ok: ingestionSchema && r2,
+      dependencies: { d1: true, ingestion_schema: ingestionSchema, r2 },
+    };
+  } catch {
+    return {
+      ok: false,
+      dependencies: { d1: false, ingestion_schema: false, r2: bindings.r2 === true },
+    };
+  }
+}
