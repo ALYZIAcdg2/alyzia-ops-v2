@@ -5,8 +5,10 @@ import {
   getFlight,
   getHealth,
   getImport,
+  importSqSource,
   listFlights,
   listImports,
+  previewSqSource,
 } from "./api.js";
 import { createBrowserFixture } from "./fixture.js";
 import {
@@ -19,6 +21,7 @@ import {
   renderImportError,
   renderImportList,
 } from "./renderImport.js";
+import { renderSqParse, resetSqParse } from "./renderSqParse.js";
 
 const PAGE_SIZE = 25;
 
@@ -58,6 +61,24 @@ const elements = {
   importModel: document.querySelector("#import-model"),
   importConfirmation: document.querySelector("#import-confirmation"),
   submitImport: document.querySelector("#submit-import"),
+  openSq: document.querySelector("#open-sq"),
+  sqDialog: document.querySelector("#sq-dialog"),
+  sqForm: document.querySelector("#sq-form"),
+  closeSq: document.querySelector("#close-sq"),
+  cancelSq: document.querySelector("#cancel-sq"),
+  sqYear: document.querySelector("#sq-year"),
+  sqMovement: document.querySelector("#sq-movement"),
+  sqOrigin: document.querySelector("#sq-origin"),
+  sqDestination: document.querySelector("#sq-destination"),
+  sqSourceName: document.querySelector("#sq-source-name"),
+  sqUser: document.querySelector("#sq-user"),
+  sqScope: document.querySelector("#sq-scope"),
+  sqToken: document.querySelector("#sq-token"),
+  sqSource: document.querySelector("#sq-source"),
+  sqPreview: document.querySelector("#sq-preview"),
+  sqConfirmation: document.querySelector("#sq-confirmation"),
+  previewSq: document.querySelector("#preview-sq"),
+  submitSq: document.querySelector("#submit-sq"),
   toastRegion: document.querySelector("#toast-region"),
 };
 
@@ -73,6 +94,7 @@ const state = {
   selectedImportId: null,
   importListRequest: 0,
   importDetailRequest: 0,
+  sqParse: null,
 };
 
 function errorMessage(error) {
@@ -88,6 +110,9 @@ function errorMessage(error) {
     }
     if (error.code === "IMPORT_NOT_FOUND") return "Import introuvable.";
     if (error.code === "IMPORT_ID_ALREADY_EXISTS") return "Cet identifiant d’import existe déjà.";
+    if (error.code === "SQ_REVIEW_REQUIRED") {
+      return "Le parser a détecté une ambiguïté : révisez les issues avant l’import.";
+    }
     return error.message;
   }
   return "Le service est momentanément inaccessible.";
@@ -289,6 +314,135 @@ function closeImportDialog() {
   elements.importDialog.close();
 }
 
+function sqOptions() {
+  const options = {
+    service_year: Number(elements.sqYear.value),
+    movement_type: elements.sqMovement.value,
+  };
+  const origin = elements.sqOrigin.value.trim().toUpperCase();
+  const destination = elements.sqDestination.value.trim().toUpperCase();
+  if (origin) options.origin = origin;
+  if (destination) options.destination = destination;
+  return options;
+}
+
+function invalidateSqPreview() {
+  state.sqParse = null;
+  elements.submitSq.disabled = true;
+  resetSqParse(elements.sqPreview);
+}
+
+function resetSqForm() {
+  elements.sqToken.value = "";
+  elements.sqSource.value = "";
+  elements.sqYear.value = "";
+  elements.sqOrigin.value = "";
+  elements.sqDestination.value = "";
+  elements.sqUser.value = "";
+  elements.sqSourceName.value = "SQ editing text";
+  elements.sqConfirmation.checked = false;
+  elements.sqScope.value = "PARTIAL";
+  elements.sqMovement.value = "";
+  elements.previewSq.disabled = false;
+  elements.previewSq.textContent = "Analyser sans écrire";
+  elements.submitSq.disabled = true;
+  elements.submitSq.textContent = "Importer dans D1";
+  invalidateSqPreview();
+}
+
+function closeSqDialog() {
+  resetSqForm();
+  elements.sqDialog.close();
+}
+
+function openSqDialog() {
+  elements.sqDialog.showModal();
+}
+
+function sqPreviewFieldsAreValid() {
+  return [
+    elements.sqYear,
+    elements.sqMovement,
+    elements.sqToken,
+    elements.sqSource,
+  ].every((field) => field.reportValidity());
+}
+
+async function previewSq() {
+  if (!sqPreviewFieldsAreValid()) return;
+  elements.previewSq.disabled = true;
+  elements.previewSq.textContent = "Analyse…";
+  try {
+    const { parse } = await previewSqSource(
+      {
+        sourceText: elements.sqSource.value,
+        options: sqOptions(),
+      },
+      elements.sqToken.value,
+    );
+    state.sqParse = parse;
+    renderSqParse(elements.sqPreview, parse);
+    elements.submitSq.disabled = !parse.can_import;
+    showToast(
+      parse.can_import
+        ? "Source SQ analysée : le modèle est prêt à importer."
+        : "Source SQ analysée : une révision est nécessaire.",
+      parse.can_import ? "success" : "info",
+    );
+  } catch (error) {
+    showToast(errorMessage(error), "error");
+    elements.sqToken.value = "";
+    elements.sqToken.focus();
+  } finally {
+    elements.previewSq.disabled = false;
+    elements.previewSq.textContent = "Analyser sans écrire";
+  }
+}
+
+async function submitSq(event) {
+  event.preventDefault();
+  if (!elements.sqForm.reportValidity() || !state.sqParse?.can_import) return;
+  elements.submitSq.disabled = true;
+  elements.submitSq.textContent = "Import SQ en cours…";
+  const importId = `IMPORT-SQ-${crypto.randomUUID().toUpperCase()}`;
+  try {
+    const { result } = await importSqSource(
+      {
+        sourceText: elements.sqSource.value,
+        sourceName: elements.sqSourceName.value.trim(),
+        options: sqOptions(),
+        context: {
+          import_id: importId,
+          import_mode: "MANUAL",
+          data_scope: elements.sqScope.value,
+          user_id: elements.sqUser.value.trim(),
+        },
+      },
+      elements.sqToken.value,
+    );
+    state.selectedImportId = result.import_id;
+    state.selectedFlightId = result.flight?.flight?.flight_id ?? null;
+    closeSqDialog();
+    showToast(`Import SQ ${result.import_id} : ${result.status}.`, "success");
+    await Promise.all([
+      loadImports(),
+      loadFlightList({ autoSelect: Boolean(state.selectedFlightId) }),
+    ]);
+  } catch (error) {
+    const parsed = error instanceof ApiError ? error.details?.parse : null;
+    if (parsed) {
+      state.sqParse = parsed;
+      renderSqParse(elements.sqPreview, parsed);
+    }
+    showToast(errorMessage(error), "error");
+    elements.sqToken.value = "";
+    elements.sqToken.focus();
+  } finally {
+    elements.submitSq.disabled = !state.sqParse?.can_import;
+    elements.submitSq.textContent = "Importer dans D1";
+  }
+}
+
 function openImportDialog() {
   elements.importId.value = `IMPORT-${crypto.randomUUID().toUpperCase()}`;
   elements.importScope.value = "PARTIAL";
@@ -430,6 +584,21 @@ elements.closeImport.addEventListener("click", closeImportDialog);
 elements.cancelImport.addEventListener("click", closeImportDialog);
 elements.importForm.addEventListener("submit", submitImport);
 elements.importDialog.addEventListener("cancel", resetImportForm);
+elements.openSq.addEventListener("click", openSqDialog);
+elements.closeSq.addEventListener("click", closeSqDialog);
+elements.cancelSq.addEventListener("click", closeSqDialog);
+elements.previewSq.addEventListener("click", previewSq);
+elements.sqForm.addEventListener("submit", submitSq);
+elements.sqDialog.addEventListener("cancel", resetSqForm);
+for (const field of [
+  elements.sqYear,
+  elements.sqMovement,
+  elements.sqOrigin,
+  elements.sqDestination,
+  elements.sqSource,
+]) {
+  field.addEventListener("input", invalidateSqPreview);
+}
 
 await Promise.all([
   checkHealth(),
