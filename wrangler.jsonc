@@ -14,6 +14,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "SOURCE_ARCHIVE",
+      "bucket_name": "alyzia-ops-sources"
+    }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -31,6 +37,5 @@
     }
   }
 
-  // Futur lot R2 : ajouter ici un binding r2_buckets après création du bucket.
   // Futur lot Queues : ajouter ici producteurs/consommateurs après création des queues.
 }

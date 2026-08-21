@@ -10,6 +10,11 @@ import {
   renderImportSummary,
 } from "../../public/js/renderImport.js";
 import { renderSqParse } from "../../public/js/renderSqParse.js";
+import {
+  renderIngestionDetail,
+  renderIngestionList,
+} from "../../public/js/renderIngestion.js";
+import { renderOpsSummary } from "../../public/js/renderOps.js";
 import { normalizeFlightCreationInput } from "../../src/services/flightValidation.js";
 
 const publicUrl = new URL("../../public/", import.meta.url);
@@ -30,10 +35,85 @@ test("static UI loads modular CSS and JavaScript without a frontend framework", 
   assert.match(html, /id="import-model"/u);
   assert.match(html, /id="sq-source"/u);
   assert.match(html, /id="preview-sq"/u);
+  assert.match(html, /id="ingestion-list"/u);
+  assert.match(html, /id="ingestion-source"/u);
+  assert.match(html, /Archivage uniquement/u);
+  assert.match(html, /id="ops-summary"/u);
+  assert.match(html, /SUPERVISION ET EXTENSIONS/u);
   assert.match(html, /Choisir explicitement/u);
   assert.match(html, /Fixture uniquement/u);
   assert.doesNotMatch(html, /<script[^>]+src="https?:\/\//iu);
   assert.doesNotMatch(app, /localStorage|sessionStorage/u);
+});
+
+test("operational supervision renders metrics, bindings and extensions", () => {
+  const container = { innerHTML: "" };
+  renderOpsSummary(container, {
+    status: "OPERATIONAL",
+    generated_at: "2099-12-31T12:00:00.000Z",
+    bindings: { d1: true, r2: true, queues: false },
+    summary: {
+      flights: 2,
+      imports: 3,
+      imports_review: 1,
+      open_issues: 4,
+      active_overrides: 0,
+      ingestions: 5,
+      archived_objects: 6,
+      ingestions_error: 0,
+    },
+    extensions: [
+      {
+        id: "fixture-<extension>",
+        extension_type: "PARSER",
+        status: "ACTIVE",
+        version: "0.1.0",
+      },
+    ],
+  });
+  assert.match(container.innerHTML, /OPERATIONAL/u);
+  assert.match(container.innerHTML, /Objets R2/u);
+  assert.match(container.innerHTML, /Non configuré/u);
+  assert.match(container.innerHTML, /fixture-&lt;extension&gt;/u);
+});
+
+test("ingestion rendering escapes R2 metadata and shows archive status", () => {
+  const listContainer = { innerHTML: "" };
+  const detailContainer = { innerHTML: "" };
+  renderIngestionList(listContainer, [
+    {
+      id: "GMAIL-<FIXTURE>",
+      provider: "GMAIL",
+      ingestion_status: "STORED",
+      created_at: "2099-12-31T12:00:00.000Z",
+    },
+  ]);
+  renderIngestionDetail(detailContainer, {
+    ingestion: {
+      id: "GMAIL-<FIXTURE>",
+      provider: "GMAIL",
+      import_id: null,
+      ingestion_status: "STORED",
+      received_at: null,
+      processed_at: null,
+      created_by: "FIXTURE-RELAY",
+      created_at: "2099-12-31T12:00:00.000Z",
+    },
+    objects: [
+      {
+        object_role: "BODY_TEXT",
+        source_name: "<FIXTURE-SOURCE>",
+        media_type: "text/plain",
+        size_bytes: 7,
+        r2_key: "gmail/fixture/<object>",
+      },
+    ],
+  });
+
+  assert.match(listContainer.innerHTML, /Archivé/u);
+  assert.match(detailContainer.innerHTML, /&lt;FIXTURE-SOURCE&gt;/u);
+  assert.match(detailContainer.innerHTML, /&lt;object&gt;/u);
+  assert.doesNotMatch(detailContainer.innerHTML, /<FIXTURE-SOURCE>|<object>/u);
 });
 
 test("SQ preview escapes parser issues and exposes the import gate", () => {

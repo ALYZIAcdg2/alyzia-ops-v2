@@ -1,17 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-const migrationUrl = new URL(
-  "../../migrations/0001_initial_schema.sql",
-  import.meta.url,
-);
-const migration = readFileSync(migrationUrl, "utf8");
+const migrationsUrl = new URL("../../migrations/", import.meta.url);
+const migrations = readdirSync(migrationsUrl)
+  .filter((name) => name.endsWith(".sql"))
+  .sort()
+  .map((name) => readFileSync(new URL(name, migrationsUrl), "utf8"));
 
 function createSchema() {
   const db = new DatabaseSync(":memory:");
-  db.exec(migration);
+  for (const migration of migrations) db.exec(migration);
   return db;
 }
 
@@ -44,10 +44,12 @@ test("initial migration creates every required table", () => {
     .all()
     .map(({ name }) => name);
 
-  assert.equal(tables.length, 24);
+  assert.equal(tables.length, 26);
   assert.ok(tables.includes("flights"));
   assert.ok(tables.includes("passenger_unclassified_documents"));
   assert.ok(tables.includes("manual_changes"));
+  assert.ok(tables.includes("ingestion_messages"));
+  assert.ok(tables.includes("ingestion_objects"));
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   db.close();
 });

@@ -1,14 +1,18 @@
 import {
   ApiError,
+  archiveGmailSource,
   createFlight,
   createStructuredImport,
   getFlight,
   getHealth,
   getImport,
   getImportSummary,
+  getIngestion,
+  getOpsSummary,
   importSqSource,
   listFlights,
   listImports,
+  listIngestions,
   previewSqSource,
   resolveImportIssue,
 } from "./api.js";
@@ -24,7 +28,13 @@ import {
   renderImportList,
   renderImportSummary,
 } from "./renderImport.js";
+import {
+  renderIngestionDetail,
+  renderIngestionError,
+  renderIngestionList,
+} from "./renderIngestion.js";
 import { renderSqParse, resetSqParse } from "./renderSqParse.js";
+import { renderOpsError, renderOpsSummary } from "./renderOps.js";
 
 const PAGE_SIZE = 25;
 
@@ -33,6 +43,9 @@ const elements = {
   serviceStateLabel: document.querySelector("#service-state-label"),
   apiVersion: document.querySelector("#api-version"),
   visibleCount: document.querySelector("#visible-count"),
+  opsToken: document.querySelector("#ops-token"),
+  loadOps: document.querySelector("#load-ops"),
+  opsSummary: document.querySelector("#ops-summary"),
   searchForm: document.querySelector("#search-form"),
   searchInput: document.querySelector("#flight-search"),
   clearSearch: document.querySelector("#clear-search"),
@@ -93,6 +106,26 @@ const elements = {
   sqConfirmation: document.querySelector("#sq-confirmation"),
   previewSq: document.querySelector("#preview-sq"),
   submitSq: document.querySelector("#submit-sq"),
+  openIngestion: document.querySelector("#open-ingestion"),
+  refreshIngestions: document.querySelector("#refresh-ingestions"),
+  loadIngestions: document.querySelector("#load-ingestions"),
+  ingestionListToken: document.querySelector("#ingestion-list-token"),
+  ingestionList: document.querySelector("#ingestion-list"),
+  ingestionDetail: document.querySelector("#ingestion-detail"),
+  previousIngestions: document.querySelector("#previous-ingestions"),
+  nextIngestions: document.querySelector("#next-ingestions"),
+  ingestionPageLabel: document.querySelector("#ingestion-page-label"),
+  ingestionDialog: document.querySelector("#ingestion-dialog"),
+  ingestionForm: document.querySelector("#ingestion-form"),
+  closeIngestion: document.querySelector("#close-ingestion"),
+  cancelIngestion: document.querySelector("#cancel-ingestion"),
+  ingestionMessageId: document.querySelector("#ingestion-message-id"),
+  ingestionCreatedBy: document.querySelector("#ingestion-created-by"),
+  ingestionReceivedAt: document.querySelector("#ingestion-received-at"),
+  ingestionToken: document.querySelector("#ingestion-token"),
+  ingestionSource: document.querySelector("#ingestion-source"),
+  ingestionConfirmation: document.querySelector("#ingestion-confirmation"),
+  submitIngestion: document.querySelector("#submit-ingestion"),
   toastRegion: document.querySelector("#toast-region"),
 };
 
@@ -114,6 +147,12 @@ const state = {
   importStatus: "",
   importMode: "",
   sqParse: null,
+  ingestions: [],
+  selectedIngestionId: null,
+  ingestionListRequest: 0,
+  ingestionDetailRequest: 0,
+  ingestionOffset: 0,
+  ingestionHasMore: false,
 };
 
 function errorMessage(error) {
@@ -132,9 +171,109 @@ function errorMessage(error) {
     if (error.code === "SQ_REVIEW_REQUIRED") {
       return "Le parser a détecté une ambiguïté : révisez les issues avant l’import.";
     }
+    if (error.code === "GMAIL_MESSAGE_ALREADY_INGESTED") {
+      return "Ce message Gmail a déjà été archivé.";
+    }
+    if (error.code === "R2_BINDING_NOT_CONFIGURED") {
+      return "Le stockage R2 n’est pas encore relié au Worker.";
+    }
+    if (error.code === "INGESTION_NOT_FOUND") return "Ingestion introuvable.";
     return error.message;
   }
   return "Le service est momentanément inaccessible.";
+}
+
+async function loadOps() {
+  const token = elements.opsToken.value;
+  if (!token) {
+    showToast("Saisissez le jeton d’écriture pour charger la supervision.", "error");
+    elements.opsToken.focus();
+    return;
+  }
+  elements.loadOps.disabled = true;
+  elements.loadOps.textContent = "Actualisation…";
+  try {
+    renderOpsSummary(elements.opsSummary, await getOpsSummary(token));
+  } catch (error) {
+    renderOpsError(elements.opsSummary, errorMessage(error));
+    showToast(errorMessage(error), "error");
+  } finally {
+    elements.loadOps.disabled = false;
+    elements.loadOps.textContent = "Actualiser la supervision";
+  }
+}
+
+function renderIngestions() {
+  renderIngestionList(
+    elements.ingestionList,
+    state.ingestions,
+    state.selectedIngestionId,
+  );
+}
+
+async function selectIngestion(ingestionId) {
+  if (!ingestionId) return;
+  const token = elements.ingestionListToken.value;
+  if (!token) return;
+  state.selectedIngestionId = ingestionId;
+  renderIngestions();
+  const requestId = ++state.ingestionDetailRequest;
+  try {
+    const payload = await getIngestion(ingestionId, token);
+    if (requestId === state.ingestionDetailRequest) {
+      renderIngestionDetail(elements.ingestionDetail, payload);
+    }
+  } catch (error) {
+    if (requestId === state.ingestionDetailRequest) {
+      renderIngestionError(elements.ingestionDetail, errorMessage(error));
+    }
+  }
+}
+
+async function loadIngestionList({ selectLatest = false } = {}) {
+  const token = elements.ingestionListToken.value;
+  if (!token) {
+    showToast("Saisissez le jeton d’écriture pour consulter les ingestions.", "error");
+    elements.ingestionListToken.focus();
+    return;
+  }
+  const requestId = ++state.ingestionListRequest;
+  elements.loadIngestions.disabled = true;
+  elements.refreshIngestions.disabled = true;
+  try {
+    const result = await listIngestions(
+      { limit: PAGE_SIZE, offset: state.ingestionOffset },
+      token,
+    );
+    if (requestId !== state.ingestionListRequest) return;
+    state.ingestions = result.ingestions;
+    state.ingestionHasMore = result.pagination.has_more;
+    renderIngestions();
+    elements.previousIngestions.disabled = state.ingestionOffset === 0;
+    elements.nextIngestions.disabled = !state.ingestionHasMore;
+    elements.ingestionPageLabel.textContent = `Page ${Math.floor(state.ingestionOffset / PAGE_SIZE) + 1}`;
+    const candidate = selectLatest
+      ? state.ingestions[0]?.id
+      : state.ingestions.some((item) => item.id === state.selectedIngestionId)
+        ? state.selectedIngestionId
+        : state.ingestions[0]?.id;
+    if (candidate) {
+      await selectIngestion(candidate);
+    } else {
+      state.selectedIngestionId = null;
+      renderIngestionError(elements.ingestionDetail, "Aucune ingestion enregistrée.");
+    }
+  } catch (error) {
+    if (requestId === state.ingestionListRequest) {
+      renderIngestionError(elements.ingestionList, errorMessage(error));
+      showToast(errorMessage(error), "error");
+    }
+  } finally {
+    if (requestId === state.ingestionListRequest) {
+      elements.loadIngestions.disabled = false;
+      elements.refreshIngestions.disabled = false;
+    }
+  }
 }
 
 function renderImports() {
@@ -378,6 +517,62 @@ function closeImportDialog() {
   elements.importDialog.close();
 }
 
+function resetIngestionForm() {
+  elements.ingestionMessageId.value = "";
+  elements.ingestionCreatedBy.value = "";
+  elements.ingestionReceivedAt.value = "";
+  elements.ingestionToken.value = "";
+  elements.ingestionSource.value = "";
+  elements.ingestionConfirmation.checked = false;
+  elements.submitIngestion.disabled = false;
+  elements.submitIngestion.textContent = "Archiver dans R2";
+}
+
+function closeIngestionDialog() {
+  resetIngestionForm();
+  elements.ingestionDialog.close();
+}
+
+function openIngestionDialog() {
+  elements.ingestionMessageId.value = `FIXTURE-GMAIL-${crypto.randomUUID().toUpperCase()}`;
+  elements.ingestionCreatedBy.value = "FIXTURE_WEB_OPERATOR";
+  elements.ingestionReceivedAt.value = new Date().toISOString().slice(0, 19);
+  elements.ingestionDialog.showModal();
+}
+
+async function submitIngestion(event) {
+  event.preventDefault();
+  if (!elements.ingestionForm.reportValidity()) return;
+  const token = elements.ingestionToken.value;
+  const receivedAt = elements.ingestionReceivedAt.value;
+  elements.submitIngestion.disabled = true;
+  elements.submitIngestion.textContent = "Archivage…";
+  try {
+    const { result } = await archiveGmailSource(
+      {
+        provider_message_id: elements.ingestionMessageId.value.trim(),
+        created_by: elements.ingestionCreatedBy.value.trim(),
+        ...(receivedAt ? { received_at: `${receivedAt}Z` } : {}),
+        text_content: elements.ingestionSource.value,
+      },
+      token,
+    );
+    elements.ingestionListToken.value = token;
+    state.selectedIngestionId = result.ingestion_id;
+    state.ingestionOffset = 0;
+    closeIngestionDialog();
+    showToast(`Source ${result.ingestion_id} archivée dans R2.`, "success");
+    await loadIngestionList({ selectLatest: true });
+  } catch (error) {
+    showToast(errorMessage(error), "error");
+    elements.ingestionToken.value = "";
+    elements.ingestionToken.focus();
+  } finally {
+    elements.submitIngestion.disabled = false;
+    elements.submitIngestion.textContent = "Archiver dans R2";
+  }
+}
+
 function sqOptions() {
   const options = {
     service_year: Number(elements.sqYear.value),
@@ -597,6 +792,7 @@ elements.searchForm.addEventListener("submit", (event) => {
   state.offset = 0;
   loadFlightList({ autoSelect: true });
 });
+elements.loadOps.addEventListener("click", loadOps);
 
 elements.searchInput.addEventListener("input", () => {
   elements.clearSearch.classList.toggle(
@@ -689,6 +885,32 @@ elements.cancelSq.addEventListener("click", closeSqDialog);
 elements.previewSq.addEventListener("click", previewSq);
 elements.sqForm.addEventListener("submit", submitSq);
 elements.sqDialog.addEventListener("cancel", resetSqForm);
+elements.openIngestion.addEventListener("click", openIngestionDialog);
+elements.closeIngestion.addEventListener("click", closeIngestionDialog);
+elements.cancelIngestion.addEventListener("click", closeIngestionDialog);
+elements.ingestionForm.addEventListener("submit", submitIngestion);
+elements.ingestionDialog.addEventListener("cancel", resetIngestionForm);
+elements.loadIngestions.addEventListener("click", () => {
+  state.ingestionOffset = 0;
+  state.selectedIngestionId = null;
+  loadIngestionList({ selectLatest: true });
+});
+elements.refreshIngestions.addEventListener("click", () => loadIngestionList());
+elements.ingestionList.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-ingestion-id]");
+  if (item) selectIngestion(item.dataset.ingestionId);
+});
+elements.previousIngestions.addEventListener("click", () => {
+  state.ingestionOffset = Math.max(0, state.ingestionOffset - PAGE_SIZE);
+  state.selectedIngestionId = null;
+  loadIngestionList({ selectLatest: true });
+});
+elements.nextIngestions.addEventListener("click", () => {
+  if (!state.ingestionHasMore) return;
+  state.ingestionOffset += PAGE_SIZE;
+  state.selectedIngestionId = null;
+  loadIngestionList({ selectLatest: true });
+});
 for (const field of [
   elements.sqYear,
   elements.sqMovement,

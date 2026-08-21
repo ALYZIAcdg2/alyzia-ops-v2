@@ -5,6 +5,7 @@ import worker from "../../src/worker.js";
 import { createLot2FlightFixture } from "../fixtures/lot2FlightFixture.js";
 import { createSqEditingFixture } from "../fixtures/sqEditingFixture.js";
 import { createD1Mock } from "../repositories/d1Mock.js";
+import { createR2Mock } from "../repositories/r2Mock.js";
 import { createSQLiteD1 } from "../repositories/sqliteD1.js";
 
 const WRITE_TOKEN = "fixture-write-token-for-tests-only";
@@ -24,15 +25,100 @@ function jsonPost(path, body, token = WRITE_TOKEN) {
   });
 }
 
-test("GET /api/health returns the Lot 5 service contract", async () => {
+test("GET /api/health returns the Lot 8 service contract and a request id", async () => {
   const response = await worker.fetch(request("/api/health"), {});
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "ALYZIA OPS",
-    version: "0.6.0",
+    version: "0.9.0",
   });
+  assert.match(response.headers.get("X-Request-Id"), /^[0-9a-f-]{36}$/u);
+});
+
+test("operational summary is protected and reports D1, R2 and extensions", async () => {
+  const database = createSQLiteD1();
+  const r2 = createR2Mock();
+  const env = {
+    DB: database.db,
+    SOURCE_ARCHIVE: r2.bucket,
+    API_WRITE_TOKEN: WRITE_TOKEN,
+  };
+  try {
+    const denied = await worker.fetch(request("/api/ops/summary"), env);
+    assert.equal(denied.status, 401);
+    assert.match(denied.headers.get("X-Request-Id"), /^[0-9a-f-]{36}$/u);
+
+    const response = await worker.fetch(
+      request("/api/ops/summary", {
+        headers: { Authorization: `Bearer ${WRITE_TOKEN}` },
+      }),
+      env,
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.status, "OPERATIONAL");
+    assert.equal(body.bindings.d1, true);
+    assert.equal(body.bindings.r2, true);
+    assert.equal(body.bindings.queues, false);
+    assert.equal(body.summary.flights, 0);
+    assert.ok(body.extensions.some((extension) => extension.id === "gmail-relay"));
+  } finally {
+    database.close();
+  }
+});
+
+test("Gmail ingestion API is protected, archives content and exposes a safe detail", async () => {
+  const database = createSQLiteD1();
+  const r2 = createR2Mock();
+  const env = {
+    DB: database.db,
+    SOURCE_ARCHIVE: r2.bucket,
+    API_WRITE_TOKEN: WRITE_TOKEN,
+  };
+  const payload = {
+    provider_message_id: "FIXTURE-WORKER-GMAIL-001",
+    created_by: "FIXTURE_RELAY",
+    text_content: "FIXTURE GMAIL BODY",
+  };
+  try {
+    const unauthorized = await worker.fetch(
+      jsonPost("/api/ingestions/gmail", payload, "wrong-token"),
+      env,
+    );
+    assert.equal(unauthorized.status, 401);
+
+    const created = await worker.fetch(
+      jsonPost("/api/ingestions/gmail", payload),
+      env,
+    );
+    assert.equal(created.status, 201);
+    const result = (await created.json()).result;
+    assert.equal(result.status, "STORED");
+    assert.match(created.headers.get("Location"), /\/api\/ingestions\/GMAIL-/u);
+
+    const authorization = { Authorization: `Bearer ${WRITE_TOKEN}` };
+    const list = await worker.fetch(
+      request("/api/ingestions", { headers: authorization }),
+      env,
+    );
+    const listBody = await list.json();
+    assert.equal(listBody.ingestions.length, 1);
+    assert.equal(listBody.ingestions[0].provider_message_id, undefined);
+
+    const detail = await worker.fetch(
+      request(`/api/ingestions/${result.ingestion_id}`, {
+        headers: authorization,
+      }),
+      env,
+    );
+    const detailBody = await detail.json();
+    assert.equal(detailBody.ingestion.provider_message_id, undefined);
+    assert.equal(detailBody.objects.length, 1);
+  } finally {
+    database.close();
+  }
 });
 
 test("SQ parser API previews a source without writing to D1", async () => {

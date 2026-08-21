@@ -1,5 +1,7 @@
 import { handleFlightApi } from "./http/flightApi.js";
 import { handleImportApi } from "./http/importApi.js";
+import { handleGmailIngestionApi } from "./http/gmailIngestionApi.js";
+import { handleOpsApi } from "./http/opsApi.js";
 import { handleSqParserApi } from "./http/sqParserApi.js";
 import {
   jsonResponse,
@@ -8,7 +10,7 @@ import {
 import { ServiceError } from "./services/serviceErrors.js";
 
 const SERVICE_NAME = "ALYZIA OPS";
-const SERVICE_VERSION = "0.6.0";
+const SERVICE_VERSION = "0.9.0";
 
 const ASSET_SECURITY_HEADERS = Object.freeze({
   "Content-Security-Policy":
@@ -62,6 +64,16 @@ async function handleRequest(request, env) {
     return sqParserResponse;
   }
 
+  const ingestionResponse = await handleGmailIngestionApi(request, env, url);
+  if (ingestionResponse) {
+    return ingestionResponse;
+  }
+
+  const opsResponse = await handleOpsApi(request, env, url);
+  if (opsResponse) {
+    return opsResponse;
+  }
+
   if (url.pathname.startsWith("/api/")) {
     return jsonResponse({ error: "Not found" }, { status: 404 });
   }
@@ -77,27 +89,40 @@ async function handleRequest(request, env) {
 
 export default {
   async fetch(request, env) {
+    const requestId = crypto.randomUUID();
     try {
-      return await handleRequest(request, env);
+      const response = await handleRequest(request, env);
+      const headers = new Headers(response.headers);
+      headers.set("X-Request-Id", requestId);
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
     } catch (error) {
       if (error instanceof ServiceError) {
         return jsonResponse(
           {
             error: error.message,
             code: error.code,
+            request_id: requestId,
             ...(error.details === undefined ? {} : { details: error.details }),
           },
-          { status: error.status },
+          { status: error.status, headers: { "X-Request-Id": requestId } },
         );
       }
       console.error(
         JSON.stringify({
           message: "request failed",
+          request_id: requestId,
           error: error instanceof Error ? error.message : String(error),
           path: new URL(request.url).pathname,
         }),
       );
-      return jsonResponse({ error: "Internal server error" }, { status: 500 });
+      return jsonResponse(
+        { error: "Internal server error", request_id: requestId },
+        { status: 500, headers: { "X-Request-Id": requestId } },
+      );
     }
   },
 };
