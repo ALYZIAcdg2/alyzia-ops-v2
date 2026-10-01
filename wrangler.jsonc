@@ -15,7 +15,8 @@
 
   "vars": {
     "ALYZIA_AUTOPILOT_ENABLED": "false",
-    "ALYZIA_V2_MODE": "true"
+    "ALYZIA_V2_MODE": "true",
+    "ALYZIA_V2_TEST_CARRIERS": "TK"
   },
 
   "services": [
