@@ -8,9 +8,11 @@ const API_SOURCES=[
   "SKYLINK","SKYLINK_LIVE_RECOVERY","SKYLINK_J0_BACKFILL","SKYLINK_ENT_ALIAS",
   "AERODATABOX","AERODATABOX_REG","QUARK","AVIATIONDATA","FLIGHTERA","KAYAK","SERPAPI","FR24API","CDGBOARD","FLIGHTRADAR1","FLIGHTRADAR8","FR24DEP","OPENSKY_ADSB","ALYZIA_OPS_STATE"
 ];
+const SCHEDULE_SOURCES=["OAG_SCHEDULE","OAG_STATUS","AIRLABS","SKYLINK","AERODATABOX","FLIGHTERA","CDGBOARD","FLIGHTRADAR1","FLIGHTRADAR8"];
+const FINAL_FIELDS=new Set(["atd","ata"]);
 
-// Actual times and physical flight identity fields are immutable once confirmed.
-const FINAL_FIELDS=new Set(["std","sta","atd","ata","gate","reg","aircraft"]);
+function sourceMatches(source,list){const s=upper(source);return list.some(v=>s===v||s.startsWith(`${v}_`))}
+function scheduleConfirmed(x,field){return !isMissing(x[field])&&sourceMatches(x[field+"Source"],SCHEDULE_SOURCES)}
 
 export const FIELD_MATRIX={
   std:{providers:["OAG_SCHEDULE","AIRLABS","SKYLINK","AERODATABOX"],window:[-1440,10080]},
@@ -37,12 +39,12 @@ export function hasArrived(x={}){
   return /(LANDED|ARRIVED|COMPLETED)/i.test(clean(x.status||x.opsStatus||x.flight_status||x.providerStatusRaw));
 }
 export function flightComplete(x={}){
-  return !isMissing(x.std)&&!isMissing(x.sta)&&!isMissing(x.atd)&&!isMissing(x.ata)&&!isMissing(x.gate)&&!isMissing(x.reg)&&!isMissing(x.aircraft||x.aircraftType||x.type);
+  const aircraft=x.aircraft||x.aircraftType||x.aircraft_type||x.aircraftModel||x.type;
+  return scheduleConfirmed(x,"std")&&scheduleConfirmed(x,"sta")&&!isMissing(x.atd)&&!isMissing(x.ata)&&!isMissing(x.gate)&&!isMissing(x.reg)&&!isMissing(aircraft);
 }
 
-// Operational STOP rule for V2: once cancellation is final or ATA is confirmed,
-// the flight no longer consumes provider quota. Missing gate/reg/type after ATA are
-// historical gaps and must not keep the live collector running forever.
+// Once ATA is confirmed, live tracking stops. Historical gaps can be filled later
+// by a dedicated backfill without consuming the live-flight quota.
 export function stopAll(x={}){
   return isCancelled(x)||!isMissing(x.ata);
 }
@@ -70,19 +72,21 @@ export function buildNeeds(x={},d=99999){
   const departed=hasDeparted(x),arrived=hasArrived(x),arrD=arrivalDelta(x,d);
   const atdWindow=inWindow(d,FIELD_MATRIX.atd.window);
   const ataWindow=arrD==null?false:inWindow(arrD,FIELD_MATRIX.ata.window);
-  const aircraftValue=x.aircraft||x.aircraftType||x.aircraft_type||x.type;
+  const aircraftValue=x.aircraft||x.aircraftType||x.aircraft_type||x.aircraftModel||x.type;
   const statusValue=x.providerStatusRaw||x.status||x.opsStatus||x.flight_status;
   const needs={
-    std:isMissing(x.std),
-    sta:isMissing(x.sta),
+    // Imported STD/STA are theoretical anchors. They stay requested until an
+    // external schedule source has confirmed them.
+    std:inWindow(d,FIELD_MATRIX.std.window)&&!scheduleConfirmed(x,"std"),
+    sta:inWindow(d,FIELD_MATRIX.sta.window)&&!scheduleConfirmed(x,"sta"),
     etd:!departed&&inWindow(d,FIELD_MATRIX.etd.window)&&((isMissing(x.etd)&&isMissing(x.edt))||ageMs(x.etdUpdatedAt)>=ETD_REFRESH_MIN*60000),
     eta:departed&&!arrived&&isMissing(x.eta)&&inWindow(d,FIELD_MATRIX.eta.window),
     atd:isMissing(x.atd)&&(departed||atdWindow),
     ata:isMissing(x.ata)&&(arrived||ataWindow),
     ata_late:isMissing(x.ata)&&departed&&!arrived&&d<=-45&&d>=-1080,
-    gate:!departed&&isMissing(x.gate)&&inWindow(d,FIELD_MATRIX.gate.window),
-    reg:isMissing(x.reg)&&inWindow(d,FIELD_MATRIX.reg.window),
-    aircraft:isMissing(aircraftValue)&&inWindow(d,FIELD_MATRIX.aircraft.window),
+    gate:!departed&&inWindow(d,FIELD_MATRIX.gate.window)&&(isMissing(x.gate)||ageMs(x.gateUpdatedAt)>=15*60000),
+    reg:!departed&&inWindow(d,FIELD_MATRIX.reg.window)&&(isMissing(x.reg)||ageMs(x.regUpdatedAt)>=30*60000),
+    aircraft:!departed&&inWindow(d,FIELD_MATRIX.aircraft.window)&&(isMissing(aircraftValue)||ageMs(x.aircraftUpdatedAt||x.aircraftModelUpdatedAt)>=60*60000),
     status:!arrived&&inWindow(d,FIELD_MATRIX.status.window)&&(isMissing(statusValue)||ageMs(x.statusUpdatedAt||x.opsStatusUpdatedAt)>=15*60000)
   };
   needs.any=Object.values(needs).some(Boolean);
@@ -118,8 +122,6 @@ export function neededFields(provider,x={},d=99999){
 }
 
 // V2 flight-level cadence. d = minutes until STD (negative after STD).
-// J-1/H-6: 60 min; H-6/H-3: 30 min; H-3/H-1: 15 min;
-// H-1 until ATD: 5 min; after ATD until ATA: 15 min; after ATA: STOP.
 export function trackingCadenceMinutes(x={},d=99999){
   if(stopAll(x))return Infinity;
   if(hasDeparted(x))return 15;
@@ -141,14 +143,23 @@ export function cadenceMinutes(provider,x={},d=99999){
 }
 
 export function mayWriteField(x={},field,source=""){
-  const currentValue=field==="aircraft"?(x.aircraft||x.aircraftType||x.aircraft_type||x.type):x[field];
+  const aircraftValue=x.aircraft||x.aircraftType||x.aircraft_type||x.aircraftModel||x.type;
+  const currentValue=field==="aircraft"?aircraftValue:x[field];
   if(isMissing(currentValue))return true;
+  const nextIsApi=sourceMatches(source,API_SOURCES);
+  const currentSource=field==="aircraft"?(x.aircraftSource||x.aircraftModelSource):x[field+"Source"];
+
+  // Theory import may be replaced once by a confirmed external schedule.
+  if((field==="std"||field==="sta")&&!sourceMatches(currentSource,SCHEDULE_SOURCES)&&nextIsApi)return true;
   if(field==="atd"&&/_EST$/.test(upper(x.atdSource)))return true;
   if(FINAL_FIELDS.has(field))return false;
-  if(field==="etd"&&hasDeparted(x))return false;
+
+  const departed=hasDeparted(x);
+  if(field==="etd"&&departed)return false;
   if(field==="eta"&&hasArrived(x))return false;
-  const current=upper(x[field+"Source"]);
-  return API_SOURCES.some(s=>current===s||current.startsWith(`${s}_`))&&API_SOURCES.some(s=>upper(source)===s||upper(source).startsWith(`${s}_`));
+  if(["gate","reg","aircraft"].includes(field)&&departed)return false;
+
+  return sourceMatches(currentSource,API_SOURCES)&&nextIsApi;
 }
 
 export function priorityScore(x={},d=99999){
