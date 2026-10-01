@@ -1,6 +1,6 @@
 {
   "name": "alyzia-ops-v2",
-  "main": "./src/flight-list-ops-v3-wrapper.js",
+  "main": "./src/public-results-entry-wrapper.js",
   "compatibility_date": "2026-08-06",
 
   "assets": {
