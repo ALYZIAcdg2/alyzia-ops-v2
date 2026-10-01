@@ -1,5 +1,5 @@
 {
-  "name": "alyzia-ops",
+  "name": "alyzia-ops-v2",
   "main": "./src/ui-first-paint-wrapper.js",
   "compatibility_date": "2026-08-06",
 
@@ -14,7 +14,8 @@
   },
 
   "vars": {
-    "ALYZIA_AUTOPILOT_ENABLED": "false"
+    "ALYZIA_AUTOPILOT_ENABLED": "false",
+    "ALYZIA_V2_MODE": "true"
   },
 
   "services": [
@@ -28,18 +29,21 @@
     }
   ],
 
+  // V2 MUST NOT point to the V1 production database.
+  // Create alyzia-ops-v2-db in Cloudflare, then replace the placeholder UUID below.
   "d1_databases": [
     {
       "binding": "OPS_DB",
-      "database_name": "alyzia-ops-db",
-      "database_id": "2881327d-f2dd-4037-a395-f7095b32c69c"
+      "database_name": "alyzia-ops-v2-db",
+      "database_id": "REPLACE_WITH_ALYZIA_OPS_V2_DB_ID"
     }
   ],
 
+  // Separate V2 bucket: never reuse alyzia-ops-files from V1.
   "r2_buckets": [
     {
       "binding": "OPS_FILES",
-      "bucket_name": "alyzia-ops-files"
+      "bucket_name": "alyzia-ops-v2-files"
     }
   ]
 }
