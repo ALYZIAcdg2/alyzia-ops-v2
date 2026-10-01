@@ -1,0 +1,1 @@
+Le verrou V2 est structurel : aucun cron fournisseur n'est déclaré et le binding AeroDataBox a été retiré. `ALYZIA_LIVE_APIS_ENABLED` reste à `false`, ce qui bloque aussi le push fournisseur manuel. L'endpoint OpenSky restant est uniquement entrant et n'est appelé par aucun workflow/cron V2.

@@ -1,0 +1,5 @@
+- [x] ALYZIA_LIVE_APIS_ENABLED=false
+- [x] provider cron removed from wrangler
+- [x] AeroDataBox service binding removed
+- [x] admin provider push blocked by code
+- [x] V2 storage remains isolated on alyzia-ops-v2-db / alyzia-ops-v2-files
