@@ -5,102 +5,15 @@ const upper=v=>clean(v).toUpperCase();
 const json=(o,status=200)=>new Response(JSON.stringify(o),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}});
 const uniq=(a,max=32)=>[...new Set(a.filter(Boolean))].slice(0,max);
 
-function numberOnly(airline,flight){
-  const a=upper(airline),f=upper(flight);
-  return f.startsWith(a)?f.slice(a.length):f.replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
-}
-
-function normalize(row){
-  let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
-  const airline=upper(x.airline||row.airline);
-  const number=numberOnly(airline,x.flight||row.flight_number);
-  return {identity:row.identity,date:clean(x.date||row.flight_date),airline,number,designator:`${airline}${number}`,raw:x};
-}
-
-function htmlText(html){
-  return String(html||"")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ")
-    .replace(/<[^>]+>/g," ")
-    .replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&#39;/g,"'").replace(/&quot;/gi,'"')
-    .replace(/\s+/g," ").trim();
-}
-
-function extract(text,flight){
-  const t=String(text||"");
-  const times=uniq([...t.matchAll(/\b(?:[01]?\d|2[0-3])[:h][0-5]\d\b/g)].map(m=>m[0].replace("h",":")),40);
-  const registrations=uniq([...t.matchAll(/\b(?:F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|JA\d{3,4}[A-Z]|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z0-9]{3,5})\b/gi)].map(m=>upper(m[0])),16);
-  const aircraft=uniq([...t.matchAll(/\b(?:A20N|A21N|A319|A320|A321|A332|A333|A339|A343|A350|A359|A400M|A400|A380|B737|B738|B739|B748|B752|B753|B763|B764|B772|B773|B77W|B788|B789|C130|C30J|F900|F2TH|F3TH|GLF5|GLF6|32Q|77W|788|789|359|333|332|320|321)\b/gi)].map(m=>upper(m[0])),16);
-  const terminals=uniq([...t.matchAll(/(?:terminal|term\.?)[\s:#-]*([0-9A-Z]{1,4})/gi)].map(m=>upper(m[1])),8);
-  const gates=uniq([...t.matchAll(/(?:gate|porte)[\s:#-]*([A-Z]?\d{1,3}[A-Z]?)/gi)].map(m=>upper(m[1])),8);
-  const statuses=uniq([...t.matchAll(/\b(?:scheduled|on time|delayed|departed|arrived|landed|cancelled|canceled|airborne|en vol|retard[ée]?|arriv[ée]?|décoll[ée]?)\b/gi)].map(m=>upper(m[0])),12);
-  const marker=upper(flight.designator),idx=upper(t).indexOf(marker);
-  return {times,registrations,aircraft,terminals,gates,statuses,excerpt:idx>=0?t.slice(Math.max(0,idx-600),idx+2300):t.slice(0,2600)};
-}
-
-async function fetchHtmlSource(name,url,flight){
-  const checkedAt=new Date().toISOString();
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),10000);
-  try{
-    const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{"accept":"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-SingleFlightAudit/1.0; public-web-page)"}});
-    const ct=clean(r.headers.get("content-type")).toLowerCase();
-    const body=(ct.includes("text")||ct.includes("json")||ct.includes("javascript"))?await r.text():"";
-    const text=htmlText(body);
-    const candidates=extract(text,flight);
-    const mentions=upper(text).includes(upper(flight.designator))||upper(text).includes(`${flight.airline} ${flight.number}`);
-    const useful=candidates.times.length+candidates.registrations.length+candidates.aircraft.length+candidates.terminals.length+candidates.gates.length+candidates.statuses.length;
-    return {name,url,finalUrl:r.url,httpStatus:r.status,status:r.ok&&mentions&&useful>0?"OK":r.ok?"NO_USABLE_DATA":"HTTP_ERROR",mentionsFlight:mentions,candidates,checkedAt};
-  }catch(e){
-    return {name,url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",mentionsFlight:false,candidates:{},error:String(e?.message||e).slice(0,300),checkedAt};
-  }finally{clearTimeout(timer)}
-}
-
-async function ensure(env){
-  await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS public_flight_audits(audit_id TEXT PRIMARY KEY,flight_identity TEXT NOT NULL,flight_date TEXT NOT NULL,flight_designator TEXT NOT NULL,status TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();
-}
-
-async function findFlightRow(env,{identity,flight,date}){
-  if(identity){
-    return env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,data_json FROM flights WHERE identity=? LIMIT 1`).bind(identity).first();
-  }
-  const designator=upper(flight).replace(/\s+/g,"");
-  if(!designator||!date)return null;
-  const rows=(await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all()).results||[];
-  return rows.find(row=>{
-    const x=normalize(row);
-    return upper(x.designator)===designator;
-  })||null;
-}
-
-export async function runSingleFlightAudit(env,selector){
-  await ensure(env);
-  const row=await findFlightRow(env,typeof selector==="string"?{identity:selector}:selector||{});
-  if(!row)return {ok:false,error:"FLIGHT_NOT_FOUND"};
-  const flight=normalize(row);
-  const fs=`https://www.flightstats.com/v2/flight-tracker/${encodeURIComponent(flight.airline)}/${encodeURIComponent(flight.number)}?year=${flight.date.slice(0,4)}&month=${Number(flight.date.slice(5,7))}&date=${Number(flight.date.slice(8,10))}`;
-  const fa=`https://www.flightaware.com/live/flight/${encodeURIComponent(flight.designator)}`;
-  const [fr24,flightAware,flightStats]=await Promise.all([
-    fetchFr24Public(flight),
-    fetchHtmlSource("FLIGHTAWARE",fa,flight),
-    fetchHtmlSource("FLIGHTSTATS",fs,flight)
-  ]);
-  const sources=[fr24,flightAware,flightStats];
-  const usable=sources.filter(s=>s.status==="OK").length;
-  const status=usable===3?"OK":usable>0?"PARTIAL":"INCOMPLETE";
-  const auditId=`${flight.identity}-${Date.now().toString(36)}`;
-  const result={ok:true,auditId,identity:flight.identity,flight:flight.designator,date:flight.date,fr24OccurrenceId:fr24OccurrenceId(flight)||null,status,usableSources:usable,sources};
-  await env.OPS_DB.prepare(`INSERT INTO public_flight_audits(audit_id,flight_identity,flight_date,flight_designator,status,result_json) VALUES(?,?,?,?,?,?)`).bind(auditId,flight.identity,flight.date,flight.designator,status,JSON.stringify(result)).run();
-  return result;
-}
-
-export async function handleSingleFlightAudit(request,env){
-  const url=new URL(request.url);
-  if(url.pathname!=="/api/v2/audit-flight")return null;
-  if(request.method!=="POST")return json({ok:false,error:"METHOD"},405);
-  const identity=clean(url.searchParams.get("identity"));
-  const flight=upper(url.searchParams.get("flight"));
-  const date=clean(url.searchParams.get("date"));
-  if(!identity&&(!flight||!/^20\d{2}-\d{2}-\d{2}$/.test(date)))return json({ok:false,error:"IDENTITY_OR_FLIGHT_DATE_REQUIRED"},400);
-  return json(await runSingleFlightAudit(env,identity?{identity}:{flight,date}));
-}
+function numberOnly(airline,flight){const a=upper(airline),f=upper(flight);return f.startsWith(a)?f.slice(a.length):f.replace(/^[A-Z0-9]{2,3}(?=\d)/,"")}
+function normalize(row){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const airline=upper(x.airline||row.airline),number=numberOnly(airline,x.flight||row.flight_number);return {identity:row.identity,date:clean(x.date||row.flight_date),airline,number,designator:`${airline}${number}`,raw:x}}
+function htmlText(html){return String(html||"").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&#39;/g,"'").replace(/&quot;/gi,'"').replace(/\s+/g," ").trim()}
+function cleanRegs(values){return values.filter(v=>!/(?:ON-TIME|AUTO|FULL|GRAY|BLACK|GREEN|ICON|DATE|TIME|FIT|RES)$/i.test(v))}
+function extract(text,flight){const t=String(text||"");const marker=upper(flight.designator),idx=upper(t).indexOf(marker),scope=idx>=0?t.slice(Math.max(0,idx-500),idx+3200):t.slice(0,3200);const times=uniq([...scope.matchAll(/\b(?:[01]?\d|2[0-3])[:h][0-5]\d\b/g)].map(m=>m[0].replace("h",":")),20);const registrations=uniq(cleanRegs([...scope.matchAll(/\b(?:F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|JA\d{3,4}[A-Z]|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z]{3,5})\b/g)].map(m=>upper(m[0]))),8);const aircraft=uniq([...scope.matchAll(/\b(?:A20N|A21N|A319|A320|A321|A332|A333|A339|A343|A350|A359|A400M|A400|A380|B737|B738|B739|B748|B752|B753|B763|B764|B772|B773|B77W|B788|B789|C130|C30J|F900|F2TH|F3TH|GLF5|GLF6|32Q|77W|788|789|359|333|332|320|321)\b/g)].map(m=>upper(m[0])),8);const terminals=uniq([...scope.matchAll(/\bterminal\s+([0-9][A-Z]?|[A-Z][0-9])\b/gi)].map(m=>upper(m[1])),4);const gates=uniq([...scope.matchAll(/\bgate\s+([A-Z]?\d{1,3}[A-Z]?)\b/gi)].map(m=>upper(m[1])),4);const statuses=uniq([...scope.matchAll(/\b(?:scheduled|on time|delayed|departed|arrived|landed|cancelled|canceled|airborne)\b/gi)].map(m=>upper(m[0])),8);return {times,registrations,aircraft,terminals,gates,statuses,excerpt:scope}}
+function sourceUnavailable(name,text){const u=upper(text);if(name==="FLIGHTSTATS"&&/(FLIGHT STATUS NOT AVAILABLE|COULD NOT BE LOCATED IN OUR SYSTEM)/.test(u))return "NOT_TRACKED";if(name==="FLIGHTAWARE"&&/(NO HISTORY DATA|FLIGHT NOT FOUND|UNKNOWN FLIGHT)/.test(u))return "NOT_TRACKED";return ""}
+function hasOperationalEvidence(c){return (c.times?.length||0)+(c.registrations?.length||0)+(c.aircraft?.length||0)+(c.gates?.length||0)>0}
+async function fetchHtmlSource(name,url,flight){const checkedAt=new Date().toISOString();const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),10000);try{const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{"accept":"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-SingleFlightAudit/1.1; public-web-page)"}});const ct=clean(r.headers.get("content-type")).toLowerCase();const body=(ct.includes("text")||ct.includes("json")||ct.includes("javascript"))?await r.text():"";const text=htmlText(body);const unavailable=sourceUnavailable(name,text);const candidates=extract(text,flight);const mentions=upper(text).includes(upper(flight.designator))||upper(text).includes(`${flight.airline} ${flight.number}`);const status=!r.ok?"HTTP_ERROR":unavailable||(!mentions||!hasOperationalEvidence(candidates)?"NO_USABLE_DATA":"OK");return {name,url,finalUrl:r.url,httpStatus:r.status,status,mentionsFlight:mentions,candidates,checkedAt}}catch(e){return {name,url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",mentionsFlight:false,candidates:{},error:String(e?.message||e).slice(0,300),checkedAt}}finally{clearTimeout(timer)}}
+async function ensure(env){await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS public_flight_audits(audit_id TEXT PRIMARY KEY,flight_identity TEXT NOT NULL,flight_date TEXT NOT NULL,flight_designator TEXT NOT NULL,status TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run()}
+async function findFlightRow(env,{identity,flight,date}){if(identity)return env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,data_json FROM flights WHERE identity=? LIMIT 1`).bind(identity).first();const designator=upper(flight).replace(/\s+/g,"");if(!designator||!date)return null;const rows=(await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all()).results||[];return rows.find(row=>upper(normalize(row).designator)===designator)||null}
+export async function runSingleFlightAudit(env,selector){await ensure(env);const row=await findFlightRow(env,typeof selector==="string"?{identity:selector}:selector||{});if(!row)return {ok:false,error:"FLIGHT_NOT_FOUND"};const flight=normalize(row);const fs=`https://www.flightstats.com/v2/flight-tracker/${encodeURIComponent(flight.airline)}/${encodeURIComponent(flight.number)}?year=${flight.date.slice(0,4)}&month=${Number(flight.date.slice(5,7))}&date=${Number(flight.date.slice(8,10))}`;const fa=`https://www.flightaware.com/live/flight/${encodeURIComponent(flight.designator)}`;const [fr24,flightAware,flightStats]=await Promise.all([fetchFr24Public(flight),fetchHtmlSource("FLIGHTAWARE",fa,flight),fetchHtmlSource("FLIGHTSTATS",fs,flight)]);const sources=[fr24,flightAware,flightStats];const usable=sources.filter(s=>s.status==="OK").length;const status=usable===3?"OK":usable>0?"PARTIAL":"INCOMPLETE";const auditId=`${flight.identity}-${Date.now().toString(36)}`;const result={ok:true,auditId,identity:flight.identity,flight:flight.designator,date:flight.date,fr24OccurrenceId:fr24OccurrenceId(flight)||null,status,usableSources:usable,sources};await env.OPS_DB.prepare(`INSERT INTO public_flight_audits(audit_id,flight_identity,flight_date,flight_designator,status,result_json) VALUES(?,?,?,?,?,?)`).bind(auditId,flight.identity,flight.date,flight.designator,status,JSON.stringify(result)).run();return result}
+export async function handleSingleFlightAudit(request,env){const url=new URL(request.url);if(url.pathname!=="/api/v2/audit-flight")return null;if(request.method!=="POST")return json({ok:false,error:"METHOD"},405);const identity=clean(url.searchParams.get("identity")),flight=upper(url.searchParams.get("flight")),date=clean(url.searchParams.get("date"));if(!identity&&(!flight||!/^20\d{2}-\d{2}-\d{2}$/.test(date)))return json({ok:false,error:"IDENTITY_OR_FLIGHT_DATE_REQUIRED"},400);return json(await runSingleFlightAudit(env,identity?{identity}:{flight,date}))}
