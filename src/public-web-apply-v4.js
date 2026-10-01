@@ -3,6 +3,7 @@ import {noteActualAircraft} from "./aircraft-change.js";
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const APPLY_FIELDS=["etd","atd","takeoff","eta","landing","ata","terminal","gate","reg"];
+const STA_TRUSTED=new Set(["FLIGHTAWARE","FLIGHTSTATS","FR24","PLANEFINDER","SKYSCANNER"]);
 
 function manualProtected(x,field){
   const src=upper(x?.[field+"Source"]);
@@ -19,6 +20,7 @@ function pushLog(x,field,from,to,source,at){
 function hh(v){const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?String(m[1]).padStart(2,"0")+":"+m[2]:""}
 function minutes(v){const m=hh(v).match(/^(\d{2}):(\d{2})$/);return m?Number(m[1])*60+Number(m[2]):null}
 function delayMinutes(std,etd){const a=minutes(std),b=minutes(etd);if(a==null||b==null)return null;let d=b-a;if(d<-720)d+=1440;if(d>720)d-=1440;return d}
+function circularDiff(a,b){const x=minutes(a),y=minutes(b);if(x==null||y==null)return 999;const d=Math.abs(x-y);return Math.min(d,1440-d)}
 function recoverPlanningSta(x){
   if(clean(x.sta))return false;
   for(const v of [x.scheduledArrival,x.scheduled_arrival,x.schedule?.sta,x.planning?.sta,x.timings?.sta]){
@@ -29,19 +31,31 @@ function recoverPlanningSta(x){
   if(hit){x.sta=clean(hit.from);x.staSource="PLANNING_RECOVERED";return true}
   return false;
 }
-function setRegistrationAliases(x,value){
-  x.reg=value;
-  x.registration=value;
-  x.aircraftRegistration=value;
+function extractStaFromExcerpt(excerpt){
+  const text=String(excerpt||"");
+  const pats=[
+    /(?:scheduled arrival|arrival scheduled|scheduled gate arrival|STA)[^0-9]{0,40}(\d{1,2}[:h]\d{2}(?:\s*(?:AM|PM))?)/i,
+    /(?:arrival)[^\n.]{0,100}?(?:scheduled)[^0-9]{0,30}(\d{1,2}[:h]\d{2}(?:\s*(?:AM|PM))?)/i
+  ];
+  for(const p of pats){const m=text.match(p);if(!m)continue;let s=upper(m[1]).replace("H",":");const a=s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/);if(!a)continue;let h=Number(a[1]),min=Number(a[2]);if(min>59||h>23)continue;if(a[3]){if(h>12||h===0)continue;if(a[3]==="AM"&&h===12)h=0;if(a[3]==="PM"&&h!==12)h+=12}return String(h).padStart(2,"0")+":"+String(min).padStart(2,"0")}
+  return "";
 }
+async function recoverStaFromRaw(env,runId,identity){
+  const {results=[]}=await env.OPS_DB.prepare(`SELECT source,status,mentions_flight,candidates_json FROM public_web_test_results WHERE run_id=? AND flight_identity=?`).bind(runId,identity).all();
+  const values=[];
+  for(const r of results){if(r.status!=="OK"||!Number(r.mentions_flight)||!STA_TRUSTED.has(r.source))continue;let c={};try{c=JSON.parse(r.candidates_json||"{}")}catch{}const v=extractStaFromExcerpt(c.excerpt);if(v)values.push({source:r.source,value:v})}
+  const fs=values.find(v=>v.source==="FLIGHTSTATS");if(fs)return fs;
+  for(let i=0;i<values.length;i++)for(let j=i+1;j<values.length;j++)if(circularDiff(values[i].value,values[j].value)<=5)return values[i];
+  return null;
+}
+function setRegistrationAliases(x,value){x.reg=value;x.registration=value;x.aircraftRegistration=value}
 function deriveStatus(x,confirmedStatus){
   if(/ANNUL|CANCEL/.test(upper(confirmedStatus))||/ANNUL|CANCEL/.test(upper(x.status)))return "ANNULÉ";
   if(clean(x.ata))return "ARRIVÉE";
   if(clean(x.landing))return "ATTERI";
   if(clean(x.takeoff))return "EN VOL";
   if(clean(x.atd))return "DECOLLE";
-  const d=delayMinutes(x.std,x.etd);
-  if(d!=null&&d>=5)return "RETARDÉ";
+  const d=delayMinutes(x.std,x.etd);if(d!=null&&d>=5)return "RETARDÉ";
   return "PRÉVU";
 }
 
@@ -50,37 +64,29 @@ export async function applyRunV4(env,runId){
   if(!run||run.status!=="DONE")return {ok:false,error:"RUN_NOT_DONE"};
   const {results:ids=[]}=await env.OPS_DB.prepare(`SELECT DISTINCT flight_identity FROM public_web_consolidated_v2 WHERE run_id=?`).bind(runId).all();
   const now=new Date().toISOString();
-  let flightsChanged=0,fieldsChanged=0,preserved=0,recoveredSta=0,aircraftActualChanged=0,manualSkipped=0;
+  let flightsChanged=0,fieldsChanged=0,preserved=0,recoveredSta=0,recoveredStaFromSources=0,aircraftActualChanged=0,manualSkipped=0;
   for(const it of ids){
-    const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=?`).bind(it.flight_identity).first();
-    if(!row)continue;
+    const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=?`).bind(it.flight_identity).first();if(!row)continue;
     let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
     const {results:vals=[]}=await env.OPS_DB.prepare(`SELECT field,chosen_value,state,source FROM public_web_consolidated_v2 WHERE run_id=? AND flight_identity=?`).bind(runId,it.flight_identity).all();
-    const by=Object.fromEntries(vals.map(v=>[v.field,v]));
-    let changed=false;
+    const by=Object.fromEntries(vals.map(v=>[v.field,v]));let changed=false;
 
-    if(!manualProtected(x,"sta")&&recoverPlanningSta(x)){recoveredSta++;changed=true}
+    if(!manualProtected(x,"sta")&&!clean(x.sta)){
+      if(recoverPlanningSta(x)){recoveredSta++;changed=true}
+      else{const sta=await recoverStaFromRaw(env,runId,it.flight_identity);if(sta){x.sta=sta.value;x.staSource=`PUBLIC_WEB_V4:SCHEDULED:${sta.source}`;x.staUpdatedAt=now;pushLog(x,"sta","",sta.value,x.staSource,now);recoveredStaFromSources++;fieldsChanged++;changed=true}}
+    }
 
     for(const field of APPLY_FIELDS){
       if(manualProtected(x,field)){manualSkipped++;continue}
       const r=by[field];
-      if(!r||r.state!=="CONFIRMED"||!clean(r.chosen_value)){
-        if(clean(x[field]))preserved++;
-        continue;
-      }
+      if(!r||r.state!=="CONFIRMED"||!clean(r.chosen_value)){if(clean(x[field]))preserved++;continue}
       const next=clean(r.chosen_value),before=clean(x[field]);
       if(field==="reg"){
-        const old=clean(x.reg||x.registration||x.aircraftRegistration);
-        if(old===next)continue;
-        pushLog(x,"reg",old,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);
-        setRegistrationAliases(x,next);
-        x.regSource=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x.regUpdatedAt=now;
-        fieldsChanged++;changed=true;continue;
+        const old=clean(x.reg||x.registration||x.aircraftRegistration);if(old===next)continue;
+        pushLog(x,"reg",old,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);setRegistrationAliases(x,next);x.regSource=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x.regUpdatedAt=now;fieldsChanged++;changed=true;continue;
       }
       if(before===next)continue;
-      pushLog(x,field,before,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);
-      x[field]=next;x[field+"Source"]=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x[field+"UpdatedAt"]=now;
-      fieldsChanged++;changed=true;
+      pushLog(x,field,before,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);x[field]=next;x[field+"Source"]=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x[field+"UpdatedAt"]=now;fieldsChanged++;changed=true;
     }
 
     const aircraft=by.aircraft;
@@ -95,11 +101,7 @@ export async function applyRunV4(env,runId){
       if(clean(x.status)!==nextStatus){pushLog(x,"status",x.status,nextStatus,"PUBLIC_WEB_V4:DERIVED",now);x.status=nextStatus;x.statusSource="PUBLIC_WEB_V4:DERIVED";x.statusUpdatedAt=now;fieldsChanged++;changed=true}
     }
 
-    if(changed){
-      x.publicWebV4AppliedAt=now;x.publicWebV4RunId=runId;
-      await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),it.flight_identity).run();
-      flightsChanged++;
-    }
+    if(changed){x.publicWebV4AppliedAt=now;x.publicWebV4RunId=runId;await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),it.flight_identity).run();flightsChanged++}
   }
-  return {ok:true,runId,flightsChanged,fieldsChanged,preserved,recoveredSta,aircraftActualChanged,manualSkipped,mode:"SAFE_MERGE_V4"};
+  return {ok:true,runId,flightsChanged,fieldsChanged,preserved,recoveredSta,recoveredStaFromSources,aircraftActualChanged,manualSkipped,mode:"SAFE_MERGE_V4"};
 }
