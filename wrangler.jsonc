@@ -9,10 +9,6 @@
     "run_worker_first": true
   },
 
-  "triggers": {
-    "crons": ["*/5 * * * *"]
-  },
-
   "vars": {
     "ALYZIA_AUTOPILOT_ENABLED": "false",
     "ALYZIA_LIVE_APIS_ENABLED": "false",
@@ -24,10 +20,6 @@
     {
       "binding": "SARIA",
       "service": "saria-seatmap"
-    },
-    {
-      "binding": "AERODATABOX",
-      "service": "alyzia-aerodatabox"
     }
   ],
 
