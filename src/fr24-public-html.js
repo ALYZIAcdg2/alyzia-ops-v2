@@ -35,24 +35,33 @@ function deescape(raw){
     .replace(/\\n/g," ").replace(/\\t/g," ");
 }
 
+function occurrenceWindow(source,flight,id){
+  const s=String(source||"");
+  const keys=[id,flight?.designator,`${flight?.airline}${flight?.number}`].filter(Boolean).map(upper);
+  let idx=-1;
+  for(const key of keys){idx=upper(s).indexOf(key);if(idx>=0)break}
+  if(idx<0)return "";
+  return s.slice(Math.max(0,idx-12000),Math.min(s.length,idx+26000));
+}
+
 function extract(raw,flight,id){
   const source=deescape(raw);
-  const text=textOnly(source);
-  const combined=`${text} ${source}`;
+  const scoped=occurrenceWindow(source,flight,id);
+  const text=textOnly(scoped);
+  const combined=`${text} ${scoped}`;
   const times=uniq([...combined.matchAll(/\b(?:[01]?\d|2[0-3])[:h][0-5]\d\b/g)].map(m=>m[0].replace("h",":")),40);
-  const registrations=uniq([...combined.matchAll(/\b(?:F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|JA\d{3,4}[A-Z]|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z0-9]{3,5})\b/gi)].map(m=>upper(m[0])),16);
-  const aircraft=uniq([...combined.matchAll(/\b(?:A20N|A21N|A319|A320|A321|A332|A333|A339|A343|A350|A359|A400M|A400|A380|B737|B738|B739|B748|B752|B753|B763|B764|B772|B773|B77W|B788|B789|C130|C30J|F900|F2TH|F3TH|GLF5|GLF6|32Q|77W|788|789|359|333|332|320|321)\b/gi)].map(m=>upper(m[0])),16);
-  const terminals=uniq([...combined.matchAll(/(?:terminal|term\.?)[\s:#-]*([0-9A-Z]{1,4})/gi)].map(m=>upper(m[1])),8);
-  const gates=uniq([...combined.matchAll(/(?:gate|porte)[\s:#-]*([A-Z]?\d{1,3}[A-Z]?)/gi)].map(m=>upper(m[1])),8);
-  const statuses=uniq([...combined.matchAll(/\b(?:scheduled|on time|delayed|departed|arrived|landed|cancelled|canceled|airborne|en vol|retard[ée]?|arriv[ée]?|décoll[ée]?)\b/gi)].map(m=>upper(m[0])),12);
-  const marker=upper(flight.designator);
-  let idx=upper(text).indexOf(marker);
-  if(idx<0&&id)idx=upper(source).indexOf(upper(id));
-  const excerpt=idx>=0?text.slice(Math.max(0,idx-700),idx+2600):text.slice(0,2800);
+  const registrations=uniq([
+    ...combined.matchAll(/\b(?:F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|JA\d{3,4}[A-Z]|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z]{3,5})\b/g)
+  ].map(m=>upper(m[0])).filter(v=>!/(?:AUTO|FULL|GRAY|BLACK|GREEN|ICON|DATE|TIME|FIT|RES)$/.test(v)),12);
+  const aircraft=uniq([...combined.matchAll(/\b(?:A20N|A21N|A319|A320|A321|A332|A333|A339|A343|A350|A359|A400M|A400|A380|B737|B738|B739|B748|B752|B753|B763|B764|B772|B773|B77W|B788|B789|C130|C30J|F900|F2TH|F3TH|GLF5|GLF6|32Q|77W|788|789|359|333|332|320|321)\b/g)].map(m=>upper(m[0])),12);
+  const terminals=uniq([...combined.matchAll(/(?:\"terminal\"\s*:\s*\"?|\bterminal\s+)([0-9][A-Z]?|[A-Z][0-9])\b/gi)].map(m=>upper(m[1])),8);
+  const gates=uniq([...combined.matchAll(/(?:\"gate\"\s*:\s*\"?|\bgate\s+)([A-Z]?\d{1,3}[A-Z]?)\b/gi)].map(m=>upper(m[1])),8);
+  const statuses=uniq([...combined.matchAll(/\b(?:scheduled|on time|delayed|departed|arrived|landed|cancelled|canceled|airborne)\b/gi)].map(m=>upper(m[0])),10);
   const occurrenceMatched=Boolean(id&&upper(source).includes(upper(id)));
-  const flightMatched=upper(combined).includes(marker)||upper(combined).includes(`${upper(flight.airline)} ${upper(flight.number)}`);
-  const useful=times.length+registrations.length+aircraft.length+terminals.length+gates.length+statuses.length;
-  return {times,registrations,aircraft,terminals,gates,statuses,excerpt,fr24OccurrenceId:id||"",occurrenceMatched,flightMatched,useful};
+  const marker=upper(flight.designator);
+  const flightMatched=upper(scoped).includes(marker)||upper(scoped).includes(`${upper(flight.airline)} ${upper(flight.number)}`);
+  const useful=times.length+registrations.length+aircraft.length+terminals.length+gates.length;
+  return {times,registrations,aircraft,terminals,gates,statuses,excerpt:text.slice(0,3200),fr24OccurrenceId:id||"",occurrenceMatched,flightMatched,useful};
 }
 
 export async function fetchFr24Public(flight){
@@ -66,7 +75,7 @@ export async function fetchFr24Public(flight){
       const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
         "accept":"text/html,application/xhtml+xml",
         "accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
-        "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.0; public-web-page)"
+        "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.1; public-web-page)"
       }});
       const ct=clean(r.headers.get("content-type")).toLowerCase();
       const body=(ct.includes("text")||ct.includes("json")||ct.includes("javascript"))?await r.text():"";
