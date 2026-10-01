@@ -52,6 +52,41 @@ async function adminPushNow(request,env,ctx){
   return jsonResp({ok:true,durationMs:Date.now()-t0,calls,steps:results,partial:timedOut});
 }
 
+async function v2Status(env){
+  const today=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris"}).format(new Date());
+  const out={
+    ok:true,
+    service:"ALYZIA OPS V2",
+    today,
+    liveApisEnabled:liveApisEnabled(env),
+    liveApisLocked:!liveApisEnabled(env),
+    testCarriers:String(env?.ALYZIA_V2_TEST_CARRIERS||""),
+    autopilotEnabled:String(env?.ALYZIA_AUTOPILOT_ENABLED||"").toLowerCase()==="true",
+    flights:{today:0,tk:0},
+    queue:{total:0,tk:0,providers:{}},
+    apiUsageToday:{},
+    schemaVersion:""
+  };
+  try{
+    const row=await env.OPS_DB.prepare(`SELECT COUNT(*) AS total,SUM(CASE WHEN airline='TK' THEN 1 ELSE 0 END) AS tk FROM flights WHERE flight_date=?`).bind(today).first();
+    out.flights.today=Number(row?.total||0);
+    out.flights.tk=Number(row?.tk||0);
+  }catch(e){out.flights.error=String(e?.message||e)}
+  try{
+    const {results=[]}=await env.OPS_DB.prepare(`SELECT provider,COUNT(*) AS n,SUM(CASE WHEN flight_identity LIKE '%|TK|%' THEN 1 ELSE 0 END) AS tk FROM provider_enrichment_queue WHERE flight_date=? GROUP BY provider ORDER BY provider`).bind(today).all();
+    for(const r of results){out.queue.providers[String(r.provider||"")]=Number(r.n||0);out.queue.total+=Number(r.n||0);out.queue.tk+=Number(r.tk||0)}
+  }catch(e){out.queue.error=String(e?.message||e)}
+  try{
+    const {results=[]}=await env.OPS_DB.prepare(`SELECT provider,calls FROM api_provider_usage WHERE period=? ORDER BY provider`).bind(today).all();
+    for(const r of results)out.apiUsageToday[String(r.provider||"")]=Number(r.calls||0);
+  }catch(e){out.apiUsageError=String(e?.message||e)}
+  try{
+    const row=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='schema_version' LIMIT 1`).first();
+    out.schemaVersion=String(row?.v||"");
+  }catch(e){out.schemaError=String(e?.message||e)}
+  return jsonResp(out);
+}
+
 export default {
   async fetch(request,env,ctx){
     const denied=guardApi(request,env);
@@ -73,9 +108,11 @@ export default {
         }catch(e){bakeFallback="page-erreur:"+String(e?.message||e).slice(0,60)+";"}
       }
     }
-    if(new URL(request.url).pathname==="/api/opensky/ingest")return handleOpenSkyIngest(request,env);
-    if(new URL(request.url).pathname==="/api/weather")return handleWeather(request,ctx,env);
-    if(new URL(request.url).pathname==="/api/admin/push-now")return adminPushNow(request,env,ctx);
+    const pathname=new URL(request.url).pathname;
+    if(pathname==="/api/v2/status")return v2Status(env);
+    if(pathname==="/api/opensky/ingest")return handleOpenSkyIngest(request,env);
+    if(pathname==="/api/weather")return handleWeather(request,ctx,env);
+    if(pathname==="/api/admin/push-now")return adminPushNow(request,env,ctx);
     const response=await app.fetch(request,env,ctx);
     const type=String(response.headers.get('content-type')||'').toLowerCase();
     if(!type.includes('text/html'))return response;
