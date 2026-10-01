@@ -1,0 +1,1 @@
+Current policy: V2 does not execute flight-provider enrichment. V1 remains the active live-provider runtime. Any future V2 activation must be explicit and reviewed before restoring cron/provider bindings.
