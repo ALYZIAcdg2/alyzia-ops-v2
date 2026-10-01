@@ -21,9 +21,12 @@ function patch(html){
 }
 
 const jsonResp=(o,status=200)=>new Response(JSON.stringify(o),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}});
+const liveApisEnabled=env=>String(env?.ALYZIA_LIVE_APIS_ENABLED||"").trim().toLowerCase()==="true";
+
 // Bouton PUSH de l'ADMIN : lance tout de suite le même enchaînement que le cron (file d'attente + fournisseurs),
 // sans attendre le prochain passage et en ignorant les cadences (jamais les plafonds jour / mois). 1 push / 60 s.
 async function adminPushNow(request,env,ctx){
+  if(!liveApisEnabled(env))return jsonResp({ok:false,error:"LIVE_APIS_DISABLED"},423);
   if(request.method!=="POST")return jsonResp({ok:false,error:"METHOD"},405);
   const day=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris"}).format(new Date());
   try{
@@ -84,6 +87,7 @@ export default {
     return new Response(patch(html),{status:response.status,statusText:response.statusText,headers});
   },
   scheduled(controller,env,ctx){
+    if(!liveApisEnabled(env))return;
     if(typeof providerPolicyScheduler.scheduled==='function')return providerPolicyScheduler.scheduled(controller,env,ctx);
     if(typeof app.scheduled==='function')return app.scheduled(controller,env,ctx);
   }
