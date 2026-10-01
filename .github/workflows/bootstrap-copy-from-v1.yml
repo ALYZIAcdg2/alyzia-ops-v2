@@ -1,0 +1,35 @@
+name: Bootstrap V2 from V1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-copy-from-v1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone V1 source
+        run: git clone --depth 1 https://github.com/ALYZIAcdg2/alyzia-ops.git /tmp/alyzia-ops-v1
+
+      - name: Replace target contents with V1
+        run: |
+          rsync -a --delete --exclude='.git' /tmp/alyzia-ops-v1/ ./
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Initialize alyzia-ops-v2 from alyzia-ops"
+          git push origin HEAD:main
