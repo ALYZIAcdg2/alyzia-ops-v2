@@ -1,0 +1,111 @@
+import app from "./economy-class-specificity-wrapper.js";
+
+const UI=String.raw`<style id="alyzia-home-list-final-fixes-css">
+#app .alyzia-final-time-hidden{display:none!important}
+#app .home-flight-search{position:relative!important}
+#app .alyzia-past-chip{display:inline-flex;align-items:center;margin:6px 0 2px;padding:6px 12px;border:1px solid #cfdbe8;border-radius:999px;background:#f3f7fb;color:#4a6078;font:900 11px/1.2 inherit;font-family:inherit;letter-spacing:.02em;cursor:pointer}
+#app .alyzia-past-chip.on{background:#e8f1ff;border-color:#9dc2f5;color:#0b57c4}
+#app .home-flight-search input{padding-right:56px!important;box-sizing:border-box!important}
+#app .alyzia-home-clear{position:absolute!important;right:auto!important;top:auto!important;transform:none!important;width:40px!important;height:40px!important;margin:0!important;border:0!important;border-radius:50%!important;background:#eef4fa!important;color:#526b88!important;font-size:22px!important;font-weight:800!important;display:grid!important;place-items:center!important;cursor:pointer!important;z-index:20!important}
+#app .alyzia-time-filter-wrap{position:relative;display:inline-flex!important;align-items:center;margin-left:8px;vertical-align:middle}
+#app .alyzia-time-filter-btn{height:46px;min-width:62px;padding:0 13px;border:2px solid #d8e3ee;border-radius:999px;background:#fff;color:#28425f;font:900 12px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+#app .alyzia-time-filter-btn.active{border-color:#0b70d1;background:#eef6ff;color:#0868c2}
+#app .alyzia-time-filter-menu{position:absolute;left:0;top:52px;z-index:200;display:none;gap:6px;padding:8px;background:#fff;border:1px solid #d9e4ef;border-radius:14px;box-shadow:0 10px 28px rgba(22,48,86,.15);min-width:154px}
+#app .alyzia-time-filter-menu.open{display:grid!important}
+#app .alyzia-time-choice{height:38px;border:1px solid #d8e3ee;border-radius:10px;background:#fff;color:#28425f;font:900 12px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer}
+#app .alyzia-time-choice.active{background:#0b70d1;color:#fff;border-color:#0b70d1}
+@media(max-width:900px){#app .alyzia-home-clear{width:38px!important;height:38px!important}#app .alyzia-time-filter-wrap{margin-left:6px}#app .alyzia-time-filter-btn{height:44px;min-width:58px}}
+@media(max-width:620px){#app .home-flight-search input{padding-right:52px!important}#app .alyzia-home-clear{width:36px!important;height:36px!important;font-size:20px!important}}
+</style><script id="alyzia-home-list-final-fixes-js">(()=>{'use strict';
+if(window.__alyziaHomeListFinalFixesV5)return;window.__alyziaHomeListFinalFixesV5=true;
+const norm=v=>String(v||'').toUpperCase().trim();
+const RANGES={A:{label:'00–06',start:0,end:360},B:{label:'06–12',start:360,end:720},C:{label:'12–18',start:720,end:1080},D:{label:'18–24',start:1080,end:1440}};
+let activeRange='';
+function flights(){try{return Array.isArray(FLIGHTS)?FLIGHTS:[]}catch{return Array.isArray(window.FLIGHTS)?window.FLIGHTS:[]}}
+function airline(x){return norm(x?.airline||String(x?.flight||'').match(/^[A-Z0-9]+?(?=\d)/)?.[0]||'')}
+function catalog(){try{return typeof SARIA_FALLBACK_CATALOG!=='undefined'&&Array.isArray(SARIA_FALLBACK_CATALOG)?SARIA_FALLBACK_CATALOG:[]}catch{return []}}
+function cfg(x){return x?.config||x?.cabinConfig||x?.capacity||x?.cabin_configuration||null}
+function explicitSeatmapClasses(x){const candidates=[x?.seatmapConfig,x?.seatMapConfig,x?.seatmap_config,x?.seatmap?.config,x?.seatmap?.classes,x?.aircraftConfig,x?.cabin_configuration];for(const c of candidates){if(!c)continue;if(Array.isArray(c)){const arr=c.map(v=>norm(Array.isArray(v)?v[0]:(v?.class||v?.code||v))).filter(Boolean);if(arr.length)return arr}if(typeof c==='object'){const arr=Object.keys(c).filter(k=>Number(c[k])>0||c[k]===0).map(norm);if(arr.length)return arr}}return []}
+function pairTarget(x,a,b){const explicit=explicitSeatmapClasses(x);if(explicit.length){const ah=explicit.includes(a),bh=explicit.includes(b);if(ah&&!bh)return a;if(bh&&!ah)return b}const c=cfg(x);if(c&&typeof c==='object'&&!Array.isArray(c)){const av=Number(c[a]||0),bv=Number(c[b]||0);if(av>0&&bv<=0)return a;if(bv>0&&av<=0)return b}const al=airline(x),ac=norm(x?.aircraft).replace(/\s+/g,'');if(!al||!ac)return'';const rows=catalog().filter(e=>norm(e?.cie)===al&&norm(e?.ac).replace(/\s+/g,'')===ac).sort((p,q)=>Number(q?.freq||0)-Number(p?.freq||0));const classes=(rows[0]?.classes||[]).map(p=>norm(p?.[0]));const ah=classes.includes(a),bh=classes.includes(b);return ah&&!bh?a:bh&&!ah?b:''}
+function movePair(obj,target,a,b){if(!obj||typeof obj!=='object'||Array.isArray(obj)||!target)return false;const other=target===a?b:a;if(!(other in obj))return false;const tv=Number(obj[target]||0),ov=Number(obj[other]||0);if(tv<=0&&ov>0)obj[target]=ov;delete obj[other];return true}
+function repairPairs(x){let changed=false;for(const [a,b] of [['J','C'],['Y','M']]){const target=pairTarget(x,a,b);if(!target)continue;for(const k of ['config','booked','web','meals','available'])changed=movePair(x?.[k],target,a,b)||changed}return changed}
+function rowIndex(row){const src=String(row.getAttribute('onclick')||row.querySelector('.home-open')?.getAttribute('onclick')||row.querySelector('[onclick]')?.getAttribute('onclick')||'');const m=src.match(/openFlightFromHomeList\((\d+)\)/);return m?Number(m[1]):null}
+function cabinText(obj,x){if(!obj||typeof obj!=='object')return String(obj||'—');const copy={...obj};for(const [a,b] of [['J','C'],['Y','M']]){const target=pairTarget(x,a,b);if(target)delete copy[target===a?b:a]}const order=['F','J','C','S','W','E','Y','M'],keys=Object.keys(copy);return [...order.filter(k=>k in copy),...keys.filter(k=>!order.includes(k))].map(k=>k+Number(copy[k]||0)).join(' ')||'—'}
+function fixRows(){const list=flights();document.querySelectorAll('#app .flight-home-row').forEach(row=>{const i=rowIndex(row),x=i!==null?list[i]:null;if(!x)return;repairPairs(x);row.querySelectorAll('.v2-metric').forEach(m=>{const label=norm(m.querySelector('.v2-metric-label')?.textContent),v=m.querySelector('.v2-metric-value');if(!v)return;if(label==='CONFIG'){const t=cabinText(cfg(x),x);if(v.textContent!==t)v.textContent=t}if(label==='BOOKING'){const t=typeof window.__alyziaCanonBooking==='function'?window.__alyziaCanonBooking(x):cabinText(x.booked||x.booking||x.load?.booked,x);if(v.textContent!==t)v.textContent=t}})})}
+function minutes(v){const m=String(v||'').match(/(\d{1,2}):(\d{2})/);if(!m)return null;const h=Number(m[1]),mn=Number(m[2]);return h>=0&&h<24&&mn>=0&&mn<60?h*60+mn:null}
+function cellTime(row,label){for(const c of row.querySelectorAll('.v2-time-cell')){if(norm(c.querySelector('.v2-time-label')?.textContent)===label){const t=minutes(c.querySelector('.v2-time-value')?.textContent);if(t!==null)return t}}return null}
+// Tranche horaire = heure RÉELLE de départ : ATD, sinon ETD, sinon STD (heure programmée).
+function stdFromRow(row){const real=cellTime(row,'ATD');if(real!==null)return real;const est=cellTime(row,'ETD');if(est!==null)return est;const txt=String(row.textContent||'').replace(/\s+/g,' ');const m=txt.match(/\bSTD\s*(\d{1,2}:\d{2})\b/i);if(m)return minutes(m[1]);const i=rowIndex(row),x=i!==null?flights()[i]:null;if(x){const t=minutes(x.atd)??minutes(x.etd||x.edt)??minutes(x.std);if(t!==null)return t}return null}
+function updateVisibleFlightCount(){
+ const rows=[...document.querySelectorAll('#app .flight-home-row')];
+ const visible=rows.filter(row=>getComputedStyle(row).display!=='none'&&!row.hidden&&row.getAttribute('aria-hidden')!=='true').length;
+ const candidates=[...document.querySelectorAll('#app *')].filter(el=>el.children.length===0&&/^\s*\d+\s+VOLS?\s*$/i.test(String(el.textContent||'')));
+ const badge=candidates.find(el=>/badge|count|pill|chip/i.test(String(el.className||'')))||candidates[0];
+ if(badge){const t=visible+' VOL'+(visible>1?'S':'');if(badge.textContent!==t)badge.textContent=t}
+}
+function scheduleVisibleFlightCount(){[0,40,120,300,700].forEach(ms=>setTimeout(updateVisibleFlightCount,ms))}
+function applyFinalTimeFilter(){const r=RANGES[activeRange]||null;document.querySelectorAll('#app .flight-home-row').forEach(row=>{if(!r){row.classList.remove('alyzia-final-time-hidden');return}const t=stdFromRow(row);row.classList.toggle('alyzia-final-time-hidden',t===null||t<r.start||t>=r.end)});syncTimeUi();scheduleVisibleFlightCount()}
+function clearHome(){activeRange='';applyFinalTimeFilter();const input=document.querySelector('#app .home-flight-search input');if(input){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));try{if(typeof filterFlightHomeRows==='function')filterFlightHomeRows('')}catch{}}const all=[...document.querySelectorAll('#app button')].find(b=>norm(b.textContent)==='ALL');if(all)all.click();const fav=[...document.querySelectorAll('#app button')].find(b=>/FAVOR|★|☆/.test(norm((b.getAttribute('aria-label')||'')+' '+(b.title||'')+' '+b.textContent))&&(b.classList.contains('active')||b.getAttribute('aria-pressed')==='true'));if(fav)fav.click();setTimeout(applyFinalTimeFilter,0);scheduleVisibleFlightCount()}
+function positionClear(input,host,b){const ir=input.getBoundingClientRect(),hr=host.getBoundingClientRect(),size=b.offsetWidth||40;const left=Math.max(0,ir.right-hr.left-size-8),top=Math.max(0,ir.top-hr.top+(ir.height-size)/2);b.style.setProperty('left',left+'px','important');b.style.setProperty('top',top+'px','important')}
+function ensureClear(){const input=document.querySelector('#app .home-flight-search input');if(!input)return;const host=input.closest('.home-flight-search')||input.parentElement;if(!host)return;if(getComputedStyle(host).position==='static')host.style.position='relative';let b=host.querySelector('.alyzia-home-clear');if(!b){b=document.createElement('button');b.type='button';b.className='alyzia-home-clear';b.textContent='×';b.setAttribute('aria-label','Effacer recherche et filtres');b.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();clearHome()});host.appendChild(b)}positionClear(input,host,b)}
+function controlsHost(){const all=[...document.querySelectorAll('#app button')].find(b=>norm(b.textContent)==='ALL'&&!b.closest('.flight-home-row'));return all?.parentElement||null}
+function ensureTime(){let wrap=document.querySelector('#app .alyzia-time-filter-wrap');if(wrap)return;const host=controlsHost();if(!host)return;wrap=document.createElement('span');wrap.className='alyzia-time-filter-wrap';const btn=document.createElement('button');btn.type='button';btn.className='alyzia-time-filter-btn';btn.textContent='◷ 6H';btn.setAttribute('aria-label','Filtrer par tranche horaire (heure réelle : ATD, sinon ETD, sinon STD)');btn.title='Heure réelle de départ : ATD, sinon ETD, sinon STD';const menu=document.createElement('span');menu.className='alyzia-time-filter-menu';Object.entries(RANGES).forEach(([k,r])=>{const c=document.createElement('button');c.type='button';c.className='alyzia-time-choice';c.dataset.range=k;c.textContent=r.label;c.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();activeRange=activeRange===k?'':k;applyFinalTimeFilter();menu.classList.remove('open')});menu.appendChild(c)});btn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();menu.classList.toggle('open')});wrap.append(btn,menu);host.appendChild(wrap);syncTimeUi()}
+function syncTimeUi(){const btn=document.querySelector('#app .alyzia-time-filter-btn');if(btn){btn.classList.toggle('active',!!activeRange);btn.textContent=activeRange?'◷ '+RANGES[activeRange].label:'◷ 6H'}document.querySelectorAll('#app .alyzia-time-choice').forEach(b=>b.classList.toggle('active',b.dataset.range===activeRange))}
+// ---- Masquage automatique des vols passés (liste du jour) ----
+// Un vol DÉJÀ PARTI (ATD / ATA connus, ou statut EN VOL / ARRIVÉ) ou annulé disparaît 2 h après son heure de départ réelle (ATD, sinon ETD, sinon STD).
+// Jamais masqué : un vol pas encore parti, ni un vol dont l'heure est passée SANS ATD (« À CONFIRMER / À CONTRÔLER » : il demande de l'attention).
+// Indépendant des tranches horaires ci-dessus (les deux filtres se cumulent). La recherche texte ignore ce masquage. Les arrivées ne comptent pas.
+const PAST_WINDOW_MIN=120;
+let showPast=false;try{showPast=sessionStorage.getItem('alyzia_show_past')==='1'}catch(e){}
+function parisMinutesNow(){const p=new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());return Number(p.find(x=>x.type==='hour').value)*60+Number(p.find(x=>x.type==='minute').value)}
+function parisTodayISO(){return new Intl.DateTimeFormat('fr-CA',{timeZone:'Europe/Paris'}).format(new Date())}
+function homeIsToday(){try{return String(HOME_DATE)===parisTodayISO()}catch(e){return false}}
+function rowAutoPast(row,nowMin){
+  const status=norm(row.querySelector('.v2-status')?.textContent);
+  const cancelled=status.includes('ANNUL');
+  const departed=cellTime(row,'ATD')!==null||cellTime(row,'ATA')!==null||/^(ARRIV|EN VOL|DÉCOLL|DECOLL)/.test(status);
+  if(!cancelled&&!departed)return false;
+  const t=stdFromRow(row);if(t===null)return false;
+  return t<nowMin-PAST_WINDOW_MIN;
+}
+function applyAutoPast(){
+  const list=[...document.querySelectorAll('#app .flight-home-row')];if(!list.length)return;
+  const query=String(document.querySelector('#app .home-flight-search input')?.value||'').trim();
+  const active=homeIsToday()&&!showPast&&!query;
+  const nowMin=parisMinutesNow();let hidden=0;
+  for(const row of list){
+    const want=active&&rowAutoPast(row,nowMin);
+    if(want)hidden++;
+    if(row.classList.contains('alyzia-auto-past-hidden')!==want)row.classList.toggle('alyzia-auto-past-hidden',want);
+  }
+  // total de vols passés masqués (même quand l'affichage est forcé), pour la pastille
+  let total=hidden;
+  if(!active&&homeIsToday()&&(showPast||query)){total=0;for(const row of list)if(rowAutoPast(row,nowMin))total++}
+  syncPastChip(total);
+  scheduleVisibleFlightCount();
+}
+function syncPastChip(total){
+  let chip=document.querySelector('#app .alyzia-past-chip');
+  if(!homeIsToday()||(total===0&&!showPast)){if(chip)chip.remove();return}
+  if(!chip){
+    const host=document.querySelector('#app .home-flight-search');if(!host)return;
+    chip=document.createElement('button');chip.type='button';chip.className='alyzia-past-chip';
+    chip.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();showPast=!showPast;try{sessionStorage.setItem('alyzia_show_past',showPast?'1':'0')}catch(err){}applyAutoPast()});
+    host.insertAdjacentElement('afterend',chip);
+  }
+  const text=showPast?('VOLS PASSÉS AFFICHÉS ('+total+') · MASQUER'):(total+' VOL'+(total>1?'S':'')+' PASSÉ'+(total>1?'S':'')+' MASQUÉ'+(total>1?'S':'')+' · AFFICHER');
+  if(chip.textContent!==text)chip.textContent=text;
+  chip.classList.toggle('on',showPast);
+}
+setInterval(()=>{if(!document.hidden)applyAutoPast()},60000);
+function ensure(){fixRows();ensureClear();ensureTime();applyFinalTimeFilter();applyAutoPast()}
+function scheduleFixes(){[0,40,120,260,600].forEach(ms=>setTimeout(ensure,ms))}
+const baseHome=window.renderHome;if(typeof baseHome==='function')window.renderHome=function(...args){for(const x of flights())repairPairs(x);const r=baseHome.apply(this,args);try{ensure();updateVisibleFlightCount()}catch{}scheduleFixes();scheduleVisibleFlightCount();return r};
+document.addEventListener('input',e=>{if(e.target?.matches?.('#app .home-flight-search input')){setTimeout(()=>{applyFinalTimeFilter();applyAutoPast()},0);scheduleVisibleFlightCount()}},true);
+document.addEventListener('click',e=>{if(!e.target?.closest?.('.alyzia-time-filter-wrap'))document.querySelector('#app .alyzia-time-filter-menu')?.classList.remove('open');const b=e.target?.closest?.('#app button');if(b&&/^(T1|T2|T3|ALL|★|☆)$/.test(norm(b.textContent))){[0,40,120,300,700].forEach(ms=>setTimeout(()=>{applyFinalTimeFilter();updateVisibleFlightCount()},ms))}},true);
+window.addEventListener('resize',scheduleFixes,{passive:true});window.addEventListener('orientationchange',scheduleFixes,{passive:true});
+scheduleFixes();
+})();</script>`;
+
+function patch(html){let s=String(html||'');if(s.includes('id="alyzia-home-list-final-fixes-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+UI+'\n'+s.slice(i):s+UI}
+export default {async fetch(request,env,ctx){const response=await app.fetch(request,env,ctx);const type=String(response.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return response;const html=await response.text(),headers=new Headers(response.headers);headers.delete('content-length');headers.set('cache-control','no-store');return new Response(patch(html),{status:response.status,statusText:response.statusText,headers})},scheduled(controller,env,ctx){if(typeof app.scheduled==='function')return app.scheduled(controller,env,ctx)}};

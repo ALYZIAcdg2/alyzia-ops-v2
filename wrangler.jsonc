@@ -1,41 +1,45 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "alyzia-ops-v2",
-  "main": "src/worker.js",
-  "compatibility_date": "2026-08-21",
-  "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "preview_urls": false,
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "alyzia-ops-db",
-      "database_id": "2881327d-f2dd-4037-a395-f7095b32c69c",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "SOURCE_ARCHIVE",
-      "bucket_name": "alyzia-ops-sources"
-    }
-  ],
+  "name": "alyzia-ops",
+  "main": "./src/ui-first-paint-wrapper.js",
+  "compatibility_date": "2026-08-06",
+
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": true
   },
-  "observability": {
-    "enabled": true,
-    "logs": {
-      "enabled": true,
-      "head_sampling_rate": 1
-    },
-    "traces": {
-      "enabled": true,
-      "head_sampling_rate": 0.05
-    }
-  }
 
-  // Futur lot Queues : ajouter ici producteurs/consommateurs après création des queues.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  "vars": {
+    "ALYZIA_AUTOPILOT_ENABLED": "false"
+  },
+
+  "services": [
+    {
+      "binding": "SARIA",
+      "service": "saria-seatmap"
+    },
+    {
+      "binding": "AERODATABOX",
+      "service": "alyzia-aerodatabox"
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "OPS_DB",
+      "database_name": "alyzia-ops-db",
+      "database_id": "2881327d-f2dd-4037-a395-f7095b32c69c"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "OPS_FILES",
+      "bucket_name": "alyzia-ops-files"
+    }
+  ]
 }

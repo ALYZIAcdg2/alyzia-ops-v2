@@ -1,6 +1,4 @@
+public/baked-index
+public/baked-version
 node_modules/
-.wrangler/
-coverage/
-.dev.vars
-.env
-npm-debug.log*
+package-lock.json

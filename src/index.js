@@ -1,0 +1,13607 @@
+import {sameAircraft,configCodes} from "./aircraft-change.js";
+// ALYZIA OPS V50.30 R22.6 — BJ/VF SHA DEDUPE + CANONICAL RELINK · based on R22.5/R3.13
+// Read-only bridge plan for one SQ flight/date. SQ/TK/BJ/VF/TW parsers unchanged.
+// V50.28 RULE: INC/INCARRIAGE = INBOUND PAX; INBOUND SUMMARY = FLIGHT METADATA; route inbound terminates at main origin (CDG).
+// V50.27 RULE: INCARRIAGE/INC = INBOUND PASSENGERS; INBOUND CUSTOMER SUMMARY = INBOUND FLIGHTS.
+// Passenger dossier displays linked INBOUND/OUTBOUND flight exactly via the shared connection rows.
+// ALYZIA OPS V50.28 · Generic Connections + Full Passenger Consolidation
+// - Assets statiques public/
+// - API vols partagée D1
+// - Bridge interne vers SARIA
+
+const SARIA_PUBLIC_ORIGIN = "https://saria-seatmap.alyzia-cdg2.workers.dev";
+
+function json(data,status=200,extraHeaders={}){
+  return new Response(JSON.stringify(data),{
+    status,
+    headers:{
+      "Content-Type":"application/json; charset=UTF-8",
+      "Access-Control-Allow-Origin":"*",
+      "Access-Control-Allow-Methods":"GET,POST,PUT,PATCH,DELETE,OPTIONS",
+      "Access-Control-Allow-Headers":"Content-Type, Authorization",
+      "Cache-Control":"no-store",
+      ...extraHeaders
+    }
+  });
+}
+
+function flightIdentity(x){
+  return [
+    String(x?.date||"").trim(),
+    String(x?.airline||"").trim().toUpperCase(),
+    String(x?.flight||"").trim().toUpperCase()
+  ].join("|");
+}
+
+function validFlight(x){
+  return x &&
+    String(x.date||"").trim() &&
+    String(x.airline||"").trim() &&
+    String(x.flight||"").trim() &&
+    String(x.airline||"").trim().toUpperCase()!=="KL";
+}
+
+// Champs de travail du serveur (résultats d'import PREPA, journal des changements) : jamais utilisés par l'interface,
+// mais 45 % du poids de la liste des vols (jusqu'à 1,4 Mo par vol). Ils ne sont plus envoyés aux clients (?full=1 pour tout obtenir)
+// et sont conservés à l'écriture quand un client renvoie un vol sans eux.
+const FLIGHT_SERVER_ONLY_FIELDS=["imports","flightInfoLog"];
+const FLIGHT_LIST_DATA_SQL=`CASE WHEN json_valid(data_json) THEN json_remove(data_json,${FLIGHT_SERVER_ONLY_FIELDS.map(f=>`'$.${f}'`).join(",")}) ELSE data_json END`;
+const FLIGHT_UPSERT_DATA_SQL=(()=>{
+  let expr="excluded.data_json";
+  for(const f of FLIGHT_SERVER_ONLY_FIELDS){
+    expr=`CASE WHEN json_type(excluded.data_json,'$.${f}') IS NULL AND json_type(flights.data_json,'$.${f}') IS NOT NULL THEN json_set(${expr},'$.${f}',json(json_extract(flights.data_json,'$.${f}'))) ELSE ${expr} END`;
+  }
+  return `CASE WHEN json_valid(excluded.data_json) AND json_valid(flights.data_json) THEN ${expr} ELSE excluded.data_json END`;
+})();
+function stripFlightServerOnly(x){
+  if(x&&typeof x==="object")for(const f of FLIGHT_SERVER_ONLY_FIELDS)delete x[f];
+  return x;
+}
+
+let FLIGHTS_SYNC_READY=false;
+async function ensureFlightsSyncSchema(env){
+  if(FLIGHTS_SYNC_READY)return;
+  try{
+    await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();
+    await env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_flights_updated_at ON flights(updated_at)`).run();
+    await env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_flights_flight_date ON flights(flight_date)`).run();
+    FLIGHTS_SYNC_READY=true;
+  }catch(_){}
+}
+// Toute suppression de vols change l'époque : les clients refont alors un chargement complet (la synchro par différences ne voit pas les suppressions).
+export async function bumpFlightsEpoch(env){
+  try{
+    await ensureFlightsSyncSchema(env);
+    await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('flights_epoch',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(String(Date.now())).run();
+  }catch(_){}
+}
+
+async function getFlightsResponse(env,url){
+  /*
+   * V49.90 RESOURCE FIX
+   * Les vols sont déjà stockés en JSON valide dans data_json.
+   * On évite de JSON.parse() puis JSON.stringify() chaque vol,
+   * ce qui consommait beaucoup de CPU lorsque D1 contenait
+   * plusieurs dizaines de fiches volumineuses.
+   *
+   * Synchro par différences : ?since=<syncToken> ne renvoie que les vols modifiés depuis ce jeton (avec 15 s de recouvrement).
+   * Les réponses portent syncToken + epoch ; sans ?since= c'est la liste complète, comme avant.
+   */
+  await ensureFlightsSyncSchema(env);
+  let syncToken="",epoch="";
+  try{
+    const m=await env.OPS_DB.prepare(`SELECT datetime('now','-15 seconds') AS t,(SELECT v FROM ops_meta WHERE k='flights_epoch') AS e`).first();
+    syncToken=String(m?.t||"");epoch=String(m?.e||"");
+  }catch(_){}
+  const since=String(url?.searchParams?.get("since")||"").trim();
+  const full=url?.searchParams?.get("full")==="1";
+  const dataSql=full?"data_json":FLIGHT_LIST_DATA_SQL;
+  const delta=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since);
+  // Chargement par dates : ?from=AAAA-MM-JJ&to=AAAA-MM-JJ (inclus). Les enregistrements système (airline SYS : configuration des
+  // compagnies, date 2099-12-31) sont TOUJOURS inclus, quelle que soit la plage.
+  const isDay=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||""));
+  const from=String(url?.searchParams?.get("from")||"").trim(),to=String(url?.searchParams?.get("to")||"").trim();
+  const ranged=isDay(from)&&isDay(to)&&from<=to;
+  const rangeSql=ranged?` (flight_date BETWEEN ? AND ? OR airline='SYS')`:"";
+  const rangeArgs=ranged?[from,to]:[];
+  const {results=[]}=delta
+    ? await env.OPS_DB.prepare(`SELECT ${dataSql} AS data_json FROM flights WHERE updated_at>?${ranged?" AND"+rangeSql:""} ORDER BY updated_at`).bind(since,...rangeArgs).all()
+    : await env.OPS_DB.prepare(`SELECT ${dataSql} AS data_json
+              FROM flights${ranged?" WHERE"+rangeSql:""}
+              ORDER BY flight_date, std, flight_number`).bind(...rangeArgs).all();
+
+  const payload =
+    `{"ok":true,"delta":${delta},"ranged":${ranged},"syncToken":${JSON.stringify(syncToken)},"epoch":${JSON.stringify(epoch)},"count":${results.length},"flights":[` +
+    results
+      .map(row => String(row.data_json || "{}"))
+      .join(",") +
+    `]}`;
+
+  return new Response(payload,{
+    status:200,
+    headers:{
+      "Content-Type":"application/json; charset=UTF-8",
+      "Access-Control-Allow-Origin":"*",
+      "Access-Control-Allow-Methods":"GET,POST,PUT,PATCH,DELETE,OPTIONS",
+      "Access-Control-Allow-Headers":"Content-Type, Authorization",
+      "Cache-Control":"no-store"
+    }
+  });
+}
+
+/*
+ * Injection automatique de la configuration cabine (CONFIG/BOOKING) à partir
+ * du seul type A/C déjà connu à l'import — évite d'avoir à ouvrir chaque vol
+ * pour choisir "VERSION CABINE" manuellement (cf. sariaConfigsFor/sariaClassObject
+ * côté frontend, dont la logique de normalisation des lettres de classe est
+ * reproduite ici à l'identique). Ne s'applique jamais si une version cabine
+ * est déjà sélectionnée (manuelle ou déjà auto-assignée) : on ne réécrit
+ * jamais une sélection existante.
+ *
+ * Ordre de préférence quand plusieurs plans existent pour la même compagnie+
+ * appareil : (1) config_key préfixée par le numéro de vol exact (le cas le
+ * plus précis, ex. "AT771|788|..." pour le vol AT771), (2) config_key
+ * générique (préfixe = code compagnie seul, ex. "AT|788|..."), (3) à défaut
+ * un des variants existants (alphabétique, déterministe) — à corriger
+ * manuellement si besoin via VERSION CABINE, marqué cabinConfigAuto:true.
+ */
+// Logique de choix pure (pas de requête) : réutilisée telle quelle par la
+// version qui interroge cabin_configs vol par vol (findAutoCabinConfig, OK
+// pour un seul vol : upsertFlight/patchFlight) et par la version batch qui
+// pré-charge cabin_configs une seule fois (syncFlights, import Excel avec
+// potentiellement des milliers de vols en mémoire côté client — interroger
+// la table une fois par vol y provoquait des timeouts/écritures silencieusement
+// abandonnées, cf. bug "l'import ne renseigne plus TYPE A/C ni CONFIG/CAPACITY").
+function pickAutoCabinConfigFromRows(rows,airline,aircraft,flightNumber){
+  const al=String(airline||"").trim().toUpperCase();
+  const ac=String(aircraft||"").trim().toUpperCase();
+  const fn=String(flightNumber||"").trim().toUpperCase();
+  if(!al||!ac)return null;
+
+  const candidates=(rows||[]).filter(r=>
+    String(r.airline||"").toUpperCase()===al && String(r.aircraft||"").toUpperCase()===ac
+  );
+  if(!candidates.length)return null;
+
+  const prefixOf=r=>String(r.config_key||"").split("|")[0].toUpperCase();
+
+  if(fn){
+    const exact=candidates.find(r=>prefixOf(r)===fn);
+    if(exact)return exact;
+  }
+  const generic=candidates.find(r=>prefixOf(r)===al);
+  if(generic)return generic;
+
+  const sorted=[...candidates].sort((a,b)=>String(a.config_key).localeCompare(String(b.config_key)));
+  return sorted[0];
+}
+
+async function fetchAllCabinConfigRows(env){
+  try{
+    const r=await env.OPS_DB.prepare(`
+      SELECT config_key,airline,aircraft,configuration,total,classes_json,quality
+      FROM cabin_configs
+    `).all();
+    return r?.results||[];
+  }catch(e){
+    return []; // table cabine pas encore prête : pas d'auto-injection, pas d'erreur
+  }
+}
+
+async function findAutoCabinConfig(env,airline,aircraft,flightNumber){
+  const al=String(airline||"").trim().toUpperCase();
+  const ac=String(aircraft||"").trim().toUpperCase();
+  if(!al||!ac)return null;
+
+  let results=[];
+  try{
+    const r=await env.OPS_DB.prepare(`
+      SELECT config_key,airline,aircraft,configuration,total,classes_json,quality
+      FROM cabin_configs WHERE airline=? AND aircraft=?
+    `).bind(al,ac).all();
+    results=r?.results||[];
+  }catch(e){
+    return null; // table cabine pas encore prête : pas d'auto-injection, pas d'erreur
+  }
+  const direct=pickAutoCabinConfigFromRows(results,airline,aircraft,flightNumber);
+  if(direct)return direct;
+  // Aucun plan sous ce code : essaie les codes équivalents du catalogue (772 -> 777, 32Q -> N32…).
+  for(const alt of configCodes(ac).slice(1)){
+    let rows=[];
+    try{const r=await env.OPS_DB.prepare(`SELECT config_key,airline,aircraft,configuration,total,classes_json,quality FROM cabin_configs WHERE airline=? AND aircraft=?`).bind(al,alt).all();rows=r?.results||[]}catch(e){return null}
+    const hit=pickAutoCabinConfigFromRows(rows,airline,alt,flightNumber);
+    if(hit)return hit;
+  }
+  return null;
+}
+
+function normalizedAutoCabinClasses(row){
+  let obj={};
+  try{obj=typeof row.classes_json==="string"?JSON.parse(row.classes_json):(row.classes_json||{})}catch(e){obj={}}
+  const airline=String(row.airline||"").trim().toUpperCase();
+  const out={};
+  for(const [c,n] of Object.entries(obj||{})){
+    let k=String(c||"").trim().toUpperCase();
+    if(k==="E")k="Y";
+    if(airline==="SQ"){
+      if(k==="C")k="J";
+      if(k==="W")k="S";
+    }
+    out[k]=(out[k]||0)+(Number(n)||0);
+  }
+  return out;
+}
+
+function assignAutoCabinConfigToFlight(x,match){
+  x.sariaConfigKey=match.config_key;
+  x.sariaCabinConfig=String(match.configuration||"").trim().toUpperCase();
+  const classes=normalizedAutoCabinClasses(match);
+  x.config=(x.config&&typeof x.config==="object")?{...x.config}:{};
+  for(const [k,v] of Object.entries(classes)){
+    if(!x.config[k])x.config[k]=v; // ne jamais ecraser une classe deja saisie
+  }
+  x.cabinConfigAuto=true;
+  return x;
+}
+
+// Changement d'appareil détecté (x.aircraftChange, voir aircraft-change.js) : bascule le vol sur la config cabine du type RÉEL.
+// - config choisie à la main (sariaConfigKey sans cabinConfigAuto) : jamais touchée, seul le badge reste ;
+// - classes déjà réservées dans l'ancienne config mais absentes de la nouvelle : conservées ;
+// - aucune config cabine connue pour le type réel : rien n'est changé (marqué pour ne pas réessayer).
+export async function applyCabinConfigForActualAircraft(env,x){
+  try{
+    const ch=x?.aircraftChange;
+    if(!ch?.to)return false;
+    // déjà basculé : appareil = type réel ; ou déjà tenté sans config connue. Un import qui remet l'ancien type déclenche à nouveau la bascule.
+    if(x.aircraftChangeCabinApplied===ch.to&&(String(x.aircraft||"").toUpperCase()===ch.to||x.aircraftChangeNoCabinConfig))return false;
+    if(x.sariaConfigKey&&x.cabinConfigAuto!==true&&String(x.aircraft||"").toUpperCase()===ch.to)return false;
+    x.aircraftChangeCabinApplied=ch.to;
+    const match=await findAutoCabinConfig(env,x.airline,ch.to,x.flight);
+    if(!match){x.aircraftChangeNoCabinConfig=true;return true}
+    delete x.aircraftChangeNoCabinConfig;
+    const oldConfig=(x.config&&typeof x.config==="object")?x.config:{},booked=(x.booked&&typeof x.booked==="object")?x.booked:{};
+    const next={...normalizedAutoCabinClasses(match)};
+    for(const [k,v] of Object.entries(oldConfig)){if(!(k in next)&&Number(booked[k]||0)>0)next[k]=v}
+    x.aircraftImported=x.aircraftImported||ch.from;
+    x.aircraft=ch.to;x.aircraftSource=ch.source;
+    x.sariaConfigKey=match.config_key;
+    x.sariaCabinConfig=String(match.configuration||"").trim().toUpperCase();
+    x.config=next;x.cabinConfigAuto=true;
+    const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
+    log.unshift({at:new Date().toISOString(),source:"ALYZIA_CABIN_AUTO",field:"sariaConfigKey",from:ch.from,to:match.config_key});x.flightInfoLog=log.slice(0,160);
+    return true;
+  }catch(e){console.warn("AUTO CABIN ACTUAL",e);return false}
+}
+
+// Version "un seul vol" (POST/PATCH /api/flights, injection LOT3) : interroge
+// cabin_configs directement, cout negligeable pour un vol a la fois.
+async function applyAutoCabinConfig(env,x){
+  try{
+    if(!x||typeof x!=="object")return x;
+    normalizeEntAircraft(x);
+    if(x.sariaConfigKey)return x; // deja choisi (manuel ou auto) : jamais ecrase
+    const aircraft=String(x.aircraft||"").trim();
+    if(!aircraft)return x;
+    const match=await findAutoCabinConfig(env,x.airline,aircraft,x.flight);
+    if(!match)return x;
+    assignAutoCabinConfigToFlight(x,match);
+  }catch(e){
+    console.warn("AUTO CABIN CONFIG",e);
+  }
+  return x;
+}
+
+// Version batch (syncFlights, import Excel) : cabinConfigRows est deja charge
+// une seule fois pour tout l'import, aucune requete DB supplementaire ici.
+function applyAutoCabinConfigFromRows(x,cabinConfigRows){
+  try{
+    if(!x||typeof x!=="object")return x;
+    normalizeEntAircraft(x);
+    if(x.sariaConfigKey)return x;
+    const aircraft=String(x.aircraft||"").trim();
+    if(!aircraft)return x;
+    const match=pickAutoCabinConfigFromRows(cabinConfigRows,x.airline,aircraft,x.flight);
+    if(!match)return x;
+    assignAutoCabinConfigToFlight(x,match);
+  }catch(e){
+    console.warn("AUTO CABIN CONFIG BATCH",e);
+  }
+  return x;
+}
+
+// ENT : l'import donne parfois 73H, qui désigne le même avion que 738 (type du catalogue cabines : ENT|738|189Y). Modifie x en place.
+function normalizeEntAircraft(x){
+  if(x&&typeof x==="object"&&["ENT","E4"].includes(String(x.airline||"").toUpperCase())&&String(x.aircraft||"").trim().toUpperCase()==="73H")x.aircraft="738";
+  return x;
+}
+// Rattrapage (cron) : vols ENT d'hier et à venir en 73H / 738 sans version cabine choisie -> 738 + configuration du catalogue (jamais d'écrasement d'une classe saisie).
+async function catchUpEntAircraft(env){
+  try{
+    const y=new Date(Date.now()-86400000).toISOString().slice(0,10);
+    const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,data_json FROM flights WHERE flight_date>=? AND airline IN ('ENT','E4') AND (upper(json_extract(data_json,'$.aircraft'))='73H' OR (upper(json_extract(data_json,'$.aircraft'))='738' AND coalesce(json_extract(data_json,'$.sariaConfigKey'),'')=''))`).bind(y).all();
+    let n=0;
+    for(const row of results){
+      let x;try{x=JSON.parse(row.data_json||"{}")}catch{continue}
+      const beforeAircraft=x.aircraft,beforeKey=x.sariaConfigKey||"";
+      normalizeEntAircraft(x);
+      await applyAutoCabinConfig(env,x);
+      const keyChanged=(x.sariaConfigKey||"")!==beforeKey,aircraftChanged=x.aircraft!==beforeAircraft;
+      if(!keyChanged&&!aircraftChanged)continue;
+      if(keyChanged)await env.OPS_DB.prepare(`UPDATE flights SET data_json=json_set(data_json,'$.aircraft',?,'$.sariaConfigKey',?,'$.sariaCabinConfig',?,'$.config',json(?),'$.cabinConfigAuto',json('true')),updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(x.aircraft,x.sariaConfigKey||"",x.sariaCabinConfig||"",JSON.stringify(x.config||{}),row.identity).run();
+      else await env.OPS_DB.prepare(`UPDATE flights SET data_json=json_set(data_json,'$.aircraft',?),updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(x.aircraft,row.identity).run();
+      n++;
+    }
+    return n;
+  }catch(e){console.warn("ENT CATCH-UP",e);return 0}
+}
+
+// Rattrapage (cron) : vols avec changement d'appareil dont le plan du type réel n'avait pas été trouvé (avant les équivalences 772 -> 777…) ou dont les deux types sont en fait équivalents.
+async function catchUpAircraftChanges(env){
+  try{
+    const y=new Date(Date.now()-86400000).toISOString().slice(0,10);
+    const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,data_json FROM flights WHERE flight_date>=? AND json_extract(data_json,'$.aircraftChange') IS NOT NULL AND json_extract(data_json,'$.aircraftAliasRetry') IS NULL`).bind(y).all();
+    let n=0;
+    for(const row of results){
+      let x;try{x=JSON.parse(row.data_json||"{}")}catch{continue}
+      x.aircraftAliasRetry=1;
+      const actual=x.aircraftActual||x.aircraftChange?.to,src=x.aircraftActualSource||x.aircraftChange?.source||"CATCHUP",at=new Date().toISOString();
+      if(x.aircraftChange&&x.aircraftChange.from&&sameAircraft(x.aircraftChange.from,x.aircraftChange.to)){delete x.aircraftChange;delete x.aircraftChangeNoCabinConfig}
+      else if(x.aircraftChange){delete x.aircraftChangeNoCabinConfig;delete x.aircraftChangeCabinApplied;await applyCabinConfigForActualAircraft(env,x)}
+      await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();
+      n++;
+    }
+    return n;
+  }catch(e){console.warn("AIRCRAFT CATCH-UP",e);return 0}
+}
+
+async function upsertFlight(env,x){
+  if(!validFlight(x))return false;
+  // ENT : l'import donne parfois 73H, qui désigne le même avion que 738 (c'est le type du catalogue cabines).
+  if(["ENT","E4"].includes(String(x.airline||"").toUpperCase())&&String(x.aircraft||"").trim().toUpperCase()==="73H")x={...x,aircraft:"738"};
+
+  x=await applyAutoCabinConfig(env,x);
+  // Import/sync : si le type réel est déjà connu et diffère de l'appareil importé, bascule la cabine (ex. import 320/180Y, réel 32N/186Y).
+  try{
+    if(x.aircraftActual&&(await import("./aircraft-change.js")).noteActualAircraft(x,x.aircraftActual,x.aircraftActualSource||"IMPORT",new Date().toISOString()))void 0;
+    if(x.aircraftChange)await applyCabinConfigForActualAircraft(env,x);
+  }catch(e){console.warn("AUTO CABIN ACTUAL UPSERT",e)}
+
+  const identity=flightIdentity(x);
+  await env.OPS_DB.prepare(`
+    INSERT INTO flights
+      (identity, flight_date, airline, flight_number, std, data_json, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(identity) DO UPDATE SET
+      flight_date=excluded.flight_date,
+      airline=excluded.airline,
+      flight_number=excluded.flight_number,
+      std=excluded.std,
+      data_json=${FLIGHT_UPSERT_DATA_SQL},
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(
+    identity,
+    String(x.date||""),
+    String(x.airline||"").toUpperCase(),
+    String(x.flight||"").toUpperCase(),
+    String(x.std||""),
+    JSON.stringify(x)
+  ).run();
+
+  return true;
+}
+
+
+function isPlainObject(v){
+  return v && typeof v==="object" && !Array.isArray(v);
+}
+
+function deepMerge(base,patch){
+  if(Array.isArray(patch))return patch;
+  if(!isPlainObject(patch))return patch;
+
+  const out=isPlainObject(base)?{...base}:{};
+  for(const [k,v] of Object.entries(patch)){
+    if(isPlainObject(v) && isPlainObject(out[k]))out[k]=deepMerge(out[k],v);
+    else out[k]=v;
+  }
+  return out;
+}
+
+async function getFlightByIdentity(env,identity){
+  const row=await env.OPS_DB.prepare(`
+    SELECT data_json, updated_at
+    FROM flights
+    WHERE identity=?
+    LIMIT 1
+  `).bind(identity).first();
+
+  if(!row)return null;
+  try{
+    const x=JSON.parse(row.data_json);
+    x._serverUpdatedAt=row.updated_at||"";
+    return x;
+  }catch(e){
+    return null;
+  }
+}
+
+async function patchFlight(env,identity,patch){
+  const current=await getFlightByIdentity(env,identity);
+  if(!current)return null;
+
+  // Identity fields are server authoritative for PATCH.
+  const safePatch={...(patch||{})};
+  delete safePatch.date;
+  delete safePatch.airline;
+  delete safePatch.flight;
+  delete safePatch._serverUpdatedAt;
+
+  const merged=deepMerge(current,safePatch);
+  merged.date=current.date;
+  merged.airline=current.airline;
+  merged.flight=current.flight;
+
+  await upsertFlight(env,merged);
+  return await getFlightByIdentity(env,identity);
+}
+
+async function syncFlights(env,flights){
+  const clean=[];
+  const seen=new Set();
+
+  for(const x of Array.isArray(flights)?flights:[]){
+    if(!validFlight(x))continue;
+    const id=flightIdentity(x);
+    if(seen.has(id))continue;
+    seen.add(id);
+    clean.push(x);
+  }
+
+  // Auto-assignation de la config cabine (type A/C -> VERSION CABINE) pour les
+  // vols qui n'en ont pas encore — jamais de requête cabin_configs par vol ici
+  // (clean peut contenir des milliers de vols, tout le tableau FLIGHTS côté
+  // client à chaque import Excel) : une seule lecture de cabin_configs pour
+  // tout le batch, puis un filtrage en mémoire par vol. La première version
+  // faisait une requête par vol (+ une lecture de l'ancien enregistrement) et
+  // provoquait un timeout silencieux de la synchronisation sur un gros
+  // import — plus aucun champ n'était alors écrit, TYPE A/C compris malgré
+  // sa présence dans le fichier, puisque toute la requête échouait avant
+  // d'atteindre l'écriture en base.
+  // (mergeImportedRowIntoExisting côté client ne touche jamais sariaConfigKey/
+  // config sur un vol déjà existant, donc aucune relecture n'est nécessaire
+  // ici pour préserver une config déjà choisie.)
+  const cabinConfigRows=await fetchAllCabinConfigRows(env);
+  for(const x of clean)applyAutoCabinConfigFromRows(x,cabinConfigRows);
+
+  // Batch par blocs pour rester robuste même avec un mois complet.
+  const CHUNK=40;
+  for(let i=0;i<clean.length;i+=CHUNK){
+    const statements=clean.slice(i,i+CHUNK).map(x=>
+      env.OPS_DB.prepare(`
+        INSERT INTO flights
+          (identity, flight_date, airline, flight_number, std, data_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(identity) DO UPDATE SET
+          flight_date=excluded.flight_date,
+          airline=excluded.airline,
+          flight_number=excluded.flight_number,
+          std=excluded.std,
+          data_json=${FLIGHT_UPSERT_DATA_SQL},
+          updated_at=CURRENT_TIMESTAMP
+      `).bind(
+        flightIdentity(x),
+        String(x.date||""),
+        String(x.airline||"").toUpperCase(),
+        String(x.flight||"").toUpperCase(),
+        String(x.std||""),
+        JSON.stringify(x)
+      )
+    );
+    if(statements.length)await env.OPS_DB.batch(statements);
+  }
+
+  return clean.length;
+}
+
+async function handleFlights(request,env,url){
+  if(request.method==="OPTIONS")return json({ok:true});
+
+  if(url.pathname==="/api/flights" && request.method==="GET"){
+    const identity=String(url.searchParams.get("identity")||"").trim();
+    if(identity){
+      // Requête conditionnelle (fiche ouverte, toutes les 0,5 s) : si le vol n'a pas changé depuis ifUpdated, réponse minuscule.
+      // "settled" : on ne répond "inchangé" que si la dernière écriture date de plus de 3 s (updated_at a une précision d'1 s).
+      const ifUpdated=String(url.searchParams.get("ifUpdated")||"").trim();
+      if(ifUpdated){
+        const m=await env.OPS_DB.prepare(`SELECT updated_at, (updated_at<datetime('now','-3 seconds')) AS settled FROM flights WHERE identity=? LIMIT 1`).bind(identity).first().catch(()=>null);
+        if(m&&Number(m.settled)===1&&String(m.updated_at||"")===ifUpdated)return json({ok:true,unchanged:true});
+      }
+      const flight=await getFlightByIdentity(env,identity);
+      if(!flight)return json({ok:false,error:"VOL INTROUVABLE"},404);
+      if(url.searchParams.get("full")!=="1")stripFlightServerOnly(flight);
+      return json({ok:true,flight});
+    }
+
+    return await getFlightsResponse(env,url);
+  }
+
+  if(url.pathname==="/api/flights" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    if(!validFlight(body?.flight))return json({ok:false,error:"VOL INVALIDE"},400);
+    await upsertFlight(env,body.flight);
+    const identity=flightIdentity(body.flight);
+    const flight=stripFlightServerOnly(await getFlightByIdentity(env,identity));
+    return json({ok:true,identity,flight});
+  }
+
+  if(url.pathname==="/api/flights" && request.method==="PATCH"){
+    const body=await request.json().catch(()=>null);
+    const identity=String(body?.identity||"").trim();
+    const patch=body?.patch;
+    if(!identity || !patch || typeof patch!=="object"){
+      return json({ok:false,error:"IDENTITY OU PATCH MANQUANT"},400);
+    }
+
+    const flight=await patchFlight(env,identity,patch);
+    if(!flight)return json({ok:false,error:"VOL INTROUVABLE"},404);
+    stripFlightServerOnly(flight);
+    return json({ok:true,identity,flight});
+  }
+
+  if(url.pathname==="/api/flights/sync" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    if(!Array.isArray(body?.flights))return json({ok:false,error:"LISTE VOLS MANQUANTE"},400);
+    const count=await syncFlights(env,body.flights);
+    return json({ok:true,count});
+  }
+
+  if(url.pathname==="/api/flights" && request.method==="DELETE"){
+    await env.OPS_DB.prepare("DELETE FROM flights").run();
+    await bumpFlightsEpoch(env);
+    return json({ok:true,cleared:true});
+  }
+
+  return null;
+}
+
+function isAuthorizedPrepa(request, env) {
+  const expected = String(env.ALYZIA_API_SECRET || "").trim();
+
+  if (!expected) return false;
+
+  const auth = String(
+    request.headers.get("Authorization") || ""
+  ).trim();
+
+  if (!auth.startsWith("Bearer ")) return false;
+
+  const supplied = auth.slice(7).trim();
+
+  return supplied === expected;
+}
+
+
+function normalizePrepaPayload(body) {
+  if (!body || typeof body !== "object") return null;
+
+  const gmail = body.gmail || {};
+  const flight = body.flight || {};
+  const email = body.email || {};
+  const drive = body.drive || {};
+  const detection = body.detection || {};
+
+  const gmailMessageId =
+    String(gmail.messageId || "").trim();
+
+  if (!gmailMessageId) return null;
+
+  const source =
+    String(body.source || "GMAIL")
+      .trim()
+      .toUpperCase();
+
+  const airline =
+    String(flight.airline || "")
+      .trim()
+      .toUpperCase();
+
+  const flightNumber =
+    String(flight.flightNumber || "")
+      .trim()
+      .toUpperCase();
+
+  const flightDate =
+    String(flight.date || "").trim();
+
+  const detectionStatus =
+    String(detection.status || "")
+      .trim()
+      .toUpperCase();
+
+  const attachments =
+    Array.isArray(body.attachments)
+      ? body.attachments
+      : [];
+
+  /*
+   * IMPORT IDENTIFIÉ :
+   * compagnie + vol + date obligatoires.
+   */
+  const identified =
+    !!airline &&
+    !!flightNumber &&
+    !!flightDate;
+
+  /*
+   * IMPORT NON IDENTIFIÉ :
+   * accepté uniquement si le script central l'annonce
+   * explicitement ET s'il existe au moins une pièce jointe.
+   *
+   * Cela évite qu'un mail banal sans vol soit injecté.
+   */
+  const unidentified =
+    !identified &&
+    (
+      detectionStatus === "UNIDENTIFIED" ||
+      source === "GMAIL_UNIDENTIFIED"
+    ) &&
+    attachments.length > 0;
+
+  if (!identified && !unidentified) {
+    return null;
+  }
+
+  return {
+    gmailMessageId,
+
+    gmailThreadId:
+      String(gmail.threadId || "").trim(),
+
+    source:
+      source || "GMAIL",
+
+    detectionStatus:
+      identified ? "IDENTIFIED" : "UNIDENTIFIED",
+
+    airline:
+      identified ? airline : "",
+
+    flightNumber:
+      identified ? flightNumber : "",
+
+    flightDate:
+      identified ? flightDate : "",
+
+    subject:
+      String(gmail.subject || ""),
+
+    sender:
+      String(gmail.from || ""),
+
+    receivedAt:
+      String(gmail.receivedAt || ""),
+
+    bodyText:
+      String(email.plainText || ""),
+
+    driveFolderId:
+      String(drive.folderId || ""),
+
+    driveEmailPdfId:
+      String(drive.emailPdfId || ""),
+
+    attachments
+  };
+}
+
+
+function defaultImportModeForAirline(airline){
+  // Toutes les compagnies (SQ/TK/TW/BJ incluses) tournent maintenant en
+  // GENERIC : plus aucune compagnie verrouillée sur un parseur SPECIFIC.
+  return "GENERIC";
+}
+
+async function ensureAirlineProfile(env,airline){
+  const code=String(airline||"").trim().toUpperCase();
+  if(!code)return null;
+
+  const mode=defaultImportModeForAirline(code);
+
+  await env.OPS_DB.prepare(`
+    INSERT OR IGNORE INTO airline_profiles
+      (airline, import_mode, visible_kpis_json, visible_cards_json,
+       notes_enabled, attachments_enabled, updated_at)
+    VALUES (?, ?, '{}', '{}', 1, 1, CURRENT_TIMESTAMP)
+  `).bind(code,mode).run();
+
+  return await env.OPS_DB.prepare(`
+    SELECT
+      airline,
+      import_mode,
+      visible_kpis_json,
+      visible_cards_json,
+      notes_enabled,
+      attachments_enabled,
+      updated_at
+    FROM airline_profiles
+    WHERE airline=?
+    LIMIT 1
+  `).bind(code).first();
+}
+
+function safeJsonParse(value,fallback){
+  try{
+    const parsed=JSON.parse(String(value??""));
+    return parsed;
+  }catch(e){
+    return fallback;
+  }
+}
+
+async function getAirlineProfiles(env){
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT
+      airline,
+      import_mode,
+      visible_kpis_json,
+      visible_cards_json,
+      notes_enabled,
+      attachments_enabled,
+      updated_at
+    FROM airline_profiles
+    ORDER BY airline
+  `).all();
+
+  return results.map(row=>({
+    airline:String(row.airline||"").toUpperCase(),
+    importMode:String(row.import_mode||"GENERIC").toUpperCase(),
+    visibleKpis:safeJsonParse(row.visible_kpis_json,"{}"),
+    visibleCards:safeJsonParse(row.visible_cards_json,"{}"),
+    notesEnabled:Number(row.notes_enabled)!==0,
+    attachmentsEnabled:Number(row.attachments_enabled)!==0,
+    updatedAt:row.updated_at||""
+  }));
+}
+
+async function handleAirlineProfiles(request,env,url){
+  if(!url.pathname.startsWith("/api/airline-profiles"))return null;
+  if(request.method==="OPTIONS")return json({ok:true});
+
+  if(url.pathname==="/api/airline-profiles" && request.method==="GET"){
+    const airline=String(url.searchParams.get("airline")||"").trim().toUpperCase();
+
+    if(airline){
+      const row=await ensureAirlineProfile(env,airline);
+      if(!row)return json({ok:false,error:"COMPAGNIE INVALIDE"},400);
+
+      return json({
+        ok:true,
+        profile:{
+          airline:String(row.airline||"").toUpperCase(),
+          importMode:String(row.import_mode||"GENERIC").toUpperCase(),
+          visibleKpis:safeJsonParse(row.visible_kpis_json,{}),
+          visibleCards:safeJsonParse(row.visible_cards_json,{}),
+          notesEnabled:Number(row.notes_enabled)!==0,
+          attachmentsEnabled:Number(row.attachments_enabled)!==0,
+          updatedAt:row.updated_at||""
+        }
+      });
+    }
+
+    const profiles=await getAirlineProfiles(env);
+    return json({ok:true,count:profiles.length,profiles});
+  }
+
+  /*
+   * Écriture préparée pour V50.
+   * Protégée temporairement par ALYZIA_API_SECRET jusqu'à l'étape AUTH.
+   */
+  if(url.pathname==="/api/airline-profiles" && request.method==="PATCH"){
+    if(!isAuthorizedPrepa(request,env)){
+      return json({ok:false,error:"NON AUTORISE"},401);
+    }
+
+    const body=await request.json().catch(()=>null);
+    const airline=String(body?.airline||"").trim().toUpperCase();
+    if(!airline)return json({ok:false,error:"COMPAGNIE MANQUANTE"},400);
+
+    await ensureAirlineProfile(env,airline);
+
+    const sets=[];
+    const binds=[];
+
+    if(body?.importMode!==undefined){
+      const mode=String(body.importMode||"").trim().toUpperCase();
+      if(!["GENERIC","SPECIFIC"].includes(mode)){
+        return json({ok:false,error:"MODE IMPORT INVALIDE"},400);
+      }
+      sets.push("import_mode=?");
+      binds.push(mode);
+    }
+
+    if(body?.visibleKpis!==undefined){
+      sets.push("visible_kpis_json=?");
+      binds.push(JSON.stringify(body.visibleKpis||{}));
+    }
+
+    if(body?.visibleCards!==undefined){
+      sets.push("visible_cards_json=?");
+      binds.push(JSON.stringify(body.visibleCards||{}));
+    }
+
+    if(body?.notesEnabled!==undefined){
+      sets.push("notes_enabled=?");
+      binds.push(body.notesEnabled?1:0);
+    }
+
+    if(body?.attachmentsEnabled!==undefined){
+      sets.push("attachments_enabled=?");
+      binds.push(body.attachmentsEnabled?1:0);
+    }
+
+    if(!sets.length)return json({ok:false,error:"AUCUNE MODIFICATION"},400);
+
+    sets.push("updated_at=CURRENT_TIMESTAMP");
+    binds.push(airline);
+
+    await env.OPS_DB.prepare(`
+      UPDATE airline_profiles
+      SET ${sets.join(", ")}
+      WHERE airline=?
+    `).bind(...binds).run();
+
+    const row=await ensureAirlineProfile(env,airline);
+
+    return json({
+      ok:true,
+      profile:{
+        airline:String(row.airline||"").toUpperCase(),
+        importMode:String(row.import_mode||"GENERIC").toUpperCase(),
+        visibleKpis:safeJsonParse(row.visible_kpis_json,{}),
+        visibleCards:safeJsonParse(row.visible_cards_json,{}),
+        notesEnabled:Number(row.notes_enabled)!==0,
+        attachmentsEnabled:Number(row.attachments_enabled)!==0,
+        updatedAt:row.updated_at||""
+      }
+    });
+  }
+
+  return json({ok:false,error:"ROUTE PROFIL COMPAGNIE INTROUVABLE"},404);
+}
+
+function sanitizeR2Segment(value){
+  return String(value||"")
+    .replace(/[^A-Za-z0-9._-]+/g,"_")
+    .replace(/^_+|_+$/g,"")
+    .slice(0,120) || "file";
+}
+
+function decodeBase64ToUint8Array(base64){
+  const binary=atob(String(base64||""));
+  const bytes=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+  return bytes;
+}
+
+async function handleFlightNotes(request,env,url){
+  if(!url.pathname.startsWith("/api/flight-notes") &&
+     !url.pathname.startsWith("/api/flight-attachments")){
+    return null;
+  }
+
+  if(request.method==="OPTIONS")return json({ok:true});
+
+  /*
+   * Lecture libre pour l'instant comme le reste de V49.x.
+   * Les restrictions par rôle arriveront à l'étape AUTH.
+   */
+  if(url.pathname==="/api/flight-notes" && request.method==="GET"){
+    const identity=String(url.searchParams.get("identity")||"").trim();
+    if(!identity)return json({ok:false,error:"IDENTITY MANQUANTE"},400);
+
+    const {results=[]}=await env.OPS_DB.prepare(`
+      SELECT
+        id, flight_identity, airline, note_type, content,
+        created_by, created_at, updated_at
+      FROM flight_notes
+      WHERE flight_identity=?
+      ORDER BY created_at DESC, id DESC
+    `).bind(identity).all();
+
+    return json({ok:true,count:results.length,notes:results});
+  }
+
+  if(url.pathname==="/api/flight-notes" && request.method==="POST"){
+    if(!isAuthorizedPrepa(request,env)){
+      return json({ok:false,error:"NON AUTORISE"},401);
+    }
+
+    const body=await request.json().catch(()=>null);
+    const identity=String(body?.flightIdentity||"").trim();
+    const airline=String(body?.airline||"").trim().toUpperCase();
+    const content=String(body?.content||"").trim();
+    const noteType=String(body?.noteType||"COMPANY").trim().toUpperCase();
+    const createdBy=String(body?.createdBy||"").trim();
+
+    if(!identity||!airline||!content){
+      return json({ok:false,error:"NOTE INVALIDE"},400);
+    }
+
+    const result=await env.OPS_DB.prepare(`
+      INSERT INTO flight_notes
+        (flight_identity, airline, note_type, content, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).bind(identity,airline,noteType,content,createdBy).run();
+
+    return json({ok:true,id:Number(result.meta?.last_row_id||0)});
+  }
+
+  if(url.pathname==="/api/flight-attachments" && request.method==="GET"){
+    const identity=String(url.searchParams.get("identity")||"").trim();
+    if(!identity)return json({ok:false,error:"IDENTITY MANQUANTE"},400);
+
+    const {results=[]}=await env.OPS_DB.prepare(`
+      SELECT
+        id, flight_identity, airline, note_id,
+        file_name, original_file_name, mime_type, file_size,
+        r2_key, uploaded_by, created_at
+      FROM flight_attachments
+      WHERE flight_identity=?
+      ORDER BY created_at DESC, id DESC
+    `).bind(identity).all();
+
+    return json({ok:true,count:results.length,attachments:results});
+  }
+
+  if(url.pathname==="/api/flight-attachments" && request.method==="POST"){
+    if(!isAuthorizedPrepa(request,env)){
+      return json({ok:false,error:"NON AUTORISE"},401);
+    }
+    if(!env.OPS_FILES)return json({ok:false,error:"BINDING R2 OPS_FILES ABSENT"},500);
+
+    const body=await request.json().catch(()=>null);
+    const identity=String(body?.flightIdentity||"").trim();
+    const airline=String(body?.airline||"").trim().toUpperCase();
+    const originalFileName=String(body?.fileName||"").trim();
+    const mimeType=String(body?.mimeType||"application/octet-stream").trim();
+    const base64=String(body?.base64||"");
+    const uploadedBy=String(body?.uploadedBy||"").trim();
+    const noteId=body?.noteId===null||body?.noteId===undefined
+      ? null
+      : Number(body.noteId);
+
+    if(!identity||!airline||!originalFileName||!base64){
+      return json({ok:false,error:"PIECE JOINTE INVALIDE"},400);
+    }
+
+    const bytes=decodeBase64ToUint8Array(base64);
+    const MAX_BYTES=12*1024*1024;
+    if(bytes.byteLength>MAX_BYTES){
+      return json({ok:false,error:"FICHIER TROP VOLUMINEUX (MAX 12 MB)"},413);
+    }
+
+    const allowedMime=new Set([
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ]);
+
+    if(!allowedMime.has(mimeType)){
+      return json({ok:false,error:"TYPE DE FICHIER NON AUTORISE"},415);
+    }
+
+    const datePart=new Date().toISOString().slice(0,10);
+    const unique=crypto.randomUUID();
+    const safeName=sanitizeR2Segment(originalFileName);
+    const safeIdentity=sanitizeR2Segment(identity);
+    const r2Key=`flights/${safeIdentity}/notes/${datePart}/${unique}_${safeName}`;
+
+    await env.OPS_FILES.put(r2Key,bytes,{
+      httpMetadata:{contentType:mimeType},
+      customMetadata:{
+        airline,
+        flightIdentity:identity,
+        uploadedBy:uploadedBy.slice(0,120)
+      }
+    });
+
+    const result=await env.OPS_DB.prepare(`
+      INSERT INTO flight_attachments
+        (flight_identity, airline, note_id, file_name, original_file_name,
+         mime_type, file_size, r2_key, uploaded_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).bind(
+      identity,
+      airline,
+      Number.isFinite(noteId)?noteId:null,
+      safeName,
+      originalFileName,
+      mimeType,
+      bytes.byteLength,
+      r2Key,
+      uploadedBy
+    ).run();
+
+    return json({
+      ok:true,
+      id:Number(result.meta?.last_row_id||0),
+      r2Key,
+      fileName:originalFileName,
+      size:bytes.byteLength
+    });
+  }
+
+  const attachmentMatch=url.pathname.match(/^\/api\/flight-attachments\/(\d+)$/);
+
+  if(attachmentMatch && request.method==="GET"){
+    const id=Number(attachmentMatch[1]);
+    const row=await env.OPS_DB.prepare(`
+      SELECT id, file_name, original_file_name, mime_type, r2_key
+      FROM flight_attachments
+      WHERE id=?
+      LIMIT 1
+    `).bind(id).first();
+
+    if(!row)return json({ok:false,error:"PIECE JOINTE INTROUVABLE"},404);
+    if(!env.OPS_FILES)return json({ok:false,error:"BINDING R2 OPS_FILES ABSENT"},500);
+
+    const object=await env.OPS_FILES.get(row.r2_key);
+    if(!object)return json({ok:false,error:"FICHIER R2 INTROUVABLE"},404);
+
+    const headers=new Headers();
+    headers.set("Content-Type",row.mime_type||object.httpMetadata?.contentType||"application/octet-stream");
+    headers.set(
+      "Content-Disposition",
+      `inline; filename="${String(row.original_file_name||row.file_name||"file").replace(/"/g,"")}"`);
+    headers.set("Cache-Control","private, no-store");
+    headers.set("Access-Control-Allow-Origin","*");
+
+    return new Response(object.body,{status:200,headers});
+  }
+
+  if(attachmentMatch && request.method==="DELETE"){
+    if(!isAuthorizedPrepa(request,env)){
+      return json({ok:false,error:"NON AUTORISE"},401);
+    }
+
+    const id=Number(attachmentMatch[1]);
+    const row=await env.OPS_DB.prepare(`
+      SELECT id, r2_key
+      FROM flight_attachments
+      WHERE id=?
+      LIMIT 1
+    `).bind(id).first();
+
+    if(!row)return json({ok:false,error:"PIECE JOINTE INTROUVABLE"},404);
+
+    if(env.OPS_FILES)await env.OPS_FILES.delete(row.r2_key);
+    await env.OPS_DB.prepare("DELETE FROM flight_attachments WHERE id=?").bind(id).run();
+
+    return json({ok:true,deleted:true,id});
+  }
+
+  return json({ok:false,error:"ROUTE NOTES/PIECES JOINTES INTROUVABLE"},404);
+}
+
+async function savePrepaInbox(env, item) {
+
+  if(item?.airline){
+    await ensureAirlineProfile(env,item.airline);
+  }
+
+  const attachmentsJson =
+    JSON.stringify(item.attachments || []);
+
+  const initialStatus =
+    item.detectionStatus === "UNIDENTIFIED"
+      ? "UNIDENTIFIED"
+      : "PENDING";
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO prepa_inbox (
+      gmail_message_id,
+      gmail_thread_id,
+
+      source,
+
+      airline,
+      flight_number,
+      flight_date,
+
+      subject,
+      sender,
+      received_at,
+
+      body_text,
+
+      drive_folder_id,
+      drive_email_pdf_id,
+
+      attachments_json,
+
+      status,
+      error_message,
+      updated_at
+    )
+
+    VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '',
+      CURRENT_TIMESTAMP
+    )
+
+    ON CONFLICT(gmail_message_id)
+    DO UPDATE SET
+
+      gmail_thread_id=excluded.gmail_thread_id,
+
+      source=excluded.source,
+
+      airline=excluded.airline,
+      flight_number=excluded.flight_number,
+      flight_date=excluded.flight_date,
+
+      subject=excluded.subject,
+      sender=excluded.sender,
+      received_at=excluded.received_at,
+
+      body_text=excluded.body_text,
+
+      drive_folder_id=excluded.drive_folder_id,
+      drive_email_pdf_id=excluded.drive_email_pdf_id,
+
+      attachments_json=excluded.attachments_json,
+
+      /*
+       * Ne jamais remettre à PENDING un import déjà finalisé.
+       * En revanche un ancien UNIDENTIFIED peut devenir PENDING
+       * si le même message est renvoyé ensuite avec vol/date trouvés.
+       */
+      status=
+        CASE
+          WHEN prepa_inbox.status='PROCESSED'
+            THEN 'PROCESSED'
+          WHEN excluded.status='PENDING'
+            THEN 'PENDING'
+          ELSE excluded.status
+        END,
+
+      error_message=
+        CASE
+          WHEN excluded.status='PENDING'
+            THEN ''
+          ELSE prepa_inbox.error_message
+        END,
+
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(
+    item.gmailMessageId,
+    item.gmailThreadId,
+
+    item.source,
+
+    item.airline,
+    item.flightNumber,
+    item.flightDate,
+
+    item.subject,
+    item.sender,
+    item.receivedAt,
+
+    item.bodyText,
+
+    item.driveFolderId,
+    item.driveEmailPdfId,
+
+    attachmentsJson,
+
+    initialStatus
+  ).run();
+
+  return initialStatus;
+}
+
+async function getPrepaInbox(env, url) {
+
+  const status =
+    String(
+      url.searchParams.get("status") || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  const airline =
+    String(
+      url.searchParams.get("airline") || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  const flightNumber =
+    String(
+      url.searchParams.get("flight") || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  /*
+   * V50.4 — sur demande explicite de l'interface, renvoyer aussi
+   * les payloads base64 des pièces jointes même si l'import est PROCESSED/ERROR.
+   * Utilisé uniquement pour REPRENDRE / RÉINJECTER.
+   */
+  const includePayload =
+    String(url.searchParams.get("includePayload") || "") === "1";
+
+  // LOT 5.2.1 — historique IMPORT GMAIL complet pour l'interface.
+  // Par défaut on conserve 120 pour compatibilité, mais le BUILD140 demande 2000.
+  const limit = Math.max(1, Math.min(2000, Number(url.searchParams.get("limit") || 120)));
+  const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
+
+
+  let sql = `
+    SELECT
+      id,
+      gmail_message_id,
+      gmail_thread_id,
+
+      source,
+
+      airline,
+      flight_number,
+      flight_date,
+
+      subject,
+      sender,
+      received_at,
+
+      body_text,
+
+      drive_folder_id,
+      drive_email_pdf_id,
+
+      attachments_json,
+
+      status,
+      error_message,
+
+      created_at,
+      updated_at,
+      processed_at
+
+    FROM prepa_inbox
+
+    WHERE 1=1
+  `;
+
+  const binds = [];
+
+
+  if (status) {
+    sql += ` AND status=?`;
+    binds.push(status);
+  }
+
+
+  if (airline) {
+    sql += ` AND airline=?`;
+    binds.push(airline);
+  }
+
+
+  if (flightNumber) {
+    sql += ` AND flight_number=?`;
+    binds.push(flightNumber);
+  }
+
+
+  sql += `
+    ORDER BY received_at DESC, id DESC
+    LIMIT ? OFFSET ?
+  `;
+  binds.push(limit, offset);
+
+
+  const statement =
+    env.OPS_DB.prepare(sql);
+
+  const result =
+    await statement.bind(...binds).all();
+
+
+  const rows =
+    Array.isArray(result.results)
+      ? result.results
+      : [];
+
+
+  let items =
+    rows.map(row => {
+
+      let attachments = [];
+
+      try {
+        const parsed =
+          JSON.parse(
+            row.attachments_json || "[]"
+          );
+
+        const needsPayload =
+          includePayload ||
+          status === "PENDING" ||
+          status === "PROCESSING" ||
+          status === "UNIDENTIFIED";
+
+        attachments =
+          Array.isArray(parsed)
+            ? parsed.map(att => {
+                if (needsPayload) return att;
+
+                /*
+                 * Vue OUTILS / historique :
+                 * on ne renvoie pas les PDF base64.
+                 * Seulement les métadonnées nécessaires à l'interface.
+                 */
+                return {
+                  name: String(att?.name || ""),
+                  mimeType: String(att?.mimeType || ""),
+                  size: Number(att?.size || 0),
+                  driveId: String(att?.driveId || "")
+                };
+              })
+            : [];
+      } catch (e) {}
+
+
+      return {
+        id: row.id,
+
+        gmailMessageId:
+          row.gmail_message_id,
+
+        gmailThreadId:
+          row.gmail_thread_id,
+
+        source:
+          row.source ||
+          (
+            String(row.gmail_message_id || "")
+              .startsWith("HISTO_PREPASQ_")
+              ? "HISTORIQUE_PREPASQ"
+              : "GMAIL"
+          ),
+
+        airline:
+          row.airline,
+
+        flightNumber:
+          row.flight_number,
+
+        flightDate:
+          row.flight_date,
+
+        subject:
+          row.subject,
+
+        sender:
+          row.sender,
+
+        receivedAt:
+          row.received_at,
+
+        bodyText:
+          row.body_text,
+
+        driveFolderId:
+          row.drive_folder_id,
+
+        driveEmailPdfId:
+          row.drive_email_pdf_id,
+
+        attachments,
+
+        status:
+          row.status,
+
+        errorMessage:
+          row.error_message,
+
+        createdAt:
+          row.created_at,
+
+        updatedAt:
+          row.updated_at,
+
+        processedAt:
+          row.processed_at
+      };
+
+    });
+
+  // V3.5 : includePayload=1 reconstruit les pièces jointes depuis R2.
+  // Les lignes GMAIL_AUTOPILOT ne stockent volontairement que les métadonnées dans prepa_inbox ;
+  // le payload complet est fourni à la demande au moteur navigateur existant, sans gonfler D1.
+  if(includePayload && env.OPS_FILES){
+    const enriched=[];
+    for(const item of items){
+      try{
+        const versions=(await env.OPS_DB.prepare(`
+          SELECT version_id,filename_original,mime_type,file_size,r2_key
+          FROM import_file_versions
+          WHERE gmail_message_id=?
+          ORDER BY created_at ASC
+        `).bind(String(item.gmailMessageId||'')).all()).results||[];
+        const payload=[];
+        for(const v of versions){
+          const obj=await env.OPS_FILES.get(String(v.r2_key||''));
+          if(!obj)continue;
+          const bytes=new Uint8Array(await obj.arrayBuffer());
+          let bin='';
+          const CH=0x8000;
+          for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode(...bytes.subarray(i,i+CH));
+          payload.push({name:String(v.filename_original||'prepa.bin'),mimeType:String(v.mime_type||'application/octet-stream'),size:Number(v.file_size||bytes.length),base64:btoa(bin),versionId:String(v.version_id||'')});
+        }
+        enriched.push({...item,attachments:payload.length?payload:item.attachments});
+      }catch(e){enriched.push(item)}
+    }
+    items=enriched;
+  }
+
+  return items;
+}
+
+
+
+/* =========================================================
+   V50.5 — GOOGLE DRIVE DIRECT + NEUTRALISATION + REPAIR
+   ========================================================= */
+
+async function ensurePrepaControlTables(env){
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS app_integrations (
+        integration_key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS prepa_suppressed_flights (
+        airline TEXT NOT NULL,
+        flight_number TEXT NOT NULL,
+        flight_date TEXT NOT NULL,
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (airline, flight_number, flight_date)
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS prepa_suppressed_messages (
+        gmail_message_id TEXT PRIMARY KEY,
+        airline TEXT,
+        flight_number TEXT,
+        flight_date TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+  ]);
+}
+
+async function getIntegrationJson(env,key){
+  await ensurePrepaControlTables(env);
+  const row=await env.OPS_DB.prepare(`
+    SELECT value_json FROM app_integrations
+    WHERE integration_key=?
+    LIMIT 1
+  `).bind(key).first();
+  if(!row)return null;
+  try{return JSON.parse(row.value_json||"{}")}catch(e){return null}
+}
+
+async function setIntegrationJson(env,key,value){
+  await ensurePrepaControlTables(env);
+  await env.OPS_DB.prepare(`
+    INSERT INTO app_integrations
+      (integration_key,value_json,updated_at)
+    VALUES (?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(integration_key) DO UPDATE SET
+      value_json=excluded.value_json,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(key,JSON.stringify(value||{})).run();
+}
+
+function googleDriveRedirectUri(request){
+  const u=new URL(request.url);
+  return `${u.origin}/api/prepa/google-drive/oauth/callback`;
+}
+
+async function googleDriveStatus(env){
+  const cfg=await getIntegrationJson(env,"google_drive_oauth");
+  return {
+    configured:!!String(cfg?.refresh_token||"").trim(),
+    oauthClientConfigured:
+      !!String(env.GOOGLE_CLIENT_ID||"").trim() &&
+      !!String(env.GOOGLE_CLIENT_SECRET||"").trim(),
+    connectedEmail:String(cfg?.email||""),
+    connectedAt:String(cfg?.connected_at||"")
+  };
+}
+
+async function getGoogleDriveAccessToken(env){
+  const cfg=await getIntegrationJson(env,"google_drive_oauth");
+  const refreshToken=String(cfg?.refresh_token||"").trim();
+  const clientId=String(env.GOOGLE_CLIENT_ID||"").trim();
+  const clientSecret=String(env.GOOGLE_CLIENT_SECRET||"").trim();
+
+  if(!refreshToken||!clientId||!clientSecret){
+    throw new Error("GOOGLE DRIVE DIRECT NON CONFIGURÉ");
+  }
+
+  const form=new URLSearchParams({
+    client_id:clientId,
+    client_secret:clientSecret,
+    refresh_token:refreshToken,
+    grant_type:"refresh_token"
+  });
+
+  const resp=await fetch("https://oauth2.googleapis.com/token",{
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:form.toString()
+  });
+
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok||!data?.access_token){
+    throw new Error(data?.error_description||data?.error||`GOOGLE TOKEN HTTP ${resp.status}`);
+  }
+  return String(data.access_token);
+}
+
+async function trashDriveFoldersDirect(env,folderIds){
+  const ids=[...new Set((folderIds||[]).map(x=>String(x||"").trim()).filter(Boolean))];
+  if(!ids.length)return {ok:true,trashed:[],missing:[],errors:[]};
+
+  const accessToken=await getGoogleDriveAccessToken(env);
+  const trashed=[],missing=[],errors=[];
+
+  for(const id of ids){
+    const resp=await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?supportsAllDrives=true`,
+      {
+        method:"PATCH",
+        headers:{
+          "Authorization":`Bearer ${accessToken}`,
+          "Content-Type":"application/json"
+        },
+        body:JSON.stringify({trashed:true})
+      }
+    );
+
+    if(resp.status===404){
+      missing.push(id);
+      continue;
+    }
+
+    if(!resp.ok){
+      const data=await resp.json().catch(()=>({}));
+      errors.push({
+        id,
+        status:resp.status,
+        error:data?.error?.message||`HTTP ${resp.status}`
+      });
+      continue;
+    }
+
+    trashed.push(id);
+  }
+
+  return {ok:errors.length===0,trashed,missing,errors};
+}
+
+async function isPrepaSuppressed(env,item){
+  await ensurePrepaControlTables(env);
+
+  const gmailMessageId=String(item?.gmailMessageId||"").trim();
+  if(gmailMessageId){
+    const m=await env.OPS_DB.prepare(`
+      SELECT gmail_message_id
+      FROM prepa_suppressed_messages
+      WHERE gmail_message_id=?
+      LIMIT 1
+    `).bind(gmailMessageId).first();
+    if(m)return {suppressed:true,reason:"MESSAGE"};
+  }
+
+  const airline=String(item?.airline||"").trim().toUpperCase();
+  const flightNumber=String(item?.flightNumber||"").replace(/\s+/g,"").trim().toUpperCase();
+  const flightDate=String(item?.flightDate||"").trim();
+
+  if(airline&&flightNumber&&flightDate){
+    const f=await env.OPS_DB.prepare(`
+      SELECT airline
+      FROM prepa_suppressed_flights
+      WHERE airline=? AND flight_number=? AND flight_date=?
+      LIMIT 1
+    `).bind(airline,flightNumber,flightDate).first();
+    if(f)return {suppressed:true,reason:"FLIGHT"};
+  }
+
+  return {suppressed:false};
+}
+
+async function suppressPrepaFlight(env,{airline,flightNumber,flightDate,prepaRows}){
+  await ensurePrepaControlTables(env);
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO prepa_suppressed_flights
+      (airline,flight_number,flight_date,reason,created_at)
+    VALUES (?,?,?,'DELETE_FROM_ALYZIA',CURRENT_TIMESTAMP)
+    ON CONFLICT(airline,flight_number,flight_date) DO UPDATE SET
+      reason='DELETE_FROM_ALYZIA',
+      created_at=CURRENT_TIMESTAMP
+  `).bind(airline,flightNumber,flightDate).run();
+
+  for(const row of prepaRows||[]){
+    const msg=String(row?.gmail_message_id||"").trim();
+    if(!msg)continue;
+    await env.OPS_DB.prepare(`
+      INSERT INTO prepa_suppressed_messages
+        (gmail_message_id,airline,flight_number,flight_date,created_at)
+      VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(gmail_message_id) DO UPDATE SET
+        airline=excluded.airline,
+        flight_number=excluded.flight_number,
+        flight_date=excluded.flight_date,
+        created_at=CURRENT_TIMESTAMP
+    `).bind(msg,airline,flightNumber,flightDate).run();
+  }
+}
+
+async function repairPrepaScope(env,body){
+  await ensurePrepaControlTables(env);
+
+  const scope=String(body?.scope||"").trim().toUpperCase();
+  const airline=String(body?.airline||"").trim().toUpperCase();
+  const flightNumber=String(body?.flightNumber||"").replace(/\s+/g,"").trim().toUpperCase();
+  const flightDate=String(body?.flightDate||"").trim();
+
+  let where="1=1";
+  const binds=[];
+
+  if(scope==="FLIGHT"){
+    if(!airline||!flightNumber||!flightDate)throw new Error("VOL / COMPAGNIE / DATE MANQUANTS");
+    where+=` AND UPPER(airline)=? AND UPPER(REPLACE(flight_number,' ',''))=? AND flight_date=?`;
+    binds.push(airline,flightNumber,flightDate);
+  }else if(scope==="AIRLINE"){
+    if(!airline)throw new Error("COMPAGNIE MANQUANTE");
+    where+=` AND UPPER(airline)=?`;
+    binds.push(airline);
+  }else if(scope!=="ALL"){
+    throw new Error("SCOPE REPAIR INVALIDE");
+  }
+
+  where+=`
+    AND NOT EXISTS (
+      SELECT 1
+      FROM prepa_suppressed_flights s
+      WHERE s.airline=UPPER(prepa_inbox.airline)
+        AND s.flight_number=UPPER(REPLACE(prepa_inbox.flight_number,' ',''))
+        AND s.flight_date=prepa_inbox.flight_date
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM prepa_suppressed_messages sm
+      WHERE sm.gmail_message_id=prepa_inbox.gmail_message_id
+    )
+  `;
+
+  const sql=`
+    UPDATE prepa_inbox
+    SET
+      status='PENDING',
+      error_message='',
+      processed_at=NULL,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE ${where}
+  `;
+
+  const result=await env.OPS_DB.prepare(sql).bind(...binds).run();
+
+  return {
+    scope,
+    airline,
+    flightNumber,
+    flightDate,
+    affected:Number(result.meta?.changes||0)
+  };
+}
+
+function googleCallbackHtml(ok,message){
+  const safe=String(message||"").replace(/[&<>"]/g,c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"
+  }[c]));
+  return new Response(`<!doctype html><html lang="fr"><head><meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALYZIA OPS · Google Drive</title>
+  <style>
+  body{font-family:Arial,sans-serif;background:#f4f7fb;color:#10213b;margin:0;display:grid;place-items:center;min-height:100vh}
+  .box{background:#fff;border:1px solid #dbe6f2;border-radius:20px;padding:28px;max-width:520px;box-shadow:0 18px 55px #1232}
+  h1{margin:0 0 10px;font-size:24px}.ok{color:#16803a}.err{color:#b42318}
+  a{display:inline-block;margin-top:18px;background:#0b73e0;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:800}
+  </style></head><body><div class="box"><h1 class="${ok?"ok":"err"}">${ok?"GOOGLE DRIVE CONNECTÉ":"CONNEXION DRIVE IMPOSSIBLE"}</h1><p>${safe}</p><a href="/">RETOUR À ALYZIA OPS</a></div></body></html>`,{
+    status:ok?200:400,
+    headers:{"Content-Type":"text/html; charset=UTF-8","Cache-Control":"no-store"}
+  });
+}
+
+/* =========================================================
+   V50.6 LOT 1 — GMAIL API INTAKE FOUNDATION
+   - Apps Script remplacé par Gmail API côté Worker
+   - Stocke tout type de pièce jointe dans R2
+   - Indexe messages/fichiers/versions dans D1
+   - Ne touche pas aux parsers SQ/TK/BJ/TW
+   - Pas encore de parsing métier : intake + historique + labels
+   ========================================================= */
+
+const GMAIL_API_BASE="https://gmail.googleapis.com/gmail/v1/users/me";
+const GMAIL_LABELS={
+  RECEIVED:"ALYZIA/REÇU",
+  IMPORTED:"ALYZIA/IMPORTÉ",
+  INJECTED:"ALYZIA/INJECTÉ",
+  VALIDATED:"ALYZIA/VALIDÉ",
+  REVIEW:"ALYZIA/À_REVOIR",
+  DUPLICATE:"ALYZIA/IGNORÉ_DOUBLON",
+  ERROR:"ALYZIA/ERREUR",
+  ERROR_IMPORT:"ALYZIA/ERREUR IMPORT",
+  ERROR_INJECT:"ALYZIA/ERREUR INJECTE",
+  UPDATED:"ALYZIA/MIS_A_JOUR", // ancien libellé : retiré lors d'une transition V5.3
+  SUPPRESSED:"ALYZIA/SUPPRIMÉ_NEUTRALISÉ"
+};
+const GMAIL_PIPELINE_STATE_KEYS=new Set(["RECEIVED","IMPORTED","INJECTED","VALIDATED","REVIEW","DUPLICATE","ERROR","ERROR_IMPORT","ERROR_INJECT"]);
+let GMAIL_LABEL_ID_CACHE=null;
+
+async function ensureGmailPipelineTables(env){
+  await ensurePrepaControlTables(env);
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS gmail_sync_state (
+        mailbox TEXT PRIMARY KEY,
+        last_history_id TEXT,
+        last_full_sync_at TEXT,
+        last_realtime_sync_at TEXT,
+        backfill_query TEXT,
+        backfill_page_token TEXT,
+        backfill_status TEXT NOT NULL DEFAULT 'IDLE',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS gmail_messages (
+        gmail_message_id TEXT PRIMARY KEY,
+        gmail_thread_id TEXT,
+        history_id TEXT,
+        internal_date TEXT,
+        subject TEXT,
+        sender TEXT,
+        received_at TEXT,
+        snippet TEXT,
+        label_state TEXT,
+        airline TEXT,
+        flight_number TEXT,
+        flight_date TEXT,
+        status TEXT NOT NULL DEFAULT 'RECEIVED',
+        first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        processed_at TEXT
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS import_files (
+        file_id TEXT PRIMARY KEY,
+        active_version_id TEXT,
+        airline TEXT,
+        flight_number TEXT,
+        flight_date TEXT,
+        document_type TEXT,
+        filename_normalized TEXT,
+        status TEXT NOT NULL DEFAULT 'RECEIVED',
+        latest_document_time TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        retention_status TEXT NOT NULL DEFAULT 'ACTIVE',
+        locked_until TEXT,
+        deleted_at TEXT
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS import_file_versions (
+        version_id TEXT PRIMARY KEY,
+        file_id TEXT NOT NULL,
+        gmail_message_id TEXT,
+        attachment_id TEXT,
+        filename_original TEXT,
+        filename_normalized TEXT,
+        mime_type TEXT,
+        file_size INTEGER,
+        sha256 TEXT,
+        r2_key TEXT,
+        document_time TEXT,
+        received_at TEXT,
+        status TEXT NOT NULL DEFAULT 'STORED',
+        is_active INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS gmail_message_documents (
+        gmail_message_id TEXT NOT NULL,
+        version_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL DEFAULT 'ATTACHMENT',
+        source_ref TEXT,
+        parent_version_id TEXT,
+        is_duplicate INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (gmail_message_id, version_id, source_kind, source_ref)
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_gmail_message_documents_message
+      ON gmail_message_documents(gmail_message_id,created_at)
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS import_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope TEXT NOT NULL,
+        airline TEXT,
+        flight_number TEXT,
+        flight_date TEXT,
+        gmail_message_id TEXT,
+        file_id TEXT,
+        version_id TEXT,
+        change_type TEXT NOT NULL,
+        before_json TEXT,
+        after_json TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS import_jobs (
+        job_id TEXT PRIMARY KEY,
+        job_type TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 50,
+        airline TEXT,
+        flight_number TEXT,
+        flight_date TEXT,
+        file_id TEXT,
+        version_id TEXT,
+        gmail_message_id TEXT,
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        run_after TEXT
+      )
+    `)
+  ]);
+}
+
+function gmailRedirectUri(request){
+  const u=new URL(request.url);
+  return `${u.origin}/api/gmail/oauth/callback`;
+}
+
+function b64urlToBytes(data){
+  const s=String(data||"").replace(/-/g,"+").replace(/_/g,"/");
+  const pad=s.length%4?"=".repeat(4-(s.length%4)):"";
+  const bin=atob(s+pad);
+  const out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+  return out;
+}
+
+function b64urlToText(data){
+  try{return new TextDecoder().decode(b64urlToBytes(data))}catch(e){return ""}
+}
+
+function normalizeFilename(v){
+  return String(v||"file")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g,"")
+    .replace(/[\\/:*?"<>|]+/g,"_")
+    .replace(/\s+/g," ")
+    .trim()
+    .toLowerCase() || "file";
+}
+
+function guessDocumentType(filename,mime,textProbe){
+  const f=String(filename||"").toUpperCase();
+  const p=String(textProbe||"").toUpperCase();
+  if(/ALL\s+(CUSTOMERS|PAX)|LIST\s+OF\s*:\s*ALL\s+(CUSTOMERS|PAX)/.test(p))return "ALL_CUSTOMERS";
+  if(/FQTV/.test(p)||/FQTV/.test(f))return "FQTV";
+  if(/ETKT|TICKET/.test(p)||/ETKT|TICKET/.test(f))return "ETKT";
+  if(/\bEMD\b/.test(p)||/\bEMD\b/.test(f))return "EMD";
+  if(/WCHR|WCHS|WCHC|\bWCH\b/.test(p)||/WCHR|WCHS|WCHC|\bWCH\b/.test(f))return "WCH";
+  if(/INFANT|\bINF\b/.test(p)||/INFANT|\bINF\b/.test(f))return "INF";
+  if(/CHILD|CHLD|\bKID\b/.test(p)||/CHILD|CHLD|\bKID\b/.test(f))return "CHLD";
+  if(/MEAL|[A-Z]{2}ML/.test(p)||/MEAL|[A-Z]{2}ML/.test(f))return "MEAL";
+  if(/STAFF|REBATE|BOOKABLE|\bBS-SA\b/.test(p)||/STAFF|REBATE|BOOKABLE|\bBS-SA\b/.test(f))return "STAFF";
+  if(/INAD/.test(p)||/INAD/.test(f))return "INAD";
+  if(/DEPA/.test(p)||/DEPA/.test(f))return "DEPA";
+  if(/DEPU/.test(p)||/DEPU/.test(f))return "DEPU";
+  if(/UMNR|\bUM\b/.test(p)||/UMNR|\bUM\b/.test(f))return "UMNR";
+  if(/MAAS/.test(p)||/MAAS/.test(f))return "MAAS";
+  if(/INBOUND|CONNECTION FROM/.test(p)||/INBOUND/.test(f))return "INBOUND";
+  if(/OUTBOUND|ONCARRIAGE|CONNECTION TO/.test(p)||/OUTBOUND/.test(f))return "OUTBOUND";
+  if(/\.PDF$/i.test(filename))return "PDF";
+  if(/\.TXT$/i.test(filename))return "TXT";
+  if(/\.CSV$/i.test(filename))return "CSV";
+  if(/\.XLSX?$/i.test(filename))return "EXCEL";
+  if(/\.EML$/i.test(filename))return "EML";
+  if(/\.ZIP$/i.test(filename))return "ZIP";
+  return String(mime||"").split("/").pop()?.toUpperCase() || "OTHER";
+}
+
+// Compagnies réellement exploitées par ALYZIA (mêmes 39 codes que la
+// répartition terminal T1/T2/T3 fournie par l'utilisateur + IZ/TB/JU déjà
+// gérées par des pipelines dédiés). Bug corrigé (17/09) : sans cette liste,
+// extractFlightTokenV53 acceptait N'IMPORTE QUEL couple de 2 caractères
+// alphanumériques suivi de chiffres comme "code compagnie + numéro de vol"
+// — un sujet français banal ("PREPA DU 18/09") faisait ainsi identifier
+// une fausse compagnie "DU" (le mot "du" + le jour "18" de la date), qui
+// n'existe pas, au lieu de laisser l'identité réelle (ex. SQ) être résolue
+// par la sonde sur pièce jointe. Les vrais passagers du document se
+// retrouvaient alors attribués à une compagnie fantôme.
+const KNOWN_AIRLINE_CODES=new Set([
+  "EI","MS","SQ","HU","FB","KU","VF","S4","FI","OZ","TW","TK","J2","AV","WB","NH",
+  "AH","MH","AT","A9","LY","SB","AI","HM","SK","LO","JU","LA","RJ",
+  "BJ","LS","3O","IZ","TS","DE","SM","TB","ENT"
+]);
+function isValidAirlineCodeV53(code){
+  const c=String(code||"").toUpperCase().trim();
+  return /^[A-Z0-9]{2}$/.test(c) && /[A-Z]/.test(c);
+}
+function extractFlightTokenV53(text){
+  const src=String(text||"").toUpperCase();
+  const re=/\b([A-Z0-9]{2})\s*[- ]?\s*(\d{1,4}[A-Z]?)\b/g;
+  let m;
+  while((m=re.exec(src))){
+    const airline=String(m[1]||"").toUpperCase();
+    if(!isValidAirlineCodeV53(airline))continue;
+    if(!KNOWN_AIRLINE_CODES.has(airline))continue;
+    let num=String(m[2]||"").toUpperCase();
+    if(!/\d/.test(num))continue;
+    // Source iPort (IZ/TB) : le même vol peut être numéroté "742" ou "0742"
+    // selon la liste ("All passengers" vs "PIL by SSR category"). Sans cette
+    // normalisation, ces deux formats créent deux fiches vol distinctes pour
+    // le même vol réel.
+    if(/^(IZ|TB)$/.test(airline))num=num.replace(/^0+(?=\d)/,"");
+    return {airline,flightNumber:`${airline}${num}`};
+  }
+  return null;
+}
+function extractFlightDateTokenV53(text){
+  const src=String(text||"").toUpperCase();
+  // LOT 5.3.1 : les sujets historiques PREPASQ utilisent par ex.
+  // SQ335/20260905/CDG 2026/09/02 14:49.
+  // 20260905 = DATE DU VOL ; 2026/09/02 = horodatage du document/mail.
+  // On prend donc d'abord la date compacte placée dans l'identité du vol.
+  const d0=src.match(/(?:^|\b[A-Z0-9]{2}\s*[- ]?\s*\d{1,4}[A-Z]?\s*[\/_-])((?:20)\d{2})(\d{2})(\d{2})(?=[\/_-]|\b)/);
+  if(d0)return `${d0[1]}-${d0[2]}-${d0[3]}`;
+  const dCompact=src.match(/\b((?:20)\d{2})(\d{2})(\d{2})\b/);
+  if(dCompact)return `${dCompact[1]}-${dCompact[2]}-${dCompact[3]}`;
+  const d1y=src.match(/\b(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2}|20\d{2})\b/);
+  if(d1y){
+    const yy=String(d1y[3]);
+    const yyyy=yy.length===2?`20${yy}`:yy;
+    const months={JAN:"01",FEB:"02",MAR:"03",APR:"04",MAY:"05",JUN:"06",JUL:"07",AUG:"08",SEP:"09",OCT:"10",NOV:"11",DEC:"12"};
+    return `${yyyy}-${months[d1y[2]]}-${String(Number(d1y[1])).padStart(2,"0")}`;
+  }
+  const d1=src.match(/\b(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\b/);
+  if(d1)return d1[1];
+  const d2=src.match(/\b(20\d{2}[-_/]\d{2}[-_/]\d{2})\b/);
+  return d2?String(d2[1]).replace(/[\/_]/g,"-"):"";
+}
+function detectMailFlight(subject,filename,body){
+  // V5.3 : l'identité du vol ne doit jamais être déduite d'abord d'un horodatage de fichier.
+  // Priorité stricte : SUJET -> CORPS MAIL -> NOM DE FICHIER.
+  const sources=[String(subject||""),String(body||""),String(filename||"")];
+  const out={airline:"",flightNumber:"",flightDate:""};
+  for(const src of sources){
+    const f=extractFlightTokenV53(src);
+    if(f){out.airline=f.airline;out.flightNumber=f.flightNumber;break}
+  }
+  for(const src of sources){
+    const d=extractFlightDateTokenV53(src);
+    if(d){out.flightDate=d;break}
+  }
+  return out;
+}
+
+function isOperationalCandidateMailV53(subject,bodyText,parts,flightBase){
+  // PREPASQ Historique est une source opérationnelle normale de backfill :
+  // aucune exclusion par expéditeur ; les mêmes règles d'identité et de contenu s'appliquent.
+  const subjectText=String(subject||"");
+  const body=String(bodyText||"");
+  const src=lot2Upper(`${subjectText}\n${body}`);
+  const hasFlight=!!(flightBase?.airline&&flightBase?.flightNumber&&isValidAirlineCodeV53(flightBase.airline));
+  if(!hasFlight)return false;
+  if(/\bPREPA\b|\bCHECK\s+IN\s+INFORMATION\b|\bJFE\s+SCREEN\s+COPY\b|\bLIST\s+OF\s*:|\bALTEA\b|\bSSR\b|\bFQTV\b|\bETKT\b|\bOUTBOUND\b|\bINBOUND\b/.test(src))return true;
+  // Source iPort (res2.iport.servers@res2.eu) : corps mail texte sans pièce jointe,
+  // format "LIST TOTAL:" propre à IZ/TB, jamais "LIST OF:". Sans ce cas dédié,
+  // ces mails sont ignorés IGNORED_NON_OPERATIONAL et invisibles côté fiche vol.
+  if(/^(IZ|TB)$/.test(String(flightBase?.airline||"").toUpperCase()) && lot2IsIportBodyV1(body))return true;
+  return (parts||[]).some(p=>{
+    const f=String(p?.filename||"").toLowerCase();
+    const mime=String(p?.mimeType||"").toLowerCase();
+    return /(?:altea_report|^pdf_.*(?:list|summary)|\.(?:pdf|eml|txt))/.test(f) || /(?:application\/pdf|message\/rfc822|text\/plain)/.test(mime);
+  });
+}
+
+async function sha256Hex(bytes){
+  const hash=await crypto.subtle.digest("SHA-256",bytes);
+  return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+async function getGmailAccessToken(env){
+  const cfg=await getIntegrationJson(env,"gmail_oauth");
+  const refreshToken=String(cfg?.refresh_token||"").trim();
+  const clientId=String(env.GOOGLE_CLIENT_ID||"").trim();
+  const clientSecret=String(env.GOOGLE_CLIENT_SECRET||"").trim();
+  if(!refreshToken||!clientId||!clientSecret)throw new Error("GMAIL API NON CONFIGURÉE");
+  const form=new URLSearchParams({client_id:clientId,client_secret:clientSecret,refresh_token:refreshToken,grant_type:"refresh_token"});
+  const resp=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:form.toString()});
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok||!data?.access_token)throw new Error(data?.error_description||data?.error||`GMAIL TOKEN HTTP ${resp.status}`);
+  return String(data.access_token);
+}
+
+async function gmailFetch(env,path,opts={}){
+  const token=await getGmailAccessToken(env);
+  const resp=await fetch(`${GMAIL_API_BASE}${path}`,{
+    ...opts,
+    headers:{"Authorization":`Bearer ${token}`,"Content-Type":"application/json",...(opts.headers||{})}
+  });
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok)throw new Error(data?.error?.message||data?.error_description||`GMAIL HTTP ${resp.status}`);
+  return data;
+}
+
+async function gmailStatus(env){
+  await ensureGmailPipelineTables(env);
+  const cfg=await getIntegrationJson(env,"gmail_oauth");
+  const row=await env.OPS_DB.prepare(`SELECT * FROM gmail_sync_state WHERE mailbox='me' LIMIT 1`).first();
+  const counters=await env.OPS_DB.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM gmail_messages) AS messages,
+      (SELECT COUNT(*) FROM import_files) AS files,
+      (SELECT COUNT(*) FROM import_file_versions) AS versions,
+      (SELECT COUNT(*) FROM import_jobs WHERE status='QUEUED') AS queued_jobs,
+      (SELECT COUNT(*) FROM import_jobs WHERE status='ERROR') AS error_jobs
+  `).first();
+  return {ok:true,connected:!!String(cfg?.refresh_token||"").trim(),connectedEmail:String(cfg?.email||""),connectedAt:String(cfg?.connected_at||""),syncState:row||null,counters:counters||{}};
+}
+
+
+/* =========================================================
+   V50.30 — GMAIL CLEAN V1
+   Document-first intake. Parsers SQ/TK/BJ/VF/TW remain untouched.
+   - one distinct content SHA = one distinct document
+   - same filename/subject/flight/date never deduplicates a document
+   - JFE/TK/TW body text is a virtual document
+   - per-airline Gmail status labels
+   ========================================================= */
+const CLEAN_LABEL_SUFFIX={
+  RECEIVED:'MAIL TRAITÉ',
+  IMPORTED:'IMPORTÉ',
+  INJECTED:'FICHE VOL OK',
+  VALIDATED:'FICHE VOL OK',
+  REVIEW:'ERREUR',
+  DUPLICATE:'IGNORÉ_DOUBLON',
+  ERROR:'ERREUR',
+  ERROR_IMPORT:'ERREUR',
+  ERROR_INJECT:'ERREUR'
+};
+const CLEAN_LABEL_COLORS={
+  // V50.34 — demande utilisateur : ERREUR rouge / TRAITÉ jaune / FICHE OK vert.
+  // MAIL TRAITÉ passe de bleu à jaune (même jaune que IGNORÉ_DOUBLON, déjà
+  // dans la palette Gmail validée par ce code).
+  'MAIL TRAITÉ':{backgroundColor:'#fad165',textColor:'#000000'},
+  'IMPORTÉ':{backgroundColor:'#ffad46',textColor:'#000000'},
+  'FICHE VOL OK':{backgroundColor:'#16a766',textColor:'#ffffff'},
+  'ERREUR':{backgroundColor:'#cc3a21',textColor:'#ffffff'},
+  'IGNORÉ_DOUBLON':{backgroundColor:'#fad165',textColor:'#000000'}
+};
+function cleanAirlineCodeV1(v){
+  const x=String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  return /^[A-Z0-9]{2}$/.test(x)&&!/^\d{2}$/.test(x)?x:'INCONNU';
+}
+function cleanStatusLabelNameV1(airline,state){
+  const suffix=CLEAN_LABEL_SUFFIX[String(state||'').toUpperCase()]||'ERREUR';
+  return `ALYZIA/${cleanAirlineCodeV1(airline)}/${suffix}`;
+}
+function cleanDocumentFileIdV1(airline,flightNumber,flightDate,docType,sha){
+  return `${String(airline||'UNK').toUpperCase()}|${String(flightNumber||'UNIDENTIFIED').toUpperCase()}|${String(flightDate||'UNKNOWN_DATE')}|${String(docType||'DOCUMENT')}|SHA256:${String(sha||'')}`;
+}
+async function applyCleanLabelColorV1(env,labelId,suffix){
+  const color=CLEAN_LABEL_COLORS[suffix];
+  if(!labelId||!color)return;
+  await gmailFetch(env,`/labels/${encodeURIComponent(labelId)}`,{method:'PATCH',body:JSON.stringify({color})}).catch(()=>{});
+}
+
+// La couleur n'est appliquée par ensureGmailLabel() qu'à la CRÉATION d'un
+// label : changer CLEAN_LABEL_COLORS ne repeint pas les labels déjà créés
+// dans Gmail (ex. ALYZIA/VF/MAIL TRAITÉ existe déjà en bleu). Cette fonction
+// repeint tous les labels ALYZIA/*/<suffixe> existants avec la couleur
+// actuelle de CLEAN_LABEL_COLORS.
+async function lot5RepaintCleanLabelColorsV1(env){
+  const labels=await gmailFetch(env,"/labels");
+  const all=Array.isArray(labels?.labels)?labels.labels:[];
+  let updated=0,unchanged=0,skipped=0,errors=0;
+  for(const l of all){
+    const name=String(l?.name||'');
+    if(!name.startsWith('ALYZIA/'))continue;
+    const suffix=name.split('/').pop();
+    const color=CLEAN_LABEL_COLORS[suffix];
+    if(!color){skipped++;continue}
+    if(l?.color?.backgroundColor===color.backgroundColor && l?.color?.textColor===color.textColor){unchanged++;continue}
+    try{
+      await gmailFetch(env,`/labels/${encodeURIComponent(l.id)}`,{method:'PATCH',body:JSON.stringify({color})});
+      updated++;
+    }catch(e){errors++;}
+  }
+  GMAIL_LABEL_ID_CACHE=null;
+  return {ok:true,total:all.length,updated,unchanged,skipped,errors};
+}
+
+/*
+ * Certains mails portent PLUSIEURS étiquettes de statut à la fois (ex.
+ * ALYZIA/3O/MAIL TRAITÉ ET ALYZIA/3O/FICHE VOL OK simultanément, ou même
+ * un mail ambigu étiqueté FICHE VOL OK pour une dizaine de compagnies
+ * différentes en même temps). Cause : setGmailPipelineState() ne recolle
+ * les étiquettes (ajout + retrait de toutes les autres) QUE lorsqu'un mail
+ * change réellement de statut ("transition"). Un mail resté au même statut
+ * depuis une ancienne version du code — d'avant que ce nettoyage n'existe,
+ * ou d'avant une re-détection de compagnie — garde donc pour toujours les
+ * étiquettes périmées d'alors, jamais retirées depuis.
+ *
+ * Ce passage force le réalignement : pour chaque mail, réapplique son statut
+ * ACTUEL en base (sans le recalculer), ce qui déclenche le nettoyage complet
+ * de setGmailPipelineState() même si le statut ne "change" pas. N'affecte ni
+ * les fiches de vol, ni le code des parseurs — uniquement les étiquettes.
+ */
+async function lot5ForceRelabelAllV1(env,limit=40){
+  // Chaque mail relabellisé = 1 vrai appel réseau à l'API Gmail (modify).
+  // Un lot par défaut trop gros (1500) dépasse la limite de sous-requêtes
+  // par requête du Worker et fait planter l'appel entier sans rien renvoyer
+  // ("ça plante" côté utilisateur, aucune réponse visible). Défaut prudent,
+  // cliquable plusieurs fois de suite pour vider tout le backlog.
+  await ensureGmailPipelineTables(env);
+  // ASC (le plus ancien d'abord), jamais DESC : setGmailPipelineState met à
+  // jour updated_at à chaque appel, donc un tri DESC ferait toujours
+  // retomber les mêmes lignes tout juste corrigées en tête de liste au
+  // clic suivant — boucle infinie sur le même lot, le reste du backlog
+  // n'est jamais atteint (même correctif déjà appliqué à
+  // lot5ReconcileGmailStatesV53, voir plus bas).
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,status FROM gmail_messages
+    WHERE status<>'IGNORED_NON_OPERATIONAL' AND status<>''
+    ORDER BY updated_at ASC LIMIT ?
+  `).bind(Math.max(1,Math.min(200,Number(limit||40)))).all()).results||[];
+  let relabeled=0,skipped=0,errors=0,goneDeleted=0;
+  const sampleErrors=[];
+  for(const r of rows){
+    const messageId=String(r.gmail_message_id||'');
+    const status=String(r.status||'').toUpperCase();
+    if(!messageId || !GMAIL_PIPELINE_STATE_KEYS.has(status)){skipped++;continue}
+    try{
+      await setGmailPipelineState(env,messageId,status,{archive:status!=='RECEIVED'});
+      relabeled++;
+    }catch(e){
+      const msg=String(e?.message||e);
+      // Le mail a été supprimé directement dans Gmail depuis : notre base
+      // garde encore sa trace mais il n'y a plus rien à réétiqueter. On
+      // nettoie la ligne fantôme au lieu de la retenter à chaque lot (elle
+      // échouerait indéfiniment et prendrait la place de vrais correctifs).
+      if(/not found/i.test(msg)){
+        await env.OPS_DB.prepare(`DELETE FROM gmail_messages WHERE gmail_message_id=?`).bind(messageId).run().catch(()=>{});
+        goneDeleted++;
+        continue;
+      }
+      errors++;
+      if(sampleErrors.length<5)sampleErrors.push({messageId,status,error:msg});
+    }
+  }
+  return {ok:true,checked:rows.length,relabeled,goneDeleted,skipped,errors,sampleErrors};
+}
+
+function extractHeader(message,name){
+  const wanted=String(name||'').toLowerCase();
+  const headers=Array.isArray(message?.payload?.headers)?message.payload.headers:[];
+  const hit=headers.find(h=>String(h?.name||'').toLowerCase()===wanted);
+  return String(hit?.value||'');
+}
+
+function walkParts(part,out=[],path='0'){
+  if(!part)return out;
+  const attachmentId=String(part?.body?.attachmentId||'');
+  const filename=String(part?.filename||'');
+  if(attachmentId || filename){
+    // Stable across Gmail replays: MIME tree path, not Gmail attachmentId.
+    part.__cleanSourcePath=String(path);
+    out.push(part);
+  }
+  const children=Array.isArray(part?.parts)?part.parts:[];
+  children.forEach((child,i)=>walkParts(child,out,`${path}.${i}`));
+  return out;
+}
+
+async function extractPlainBodyFullV1(env,message){
+  let text=''; let htmlBody='';
+  async function walk(p){
+    if(!p)return;
+    const mt=String(p.mimeType||'').toLowerCase();
+    if(mt==='text/plain'&&!text){
+      if(p.body?.data)text=b64urlToText(p.body.data);
+      else if(p.body?.attachmentId){
+        const a=await gmailFetch(env,`/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(p.body.attachmentId)}`);
+        text=b64urlToText(a?.data||'');
+      }
+    }
+    if(mt==='text/html'&&!htmlBody){
+      if(p.body?.data)htmlBody=b64urlToText(p.body.data);
+      else if(p.body?.attachmentId){
+        const a=await gmailFetch(env,`/messages/${encodeURIComponent(message.id)}/attachments/${encodeURIComponent(p.body.attachmentId)}`);
+        htmlBody=b64urlToText(a?.data||'');
+      }
+    }
+    for(const c of p.parts||[])await walk(c);
+  }
+  await walk(message.payload);
+  if(text.trim())return text;
+  if(!htmlBody.trim())return '';
+  return htmlBody
+    .replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/p\s*>/gi,'\n')
+    .replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&')
+    .replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+async function ensureGmailLabel(env,name){
+  if(GMAIL_LABEL_ID_CACHE?.has(name))return GMAIL_LABEL_ID_CACHE.get(name);
+  const labels=await gmailFetch(env,"/labels");
+  GMAIL_LABEL_ID_CACHE=new Map((labels.labels||[]).map(l=>[String(l.name||""),String(l.id||"")]));
+  const found=GMAIL_LABEL_ID_CACHE.get(name);
+  if(found)return found;
+  const created=await gmailFetch(env,"/labels",{method:"POST",body:JSON.stringify({name,labelListVisibility:"labelShow",messageListVisibility:"show"})});
+  if(created?.id){
+    GMAIL_LABEL_ID_CACHE.set(name,String(created.id));
+    const suffix=String(name||'').split('/').pop();
+    await applyCleanLabelColorV1(env,String(created.id),suffix).catch(()=>{});
+  }
+  return created.id;
+}
+
+async function applyGmailLabel(env,messageId,labelName){
+  if(!messageId||!labelName)return;
+  const labelId=await ensureGmailLabel(env,labelName);
+  await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/modify`,{method:"POST",body:JSON.stringify({addLabelIds:[labelId]})});
+}
+
+async function setGmailPipelineState(env,messageId,state,{archive=true}={}){
+  const key=String(state||'').toUpperCase();
+  if(!messageId||!GMAIL_PIPELINE_STATE_KEYS.has(key))return;
+  if(!GMAIL_LABEL_ID_CACHE){
+    const labels=await gmailFetch(env,"/labels");
+    GMAIL_LABEL_ID_CACHE=new Map((labels.labels||[]).map(x=>[String(x.name||""),String(x.id||"")]));
+  }
+  const gm=await env.OPS_DB.prepare(`SELECT airline FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first().catch(()=>null);
+  const airline=cleanAirlineCodeV1(gm?.airline||'');
+  const desiredName=cleanStatusLabelNameV1(airline,key);
+  let desiredId=GMAIL_LABEL_ID_CACHE.get(desiredName)||'';
+  if(!desiredId){desiredId=await ensureGmailLabel(env,desiredName);GMAIL_LABEL_ID_CACHE.set(desiredName,desiredId)}
+
+  // Remove only ALYZIA processing-status labels (old global scheme + new company scheme).
+  const suffixes=new Set(Object.values(CLEAN_LABEL_SUFFIX));
+  const removeIds=[];
+  for(const [name,id] of GMAIL_LABEL_ID_CACHE.entries()){
+    if(!id||name===desiredName)continue;
+    const oldGlobal=Object.values(GMAIL_LABELS).includes(name);
+    const p=String(name).split('/');
+    const cleanCompany=name.startsWith('ALYZIA/')&&p.length>=3&&suffixes.has(p[p.length-1]);
+    if(oldGlobal||cleanCompany)removeIds.push(id);
+  }
+  if(archive && key!=='RECEIVED')removeIds.push('INBOX');
+  const uniqueRemove=[...new Set(removeIds)].filter(id=>id&&id!==desiredId);
+  await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/modify`,{
+    method:'POST',body:JSON.stringify({addLabelIds:[desiredId],removeLabelIds:uniqueRemove})
+  });
+  await env.OPS_DB.prepare(`UPDATE gmail_messages SET status=?,label_state=?,updated_at=CURRENT_TIMESTAMP WHERE gmail_message_id=?`).bind(key,key,messageId).run().catch(()=>{});
+}
+async function clearAlyziaPipelineLabels(env,messageId){
+  if(!messageId)return;
+  if(!GMAIL_LABEL_ID_CACHE){
+    const labels=await gmailFetch(env,"/labels");
+    GMAIL_LABEL_ID_CACHE=new Map((labels.labels||[]).map(x=>[String(x.name||""),String(x.id||"")]));
+  }
+  const suffixes=new Set(Object.values(CLEAN_LABEL_SUFFIX));
+  const remove=[];
+  for(const [name,id] of GMAIL_LABEL_ID_CACHE.entries()){
+    const oldGlobal=Object.values(GMAIL_LABELS).includes(name);
+    const p=String(name).split('/');
+    const cleanCompany=name.startsWith('ALYZIA/')&&p.length>=3&&suffixes.has(p[p.length-1]);
+    if((oldGlobal||cleanCompany)&&id)remove.push(id);
+  }
+  if(remove.length)await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/modify`,{method:'POST',body:JSON.stringify({removeLabelIds:[...new Set(remove)]})});
+}
+
+function cleanNormalizeLinkSourceKindV35(v){
+  return String(v||'ATTACHMENT').trim().toUpperCase();
+}
+
+function cleanNormalizeLinkSourceRefV35(v){
+  return String(v||'')
+    .trim()
+    .replace(/\\+/g,'/')
+    .replace(/:{2,}/g,':')
+    .replace(/\/{2,}/g,'/');
+}
+
+function cleanNormalizeParentVersionV35(v){
+  return String(v||'').trim();
+}
+
+async function cleanLinkMessageDocumentV3(env,{
+  gmailMessageId,versionId,fileId,sourceKind='ATTACHMENT',sourceRef='',parentVersionId='',isDuplicate=false
+}){
+  if(!gmailMessageId||!versionId||!fileId){
+    throw new Error(`LINK_DOCUMENT_INVALID:${String(gmailMessageId||'')}|${String(versionId||'')}|${String(fileId||'')}`);
+  }
+
+  const kMessage=String(gmailMessageId);
+  const kVersion=String(versionId);
+  const kFile=String(fileId);
+  const kKind=cleanNormalizeLinkSourceKindV35(sourceKind);
+  const kRef=cleanNormalizeLinkSourceRefV35(sourceRef);
+  const kParent=cleanNormalizeParentVersionV35(parentVersionId);
+
+  // R3.5 idempotence rule:
+  // provenance identity = message + canonical version + normalized source kind + normalized source ref.
+  // parent_version_id and is_duplicate are attributes, not part of identity.
+  let existing=await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,version_id,file_id,source_kind,source_ref,parent_version_id,is_duplicate
+    FROM gmail_message_documents
+    WHERE gmail_message_id=? AND version_id=? AND source_kind=? AND source_ref=?
+    LIMIT 1
+  `).bind(kMessage,kVersion,kKind,kRef).first();
+
+  // R3.6 migration bridge: old replays used unstable Gmail attachment ids.
+  // For a given message + canonical version + semantic source kind, reuse one old row
+  // instead of adding another provenance row. The row is normalized to the new stable ref.
+  if(!existing && (kKind==='ATTACHMENT' || kKind.startsWith('EML_'))){
+    existing=await env.OPS_DB.prepare(`
+      SELECT gmail_message_id,version_id,file_id,source_kind,source_ref,parent_version_id,is_duplicate
+      FROM gmail_message_documents
+      WHERE gmail_message_id=? AND version_id=? AND source_kind=?
+      ORDER BY created_at ASC
+      LIMIT 1
+    `).bind(kMessage,kVersion,kKind).first();
+
+    if(existing){
+      await env.OPS_DB.prepare(`
+        UPDATE gmail_message_documents
+        SET source_ref=?,file_id=?,parent_version_id=?,is_duplicate=?
+        WHERE gmail_message_id=? AND version_id=? AND source_kind=? AND source_ref=?
+      `).bind(
+        kRef,kFile,kParent,(Number(existing.is_duplicate||0)===1 || isDuplicate)?1:0,
+        kMessage,kVersion,kKind,String(existing.source_ref||'')
+      ).run();
+      existing={...existing,source_ref:kRef,file_id:kFile,parent_version_id:kParent,is_duplicate:(Number(existing.is_duplicate||0)===1 || isDuplicate)?1:0};
+    }
+  }
+
+  if(existing){
+    const nextDup=(Number(existing.is_duplicate||0)===1 || isDuplicate)?1:0;
+    if(String(existing.file_id||'')!==kFile
+      || String(existing.parent_version_id||'')!==kParent
+      || Number(existing.is_duplicate||0)!==nextDup){
+      await env.OPS_DB.prepare(`
+        UPDATE gmail_message_documents
+        SET file_id=?,parent_version_id=?,is_duplicate=?
+        WHERE gmail_message_id=? AND version_id=? AND source_kind=? AND source_ref=?
+      `).bind(
+        kFile,kParent,nextDup,
+        kMessage,kVersion,kKind,kRef
+      ).run();
+    }
+    return {ok:true,created:false,row:{
+      gmail_message_id:kMessage,version_id:kVersion,file_id:kFile,
+      source_kind:kKind,source_ref:kRef,parent_version_id:kParent,is_duplicate:nextDup
+    }};
+  }
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO gmail_message_documents
+      (gmail_message_id,version_id,file_id,source_kind,source_ref,parent_version_id,is_duplicate,created_at)
+    VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+  `).bind(
+    kMessage,kVersion,kFile,kKind,kRef,kParent,isDuplicate?1:0
+  ).run();
+
+  return {ok:true,created:true,row:{
+    gmail_message_id:kMessage,version_id:kVersion,file_id:kFile,
+    source_kind:kKind,source_ref:kRef,parent_version_id:kParent,is_duplicate:isDuplicate?1:0
+  }};
+}
+
+function cleanDecodeQuotedPrintableV3(s){
+  const src=String(s||'').replace(/=\r?\n/g,'');
+  const bytes=[];
+  for(let i=0;i<src.length;i++){
+    if(src[i]==='=' && /^[0-9A-Fa-f]{2}$/.test(src.slice(i+1,i+3))){
+      bytes.push(parseInt(src.slice(i+1,i+3),16)); i+=2;
+    }else{
+      const enc=new TextEncoder().encode(src[i]);
+      for(const b of enc)bytes.push(b);
+    }
+  }
+  try{return new TextDecoder().decode(new Uint8Array(bytes))}catch(e){return src}
+}
+
+function cleanDecodeMimeWordV3(v){
+  return String(v||'').replace(/=\?([^?]+)\?([bqBQ])\?([^?]+)\?=/g,(_,cs,mode,data)=>{
+    try{
+      if(String(mode).toUpperCase()==='B'){
+        const bin=atob(String(data).replace(/\s+/g,''));
+        const bytes=new Uint8Array(bin.length);
+        for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+        return new TextDecoder().decode(bytes);
+      }
+      return cleanDecodeQuotedPrintableV3(String(data).replace(/_/g,' '));
+    }catch(e){return data}
+  });
+}
+
+function cleanParseHeadersV3(raw){
+  const unfolded=String(raw||'').replace(/\r?\n[ \t]+/g,' ');
+  const out={};
+  for(const line of unfolded.split(/\r?\n/)){
+    const i=line.indexOf(':'); if(i<1)continue;
+    const k=line.slice(0,i).trim().toLowerCase();
+    const v=line.slice(i+1).trim();
+    out[k]=out[k]?`${out[k]}, ${v}`:v;
+  }
+  return out;
+}
+
+function cleanHeaderParamV3(value,name){
+  const s=String(value||'');
+  const re=new RegExp(`(?:^|;)\\s*${name}\\*?\\s*=\\s*(?:"([^"]*)"|([^;]+))`,'i');
+  const m=s.match(re);
+  if(!m)return '';
+  let v=String(m[1]??m[2]??'').trim();
+  v=v.replace(/^UTF-8''/i,'');
+  try{v=decodeURIComponent(v)}catch(e){}
+  return cleanDecodeMimeWordV3(v);
+}
+
+function cleanBase64ToBytesV3(s){
+  try{
+    const bin=atob(String(s||'').replace(/\s+/g,''));
+    const out=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+    return out;
+  }catch(e){return new Uint8Array()}
+}
+
+function cleanQuotedPrintableToBytesV3(s){
+  const txt=cleanDecodeQuotedPrintableV3(s);
+  return new TextEncoder().encode(txt);
+}
+
+function cleanSplitMimeEntityV3(raw){
+  const src=String(raw||'').replace(/\r\n/g,'\n');
+  const idx=src.indexOf('\n\n');
+  if(idx<0)return {headers:{},body:src};
+  return {headers:cleanParseHeadersV3(src.slice(0,idx)),body:src.slice(idx+2)};
+}
+
+function cleanParseEmlRecursiveV3(rawText,depth=0){
+  if(depth>3)return {headers:{},textBodies:[],attachments:[]};
+  const entity=cleanSplitMimeEntityV3(rawText);
+  const h=entity.headers;
+  const ct=String(h['content-type']||'text/plain');
+  const disp=String(h['content-disposition']||'');
+  const enc=String(h['content-transfer-encoding']||'').toLowerCase();
+  const boundary=cleanHeaderParamV3(ct,'boundary');
+  const filename=cleanHeaderParamV3(disp,'filename')||cleanHeaderParamV3(ct,'name');
+  const mime=ct.split(';')[0].trim().toLowerCase()||'text/plain';
+
+  if(mime.startsWith('multipart/') && boundary){
+    const marker=`--${boundary}`;
+    let pieces=entity.body.split(marker).slice(1);
+    if(!pieces.length){
+      // Repli tolérant : certains expéditeurs (constaté sur de vrais mails
+      // Amadeus pour AI/TU) déclarent dans l'en-tête une frontière MIME qui
+      // ne correspond pas, tiret pour tiret, aux lignes de séparation
+      // réellement utilisées dans le corps (un tiret de moins que prévu).
+      // Sans ce repli, ces mails ne donnent jamais aucun texte ni pièce
+      // jointe extraite, même quand un PDF est bien présent.
+      const core=boundary.replace(/^-+/,'');
+      if(core){
+        const fuzzyMarker=entity.body.match(new RegExp('-+'+core.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+        if(fuzzyMarker)pieces=entity.body.split(fuzzyMarker[0]).slice(1);
+      }
+    }
+    const textBodies=[],attachments=[];
+    for(let p of pieces){
+      p=p.replace(/^\r?\n/,'').replace(/\r?\n--\s*$/,'').trim();
+      if(!p||p==='--')continue;
+      const child=cleanParseEmlRecursiveV3(p,depth+1);
+      textBodies.push(...(child.textBodies||[]));
+      attachments.push(...(child.attachments||[]));
+    }
+    return {headers:h,textBodies,attachments};
+  }
+
+  let bytes;
+  if(enc==='base64')bytes=cleanBase64ToBytesV3(entity.body);
+  else if(enc==='quoted-printable')bytes=cleanQuotedPrintableToBytesV3(entity.body);
+  else bytes=new TextEncoder().encode(entity.body);
+
+  if(mime==='message/rfc822'){
+    const nestedText=new TextDecoder().decode(bytes);
+    const nested=cleanParseEmlRecursiveV3(nestedText,depth+1);
+    return {
+      headers:h,
+      textBodies:nested.textBodies||[],
+      attachments:[
+        {filename:filename||'nested_message.eml',mimeType:'message/rfc822',bytes},
+        ...(nested.attachments||[])
+      ]
+    };
+  }
+
+  const isText=mime==='text/plain'||mime==='text/html';
+  const isAttachment=!!filename || /attachment/i.test(disp);
+  if(isText && !isAttachment){
+    let t=new TextDecoder().decode(bytes);
+    if(mime==='text/html'){
+      t=t.replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/p\s*>/gi,'\n').replace(/<[^>]+>/g,' ');
+    }
+    return {headers:h,textBodies:[lot2CleanText(t)],attachments:[]};
+  }
+  return {headers:h,textBodies:[],attachments:[{filename:filename||'eml_part.bin',mimeType:mime,bytes}]};
+}
+
+async function cleanProbeAttachmentIdentitySQV3(env,messageId,subject,bodyText,parts,cache){
+  const current=detectMailFlight(subject,'',bodyText);
+  const complete=()=>current.airline==='SQ' && current.flightNumber && current.flightDate;
+  if(complete())return current;
+
+  for(const part of parts||[]){
+    if(complete())break;
+    const attachmentId=String(part.body?.attachmentId||'');
+    if(!attachmentId)continue;
+    try{
+      let bytes=cache.get(attachmentId);
+      if(!bytes){
+        const att=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
+        bytes=b64urlToBytes(att.data||''); cache.set(attachmentId,bytes);
+      }
+      const filename=String(part.filename||'');
+      const mime=String(part.mimeType||'').toLowerCase();
+      let probe=filename;
+      if(/\.eml$/i.test(filename)||mime==='message/rfc822'){
+        const raw=new TextDecoder().decode(bytes);
+        const parsed=cleanParseEmlRecursiveV3(raw);
+        probe += '\n'+raw.slice(0,180000)+'\n'+(parsed.textBodies||[]).join('\n');
+      }else if(/\.pdf$/i.test(filename)||mime.includes('pdf')){
+        const ex=await lot2ExtractPdfTextFromBytes(bytes).catch(()=>({text:''}));
+        probe += '\n'+String(ex?.text||'').slice(0,120000);
+      }else if(mime.startsWith('text/')||/\.(txt|csv|html?)$/i.test(filename)){
+        probe += '\n'+new TextDecoder().decode(bytes).slice(0,120000);
+      }
+      const found=detectMailFlight(subject,filename,`${bodyText||''}\n${probe}`);
+      if(!current.airline && found.airline)current.airline=found.airline;
+      if(!current.flightNumber && found.flightNumber)current.flightNumber=found.flightNumber;
+      if(!current.flightDate && found.flightDate)current.flightDate=found.flightDate;
+      if(current.airline && current.airline!=='SQ')break;
+    }catch(e){}
+  }
+  return current;
+}
+
+
+async function cleanFindExistingVersionByShaV33(env,{sha,airline,flightNumber,flightDate,receivedAt}){
+  if(!sha)return null;
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT
+      v.version_id,
+      v.file_id,
+      v.gmail_message_id,
+      v.attachment_id,
+      v.filename_original,
+      v.mime_type,
+      v.sha256,
+      v.created_at,
+      f.airline,
+      f.flight_number,
+      f.flight_date,
+      f.document_type
+    FROM import_file_versions v
+    LEFT JOIN import_files f ON f.file_id=v.file_id
+    WHERE v.sha256=?
+    ORDER BY v.created_at ASC
+    LIMIT 100
+  `).bind(String(sha)).all()).results||[];
+
+  const a=String(airline||'').toUpperCase();
+  const fn=String(flightNumber||'').toUpperCase();
+  const fd=lot5CanonicalFlightDate(flightDate||'',receivedAt)||String(flightDate||'');
+
+  for(const r of rows){
+    const ra=String(r.airline||'').toUpperCase();
+    const rf=String(r.flight_number||'').toUpperCase();
+    const rd=lot5CanonicalFlightDate(r.flight_date||'',receivedAt)||String(r.flight_date||'');
+    if(ra===a && rf===fn && rd===fd){
+      return r;
+    }
+  }
+  return null;
+}
+
+async function cleanStoreDocumentV3(env,{
+  messageId,attachmentId,filename,mime,bytes,receivedAt,flight,docType,
+  sourceKind='ATTACHMENT',sourceRef='',parentVersionId=''
+}){
+  const airline=String(flight?.airline||'UNK').toUpperCase();
+  const flightNumber=String(flight?.flightNumber||'UNIDENTIFIED').toUpperCase();
+  const flightDate=lot5CanonicalFlightDate(flight?.flightDate||'',receivedAt)||String(flight?.flightDate||'UNKNOWN_DATE');
+  const norm=normalizeFilename(filename);
+  const sha=await sha256Hex(bytes);
+
+  // R3.3 — SHA is the duplicate criterion.
+  // Reuse an already stored version for the SAME canonical flight/date,
+  // regardless of legacy file_id, filename or document_type.
+  const shaExisting=await cleanFindExistingVersionByShaV33(env,{
+    sha,airline,flightNumber,flightDate,receivedAt
+  });
+
+  if(shaExisting?.version_id && shaExisting?.file_id){
+    const versionId=String(shaExisting.version_id);
+    const fileId=String(shaExisting.file_id);
+    await cleanLinkMessageDocumentV3(env,{
+      gmailMessageId:messageId,
+      versionId,
+      fileId,
+      sourceKind,
+      sourceRef,
+      parentVersionId,
+      isDuplicate:true
+    });
+    await recordImportChange(env,{
+      scope:'FILE',
+      airline,flightNumber,flightDate,
+      gmailMessageId:messageId,fileId,versionId,
+      changeType:'SHA_DUPLICATE_LINKED_V33',
+      after:{filename,sha,sourceKind,sourceRef,reusedVersion:true}
+    });
+    return {added:0,updated:0,duplicate:1,fileId,versionId,sha,created:false,reused:true};
+  }
+
+  const fileId=cleanDocumentFileIdV1(airline,flightNumber,flightDate,docType,sha);
+  const versionId=`${fileId}|V1`;
+  const r2Key=`prepa/${flightDate}/${airline}/${flightNumber}/${messageId}/${sha}_${norm}`.replace(/\s+/g,'_');
+
+  const existingVersion=await env.OPS_DB.prepare(`SELECT version_id,file_id FROM import_file_versions WHERE version_id=? LIMIT 1`).bind(versionId).first();
+  if(existingVersion){
+    await cleanLinkMessageDocumentV3(env,{gmailMessageId:messageId,versionId,fileId,sourceKind,sourceRef,parentVersionId,isDuplicate:true});
+    await recordImportChange(env,{scope:'FILE',airline,flightNumber,flightDate,gmailMessageId:messageId,fileId,versionId,changeType:'DUPLICATE_LINKED',after:{filename,sha,sourceKind,sourceRef}});
+    return {added:0,updated:0,duplicate:1,fileId,versionId,sha,created:false,reused:true};
+  }
+
+  await env.OPS_FILES.put(r2Key,bytes,{httpMetadata:{contentType:mime},customMetadata:{
+    gmail_message_id:messageId,filename_original:filename,sha256:sha,document_type:docType,
+    source_kind:sourceKind,parent_version_id:parentVersionId||''
+  }});
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO import_file_versions
+      (version_id,file_id,gmail_message_id,attachment_id,filename_original,filename_normalized,mime_type,file_size,sha256,r2_key,document_time,received_at,status,is_active,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'STORED', 1, CURRENT_TIMESTAMP)
+  `).bind(versionId,fileId,messageId,attachmentId||sourceRef||sourceKind,filename,norm,mime,bytes.byteLength,sha,r2Key,receivedAt,receivedAt).run();
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO import_files
+      (file_id,active_version_id,airline,flight_number,flight_date,document_type,filename_normalized,status,latest_document_time,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(file_id) DO UPDATE SET
+      active_version_id=excluded.active_version_id,
+      airline=excluded.airline,
+      flight_number=excluded.flight_number,
+      flight_date=excluded.flight_date,
+      document_type=excluded.document_type,
+      filename_normalized=excluded.filename_normalized,
+      status='ADDED',
+      latest_document_time=excluded.latest_document_time,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(fileId,versionId,airline,flightNumber,flightDate,docType,norm,'ADDED',receivedAt).run();
+
+  await cleanLinkMessageDocumentV3(env,{gmailMessageId:messageId,versionId,fileId,sourceKind,sourceRef,parentVersionId,isDuplicate:false});
+  await recordImportChange(env,{scope:'FILE',airline,flightNumber,flightDate,gmailMessageId:messageId,fileId,versionId,changeType:'ADDED_DOCUMENT_V3',after:{filename,sha,r2Key,sourceKind,sourceRef}});
+
+  const priority=docType==='ALL_CUSTOMERS'?10:docType==='PDF'?50:70;
+  await env.OPS_DB.prepare(`
+    INSERT INTO import_jobs
+      (job_id,job_type,priority,airline,flight_number,flight_date,file_id,version_id,gmail_message_id,status,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,'QUEUED',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(job_id) DO NOTHING
+  `).bind(`PARSE|${versionId}`,'PARSE_FILE',priority,airline,flightNumber,flightDate,fileId,versionId,messageId).run();
+
+  return {added:1,updated:0,duplicate:0,fileId,versionId,sha,created:true};
+}
+
+// Déplie récursivement un .eml imbriqué (mail transféré contenant un autre
+// mail complet en pièce jointe message/rfc822) pour extraire ce qu'il
+// contient réellement — corps texte opérationnel et pièces jointes (PDF,
+// .eml imbriqué à un niveau de plus...). Généralisé à TOUTES les
+// compagnies (pas seulement SQ, seule bénéficiaire jusqu'ici) : si le mail
+// extérieur ne dit que "Please find report attached" et que le vrai
+// rapport est dans un message transféré, ce rapport doit être traité
+// exactement comme s'il avait été joint directement — qu'il y ait eu un
+// transfert ou non ne change rien au fond du traitement.
+async function cleanExpandNestedEmlV3(env,{messageId,outerVersionId,outerAttachmentId,outerFilename,bytes,subject,receivedAt,flightBase}){
+  const raw=new TextDecoder().decode(bytes);
+  const parsed=cleanParseEmlRecursiveV3(raw);
+  let added=0,duplicate=0,virtualText=0,nested=0;
+  let idx=0;
+
+  for(const body of parsed.textBodies||[]){
+    const t=lot2CleanText(body);
+    if(t.length<20)continue;
+    const found=detectMailFlight(subject,outerFilename,t);
+    const flight={
+      airline:found.airline||flightBase.airline,
+      flightNumber:found.flightNumber||flightBase.flightNumber,
+      flightDate:found.flightDate||flightBase.flightDate
+    };
+    const kind=plainTextOperationalKindV53(subject,t);
+    if(!kind && !/\bJFE\s+SCREEN\s+COPY\b/i.test(t))continue;
+    const filename=/\bJFE\s+SCREEN\s+COPY\b/i.test(t)?`jfe_screen_copy_eml_${String(++idx).padStart(2,'0')}.txt`:`sq_eml_body_${String(++idx).padStart(2,'0')}.txt`;
+    const docType=/JFE\s+SCREEN\s+COPY/i.test(t)?'OPERATIONAL_INFO':(flight.airline==='SQ'?'SQ_TEXT':'OPERATIONAL_INFO');
+    const r=await cleanStoreDocumentV3(env,{
+      messageId,attachmentId:`${outerAttachmentId}:BODY:${idx}`,filename,mime:'text/plain; charset=UTF-8',
+      bytes:new TextEncoder().encode(t),receivedAt,flight,docType,
+      sourceKind:'EML_BODY',sourceRef:cleanNormalizeLinkSourceRefV35(`${outerAttachmentId}:BODY:${idx}`),parentVersionId:outerVersionId
+    });
+    added+=r.added||0;duplicate+=r.duplicate||0;virtualText++;nested++;
+  }
+
+  let ai=0;
+  for(const child of parsed.attachments||[]){
+    ai++;
+    const filename=String(child.filename||`eml_attachment_${ai}.bin`);
+    const mime=String(child.mimeType||'application/octet-stream');
+    const childBytes=child.bytes instanceof Uint8Array?child.bytes:new Uint8Array(child.bytes||[]);
+    if(!childBytes.byteLength)continue;
+
+    let probe='';
+    if(/\.pdf$/i.test(filename)||mime.includes('pdf')){
+      const ex=await lot2ExtractPdfTextFromBytes(childBytes).catch(()=>({text:''}));
+      probe=String(ex?.text||'');
+    }else if(/\.eml$/i.test(filename)||mime==='message/rfc822'||mime.startsWith('text/')){
+      probe=new TextDecoder().decode(childBytes);
+    }
+    const found=detectMailFlight(subject,filename,probe);
+    const flight={
+      airline:found.airline||flightBase.airline,
+      flightNumber:found.flightNumber||flightBase.flightNumber,
+      flightDate:found.flightDate||flightBase.flightDate
+    };
+    const docType=guessDocumentType(filename,mime,probe.slice(0,5000));
+    const r=await cleanStoreDocumentV3(env,{
+      messageId,attachmentId:`${outerAttachmentId}:ATT:${ai}`,filename,mime,bytes:childBytes,receivedAt,flight,docType,
+      sourceKind:'EML_ATTACHMENT',sourceRef:cleanNormalizeLinkSourceRefV35(`${outerAttachmentId}:ATT:${ai}`),parentVersionId:outerVersionId
+    });
+    added+=r.added||0;duplicate+=r.duplicate||0;nested++;
+
+    if((/\.eml$/i.test(filename)||mime==='message/rfc822') && r.versionId){
+      const sub=await cleanExpandNestedEmlV3(env,{
+        messageId,outerVersionId:r.versionId,outerAttachmentId:`${outerAttachmentId}:ATT:${ai}`,
+        outerFilename:filename,bytes:childBytes,subject,receivedAt,flightBase:flight
+      }).catch(()=>({added:0,duplicate:0,virtualText:0,nested:0}));
+      added+=sub.added||0;duplicate+=sub.duplicate||0;virtualText+=sub.virtualText||0;nested+=sub.nested||0;
+    }
+  }
+  return {added,duplicate,virtualText,nested};
+}
+
+async function recordImportChange(env,row){
+  await env.OPS_DB.prepare(`
+    INSERT INTO import_changes
+      (scope,airline,flight_number,flight_date,gmail_message_id,file_id,version_id,change_type,before_json,after_json,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+  `).bind(row.scope||"FILE",row.airline||"",row.flightNumber||"",row.flightDate||"",row.gmailMessageId||"",row.fileId||"",row.versionId||"",row.changeType||"",JSON.stringify(row.before||null),JSON.stringify(row.after||null)).run();
+}
+
+
+function mailRawDateToIso(raw,receivedAt){
+  raw=String(raw||"").toUpperCase().trim();
+  if(/^20\d{2}-\d{2}-\d{2}$/.test(raw))return raw;
+  const compact=raw.replace(/[\s\/_-]+/g,"");
+  if(/^20\d{6}$/.test(compact))return `${compact.slice(0,4)}-${compact.slice(4,6)}-${compact.slice(6,8)}`;
+  const months={JAN:"01",FEB:"02",MAR:"03",APR:"04",MAY:"05",JUN:"06",JUL:"07",AUG:"08",SEP:"09",OCT:"10",NOV:"11",DEC:"12"};
+  const withYear=compact.match(/^(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2}|20\d{2})$/);
+  if(withYear){
+    const yy=String(withYear[3]);
+    const yyyy=yy.length===2?`20${yy}`:yy;
+    return `${yyyy}-${months[withYear[2]]}-${String(Number(withYear[1])).padStart(2,"0")}`;
+  }
+  const m=compact.match(/^(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$/);
+  if(!m)return raw;
+  let y=new Date(receivedAt||Date.now()).getUTCFullYear();
+  const ctxM=new Date(receivedAt||Date.now()).getUTCMonth()+1;
+  const targetM=Number(months[m[2]]);
+  if(ctxM===12 && targetM===1)y+=1;
+  if(ctxM===1 && targetM===12)y-=1;
+  return `${y}-${months[m[2]]}-${String(Number(m[1])).padStart(2,"0")}`;
+}
+
+function plainTextOperationalKindV53(subject,body,flightBase){
+  const src=lot2Upper(`${subject||""}\n${body||""}`);
+  const tk=/\bTK\d{1,4}\b/.test(src) && /\bCHECK\s+IN\s+INFORMATION\b/.test(src);
+  if(tk)return "TK_TEXT";
+  const jfe=/\bJFE\s+SCREEN\s+COPY\b/.test(src);
+  if(jfe)return "JFE_SCREEN_COPY";
+  if(/^(IZ|TB)$/.test(String(flightBase?.airline||"").toUpperCase()) && lot2IsIportBodyV1(body))return "IPORT_TEXT";
+  // V3.5: TW et autres prépas texte reconnues par identité vol + marqueurs opérationnels.
+  // On ne change aucun parser spécifique : on transforme seulement le corps Gmail en vraie source importable.
+  const hasFlight=/\b(?:[A-Z][A-Z0-9]|[0-9][A-Z0-9])\s?\d{2,4}\b/.test(src);
+  const hasOps=/\b(?:PREPA|CHECK\s*IN|STD|ETD|ATD|BOARD(?:ING)?|CFG|CONFIG|PAX|SSR|LIST\s+OF|BOOKED|ACCEPTED|INBOUND|OUTBOUND|FQTV|ETKT|EMD)\b/.test(src);
+  if(hasFlight && hasOps)return /\bTW\s?\d{2,4}\b/.test(src)?"TW_TEXT":"MAIL_BODY_TEXT";
+  return "";
+}
+function isPlainTextOperationalMail(subject,body,flightBase){return !!plainTextOperationalKindV53(subject,body,flightBase)}
+
+async function storeVirtualPlainTextImport(env,{messageId,subject,receivedAt,bodyText,flightBase}){
+  const text=String(bodyText||"").replace(/\u0000/g,"").trim();
+  // R3: ne jamais créer de source BODY vide/quasi vide.
+  if(text.length<20 || !/[A-Z0-9]{4}/i.test(text))return {added:0,updated:0,duplicate:0,created:false};
+  if(!isPlainTextOperationalMail(subject,text,flightBase))return {added:0,updated:0,duplicate:0,created:false};
+
+  const flight=detectMailFlight(subject,"jfe_screen_copy.txt",text);
+  if(!flight.airline && flightBase)Object.assign(flight,flightBase);
+
+  const airline=flight.airline||"UNK";
+  const flightNumber=flight.flightNumber||"UNIDENTIFIED";
+  const flightDate=mailRawDateToIso(flight.flightDate||flightBase?.flightDate||"UNKNOWN_DATE",receivedAt);
+  const textKind=plainTextOperationalKindV53(subject,text,flightBase);
+  const docType=textKind==="TK_TEXT"?"TK_TEXT":(textKind==="TW_TEXT"?"TW_TEXT":(textKind==="IPORT_TEXT"?"IPORT_TEXT":"OPERATIONAL_INFO"));
+  const filename=textKind==="TK_TEXT"?"tk_prepa_plain_text.txt":(textKind==="TW_TEXT"?"tw_prepa_plain_text.txt":(textKind==="JFE_SCREEN_COPY"?"jfe_screen_copy_plain_text.txt":(textKind==="IPORT_TEXT"?"iport_plain_text.txt":"mail_body_operational.txt")));
+  const norm=normalizeFilename(filename);
+  const bytes=new TextEncoder().encode(text);
+  const sha=await sha256Hex(bytes);
+  const fileId=cleanDocumentFileIdV1(airline,flightNumber,flightDate,docType,sha);
+  const versionId=`${fileId}|V1`;
+  const r2Key=`prepa/${flightDate}/${airline}/${flightNumber}/${messageId}/${sha}_${norm}`.replace(/\s+/g,"_");
+
+  const existingVersion=await env.OPS_DB.prepare(`SELECT version_id FROM import_file_versions WHERE version_id=? LIMIT 1`).bind(versionId).first();
+  if(existingVersion){
+    await recordImportChange(env,{scope:"FILE",airline,flightNumber,flightDate,gmailMessageId:messageId,fileId,versionId,changeType:"DUPLICATE_TEXT_BODY",after:{filename,sha}});
+    return {added:0,updated:0,duplicate:1,created:false};
+  }
+
+  await env.OPS_FILES.put(r2Key,bytes,{httpMetadata:{contentType:"text/plain; charset=UTF-8"},customMetadata:{gmail_message_id:messageId,filename_original:filename,sha256:sha,document_type:docType,source:"GMAIL_BODY"}});
+
+  const existingFile=await env.OPS_DB.prepare(`SELECT file_id,active_version_id FROM import_files WHERE file_id=? LIMIT 1`).bind(fileId).first();
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO import_file_versions
+      (version_id,file_id,gmail_message_id,attachment_id,filename_original,filename_normalized,mime_type,file_size,sha256,r2_key,document_time,received_at,status,is_active,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'STORED', 1, CURRENT_TIMESTAMP)
+  `).bind(versionId,fileId,messageId,"GMAIL_BODY",filename,norm,"text/plain",bytes.byteLength,sha,r2Key,receivedAt,receivedAt).run();
+
+  if(existingFile){
+    await env.OPS_DB.prepare(`UPDATE import_file_versions SET is_active=0 WHERE file_id=? AND version_id<>?`).bind(fileId,versionId).run();
+    await env.OPS_DB.prepare(`UPDATE import_files SET active_version_id=?,status='UPDATED',latest_document_time=?,updated_at=CURRENT_TIMESTAMP WHERE file_id=?`).bind(versionId,receivedAt,fileId).run();
+    await recordImportChange(env,{scope:"FILE",airline,flightNumber,flightDate,gmailMessageId:messageId,fileId,versionId,changeType:"UPDATED_TEXT_BODY",before:{activeVersionId:existingFile.active_version_id},after:{filename,sha,r2Key}});
+  }else{
+    await env.OPS_DB.prepare(`
+      INSERT INTO import_files
+        (file_id,active_version_id,airline,flight_number,flight_date,document_type,filename_normalized,status,latest_document_time,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    `).bind(fileId,versionId,airline,flightNumber,flightDate,docType,norm,"ADDED",receivedAt).run();
+    await recordImportChange(env,{scope:"FILE",airline,flightNumber,flightDate,gmailMessageId:messageId,fileId,versionId,changeType:"ADDED_TEXT_BODY",after:{filename,sha,r2Key}});
+  }
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO import_jobs
+      (job_id,job_type,priority,airline,flight_number,flight_date,file_id,version_id,gmail_message_id,status,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,'QUEUED',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(job_id) DO NOTHING
+  `).bind(`PARSE|${versionId}`,"PARSE_FILE",5,airline,flightNumber,flightDate,fileId,versionId,messageId).run();
+
+  return {added:existingFile?0:1,updated:existingFile?1:0,duplicate:0,created:true};
+}
+
+
+/* =========================================================
+   V50.30 R22.4 — BJ/VF pdf_ PRE-OPERATIONAL GATE
+   Infrastructure only. Airline parsers are untouched.
+
+   Rule:
+   - any Gmail subject OR attachment logical filename beginning with "pdf_"
+     is an operational candidate and MUST NOT be terminally ignored.
+   - when possible, resolve BJ/VF identity directly from PDF content before
+     document storage, so R2/D1 paths are canonical on first write.
+   - if identity is still unavailable, the document is nevertheless stored;
+     R22.3 post-intake bootstrap can resolve it from R2 afterward.
+   ========================================================= */
+
+function r224IsPdfPrefixCandidate(subject,parts){
+  if(/^pdf_/i.test(String(subject||"").trim()))return true;
+  return (Array.isArray(parts)?parts:[]).some(p=>
+    /^pdf_/i.test(String(p?.filename||"").trim())
+  );
+}
+
+async function r224ProbeBjVfIdentityFromAttachments(
+  env,messageId,subject,parts,attachmentCache
+){
+  const pdfPrefixCandidate=r224IsPdfPrefixCandidate(subject,parts);
+  if(!pdfPrefixCandidate)return {
+    candidate:false,
+    identity:null,
+    checked:0,
+    diagnostics:[]
+  };
+
+  let checked=0;
+  const diagnostics=[];
+
+  for(const part of Array.isArray(parts)?parts:[]){
+    const attachmentId=String(part?.body?.attachmentId||"").trim();
+    if(!attachmentId)continue;
+
+    const filename=String(part?.filename||"attachment").trim();
+    const mime=String(part?.mimeType||"application/octet-stream").trim();
+
+    // If subject starts pdf_, accept its attachment even when Gmail gave a
+    // generic/empty filename. Otherwise require the attachment prefix itself.
+    const logicalPdfCandidate=
+      /^pdf_/i.test(filename) ||
+      /^pdf_/i.test(String(subject||"").trim());
+
+    if(!logicalPdfCandidate)continue;
+
+    try{
+      let bytes=attachmentCache.get(attachmentId);
+      if(!bytes){
+        const att=await gmailFetch(
+          env,
+          `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`
+        );
+        bytes=b64urlToBytes(att.data||"");
+        attachmentCache.set(attachmentId,bytes);
+      }
+
+      checked++;
+
+      // Existing Worker PDF text engine only; no BJ/VF parser is invoked here.
+      const ex=await lot2ExtractPdfTextFromBytes(bytes).catch(e=>({
+        text:"",
+        error:String(e?.message||e)
+      }));
+
+      const text=String(ex?.text||"");
+      const identity=r223DetectBjVfIdentityFromPdfText(text);
+
+      diagnostics.push({
+        filename,
+        mime,
+        checked:true,
+        textLength:text.length,
+        identity:identity||null,
+        error:String(ex?.error||"")
+      });
+
+      if(identity){
+        return {
+          candidate:true,
+          identity,
+          checked,
+          diagnostics
+        };
+      }
+    }catch(e){
+      diagnostics.push({
+        filename,
+        mime,
+        checked:false,
+        identity:null,
+        error:String(e?.message||e)
+      });
+    }
+  }
+
+  return {
+    candidate:true,
+    identity:null,
+    checked,
+    diagnostics
+  };
+}
+
+
+async function storeGmailMessage(env,messageId){
+  await ensureGmailPipelineTables(env);
+
+  const existing=await env.OPS_DB.prepare(`SELECT gmail_message_id,status FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  const replaying=!!existing;
+
+  const message=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}?format=full`);
+  const subject=extractHeader(message,"Subject");
+  const sender=extractHeader(message,"From");
+  const receivedAt=extractHeader(message,"Date");
+  const bodyText=await extractPlainBodyFullV1(env,message);
+  const parts=walkParts(message.payload,[]);
+  const attachmentCache=new Map();
+
+  // R3 SQ CLEAN — identity is mail-level and mandatory.
+  // Priority: subject -> body -> attachment/EML content. Attachment scan is only used
+  // when the normal resolver is incomplete, and only accepted here for SQ.
+  let flightBase=detectMailFlight(subject,"",bodyText);
+  if(!(flightBase.airline&&flightBase.flightNumber&&flightBase.flightDate)){
+    const probed=await cleanProbeAttachmentIdentitySQV3(env,messageId,subject,bodyText,parts,attachmentCache);
+    if(probed?.airline==='SQ')flightBase=probed;
+  }
+  if((flightBase.airline==='SQ' || IPORT_AIRLINES.has(flightBase.airline)) && flightBase.flightDate){
+    // IPORT (IZ/TB) donne une date sans année ("06SEP") comme SQ : sans cette
+    // canonicalisation, import_job_results.flight_date reste "06SEP" alors que
+    // flights.identity utilise la date ISO complète — la jointure utilisée par
+    // lot5InjectAvailable() pour retrouver la fiche vol ne matche jamais, et le
+    // résultat reste WAITING_FLIGHT indéfiniment même quand la fiche existe déjà.
+    flightBase.flightDate=lot5CanonicalFlightDate(flightBase.flightDate,receivedAt)||flightBase.flightDate;
+  }
+
+  // R22.4 — pdf_ is an operational source family for BJ/VF and must be
+  // evaluated BEFORE the IGNORED_NON_OPERATIONAL gate.
+  const r224PdfCandidate=r224IsPdfPrefixCandidate(subject,parts);
+  let r224Probe=null;
+
+  if(
+    r224PdfCandidate &&
+    !(flightBase.airline&&flightBase.flightNumber&&flightBase.flightDate)
+  ){
+    r224Probe=await r224ProbeBjVfIdentityFromAttachments(
+      env,messageId,subject,parts,attachmentCache
+    );
+
+    if(r224Probe?.identity){
+      flightBase={
+        ...flightBase,
+        airline:r224Probe.identity.airline,
+        flightNumber:r224Probe.identity.flightNumber,
+        flightDate:r224Probe.identity.flightDate,
+        origin:r224Probe.identity.origin||flightBase.origin||"",
+        destination:r224Probe.identity.destination||flightBase.destination||""
+      };
+    }
+  }
+
+  const operational=isOperationalCandidateMailV53(subject,bodyText,parts,flightBase)
+    || (flightBase.airline==='SQ' && !!flightBase.flightNumber && !!flightBase.flightDate)
+    || r224PdfCandidate;
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO gmail_messages
+      (gmail_message_id,gmail_thread_id,history_id,internal_date,subject,sender,received_at,snippet,label_state,airline,flight_number,flight_date,status,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(gmail_message_id) DO UPDATE SET
+      gmail_thread_id=excluded.gmail_thread_id,
+      history_id=excluded.history_id,
+      internal_date=excluded.internal_date,
+      subject=excluded.subject,
+      sender=excluded.sender,
+      received_at=excluded.received_at,
+      snippet=excluded.snippet,
+      airline=CASE WHEN excluded.airline<>'' THEN excluded.airline ELSE gmail_messages.airline END,
+      flight_number=CASE WHEN excluded.flight_number<>'' THEN excluded.flight_number ELSE gmail_messages.flight_number END,
+      flight_date=CASE WHEN excluded.flight_date<>'' THEN excluded.flight_date ELSE gmail_messages.flight_date END,
+      status=CASE WHEN gmail_messages.status IN ('VALIDATED','INJECTED') THEN gmail_messages.status ELSE excluded.status END,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(
+    message.id||messageId,message.threadId||"",message.historyId||"",message.internalDate||"",
+    subject,sender,receivedAt,message.snippet||"",
+    operational?"RECEIVED":"IGNORED_NON_OPERATIONAL",
+    flightBase.airline||"",flightBase.flightNumber||"",flightBase.flightDate||"",
+    operational?"RECEIVED":"IGNORED_NON_OPERATIONAL"
+  ).run();
+
+  if(!operational){
+    await clearAlyziaPipelineLabels(env,messageId).catch(()=>{});
+    return {status:"IGNORED_NON_OPERATIONAL",messageId,attachments:parts.length,replaying};
+  }
+
+  // SQ with incomplete identity is never terminal ERROR/REVIEW. Keep it retryable.
+  if(flightBase.airline==='SQ' && (!flightBase.flightNumber || !/^20\d{2}-\d{2}-\d{2}$/.test(String(flightBase.flightDate||'')))){
+    await env.OPS_DB.prepare(`UPDATE gmail_messages SET status='RECEIVED',label_state='RECEIVED',updated_at=CURRENT_TIMESTAMP WHERE gmail_message_id=?`).bind(messageId).run();
+    await setGmailPipelineState(env,messageId,'RECEIVED',{archive:false}).catch(()=>{});
+    await recordImportChange(env,{scope:'MESSAGE',airline:'SQ',gmailMessageId:messageId,changeType:'SQ_PENDING_IDENTITY',after:{subject,flightBase}}).catch(()=>{});
+    return {status:'RECEIVED',messageId,attachments:parts.length,replaying,pendingIdentity:true};
+  }
+
+  await setGmailPipelineState(env,messageId,"RECEIVED",{archive:false}).catch(()=>{});
+  let added=0,updated=0,duplicate=0,error=0,virtualText=0,nestedEml=0;
+
+  for(const part of parts){
+    const attachmentId=String(part.body?.attachmentId||"");
+    if(!attachmentId)continue;
+    try{
+      const filename=String(part.filename||"attachment");
+      const mime=String(part.mimeType||"application/octet-stream");
+      let bytes=attachmentCache.get(attachmentId);
+      if(!bytes){
+        const att=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
+        bytes=b64urlToBytes(att.data||""); attachmentCache.set(attachmentId,bytes);
+      }
+
+      let probeText=bodyText.slice(0,5000);
+      const r224PdfPart=
+        /^pdf_/i.test(filename) ||
+        /^pdf_/i.test(String(subject||"").trim());
+
+      if(
+        (flightBase.airline==='SQ' && (/\.pdf$/i.test(filename)||String(mime).toLowerCase().includes('pdf'))) ||
+        r224PdfPart
+      ){
+        const ex=await lot2ExtractPdfTextFromBytes(bytes).catch(()=>({text:''}));
+        probeText += '\n'+String(ex?.text||'').slice(0,12000);
+
+        // For BJ/VF pdf_ documents, supplement the generic mail detector with
+        // the exact PDF-header identity resolver. This is routing only.
+        if(r224PdfPart){
+          const r224Identity=r223DetectBjVfIdentityFromPdfText(String(ex?.text||''));
+          if(r224Identity){
+            flightBase={
+              ...flightBase,
+              airline:r224Identity.airline,
+              flightNumber:r224Identity.flightNumber,
+              flightDate:r224Identity.flightDate,
+              origin:r224Identity.origin||flightBase.origin||"",
+              destination:r224Identity.destination||flightBase.destination||""
+            };
+          }
+        }
+      }else if(flightBase.airline==='SQ' && (/\.eml$/i.test(filename)||String(mime).toLowerCase()==='message/rfc822')){
+        probeText += '\n'+new TextDecoder().decode(bytes).slice(0,20000);
+      }
+
+      const found=detectMailFlight(subject,filename,probeText);
+      const r224ResolvedBjVf=/^(BJ|VF)$/.test(String(flightBase.airline||"").toUpperCase());
+      const flight={
+        airline:r224ResolvedBjVf ? flightBase.airline : (found.airline||flightBase.airline),
+        flightNumber:r224ResolvedBjVf ? flightBase.flightNumber : (found.flightNumber||flightBase.flightNumber),
+        flightDate:r224ResolvedBjVf
+          ? flightBase.flightDate
+          : (lot5CanonicalFlightDate(found.flightDate||flightBase.flightDate,receivedAt)||(found.flightDate||flightBase.flightDate))
+      };
+      const docType=guessDocumentType(filename,mime,probeText.slice(0,5000));
+
+      const stableSourceRef=`MIME:${String(part.__cleanSourcePath||'0')}`;
+      const stored=await cleanStoreDocumentV3(env,{
+        messageId,attachmentId,filename,mime,bytes,receivedAt,flight,docType,
+        sourceKind:'ATTACHMENT',sourceRef:stableSourceRef,parentVersionId:''
+      });
+      added+=stored.added||0;updated+=stored.updated||0;duplicate+=stored.duplicate||0;
+
+      // R3 CLEAN : un .eml est à la fois une source archivée et un
+      // conteneur — vrai pour SQ comme pour n'importe quelle autre
+      // compagnie transférant un mail complet (le vrai rapport se trouve
+      // alors dans le message imbriqué, pas dans le mail extérieur).
+      if(/\.eml$/i.test(filename)||String(mime).toLowerCase()==='message/rfc822'){
+        const expanded=await cleanExpandNestedEmlV3(env,{
+          messageId,outerVersionId:stored.versionId,outerAttachmentId:stableSourceRef,
+          outerFilename:filename,bytes,subject,receivedAt,flightBase:flight
+        });
+        added+=expanded.added||0;
+        duplicate+=expanded.duplicate||0;
+        virtualText+=expanded.virtualText||0;
+        nestedEml+=expanded.nested||0;
+      }
+    }catch(e){
+      error++;
+      await recordImportChange(env,{scope:"MESSAGE",airline:flightBase.airline||'',flightNumber:flightBase.flightNumber||'',flightDate:flightBase.flightDate||'',gmailMessageId:messageId,changeType:"RETRY_TECHNICAL",after:{error:String(e?.message||e)}}).catch(()=>{});
+    }
+  }
+
+  try{
+    const virtual=await storeVirtualPlainTextImport(env,{messageId,subject,receivedAt,bodyText,flightBase});
+    if(virtual.created)virtualText++;
+    added+=virtual.added||0;
+    updated+=virtual.updated||0;
+    duplicate+=virtual.duplicate||0;
+    // Link existing/created virtual body to this message is ensured here for R3 traceability.
+    if(flightBase.airline==='SQ' && isPlainTextOperationalMail(subject,bodyText)){
+      const t=String(bodyText||'').replace(/\u0000/g,'').trim();
+      if(t.length>=20){
+        const kind=plainTextOperationalKindV53(subject,t);
+        const docType=kind==="TK_TEXT"?"TK_TEXT":(kind==="TW_TEXT"?"TW_TEXT":"OPERATIONAL_INFO");
+        const bytes=new TextEncoder().encode(t);
+        const sha=await sha256Hex(bytes);
+        const fileId=cleanDocumentFileIdV1(flightBase.airline,flightBase.flightNumber,lot5CanonicalFlightDate(flightBase.flightDate,receivedAt),docType,sha);
+        const versionId=`${fileId}|V1`;
+        await cleanLinkMessageDocumentV3(env,{gmailMessageId:messageId,versionId,fileId,sourceKind:'GMAIL_BODY',sourceRef:'GMAIL_BODY',isDuplicate:!!virtual.duplicate});
+      }
+    }
+  }catch(e){
+    error++;
+    await recordImportChange(env,{scope:"MESSAGE",airline:flightBase.airline||'',flightNumber:flightBase.flightNumber||'',flightDate:flightBase.flightDate||'',gmailMessageId:messageId,changeType:"RETRY_TECHNICAL_TEXT_BODY",after:{error:String(e?.message||e)}}).catch(()=>{});
+  }
+
+  let finalStatus;
+  if(flightBase.airline==='SQ'){
+    // No permanent SQ error/review state. Technical problems stay retryable.
+    finalStatus=(added||updated||virtualText||duplicate)?"RECEIVED":"RECEIVED";
+  }else{
+    finalStatus=error?"ERROR_IMPORT":(added||updated||virtualText)?"RECEIVED":duplicate?"DUPLICATE":"REVIEW";
+  }
+
+  await env.OPS_DB.prepare(`UPDATE gmail_messages SET status=?,label_state=?,processed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE gmail_message_id=?`).bind(finalStatus,finalStatus,messageId).run();
+  await setGmailPipelineState(env,messageId,finalStatus,{archive:flightBase.airline==='SQ'?false:true}).catch(()=>{});
+
+  return {status:finalStatus,messageId,attachments:parts.length,virtualText,nestedEml,added,updated,duplicate,error,replaying,flightBase};
+}
+
+/*
+ * gmailSyncNow() ne retraite jamais un mail déjà connu en IGNORED_NON_OPERATIONAL
+ * (garde "safelyKnown", volontaire pour ne pas re-télécharger en boucle). Si un
+ * mail a été classé non opérationnel par une VERSION ANTÉRIEURE du code puis que
+ * le code a changé depuis (ex. ajout du support IZ/TB), il reste ignoré pour
+ * toujours : aucun sync ultérieur ne le réévalue. Cette fonction force la
+ * réévaluation de storeGmailMessage() pour les mails actuellement ignorés qui
+ * correspondent au filtre, sans attendre un nouveau mail.
+ */
+async function lot5ReclassifyIgnoredV1(env,{airlineHint='',subjectLike='',limit=20}={}){
+  await ensureGmailPipelineTables(env);
+  const wh=["status='IGNORED_NON_OPERATIONAL'"];
+  const binds=[];
+  if(subjectLike){wh.push("subject LIKE ?");binds.push(`%${subjectLike}%`)}
+  if(airlineHint){wh.push("UPPER(airline)=?");binds.push(String(airlineHint).toUpperCase())}
+  binds.push(Math.max(1,Math.min(50,Number(limit||20))));
+  // ASC : storeGmailMessage() met à jour updated_at même quand le mail reste
+  // IGNORED_NON_OPERATIONAL (reclassification sans effet) — un tri DESC ferait
+  // retomber les mêmes mails toujours ignorés en tête à chaque appel (chaque
+  // cycle CRON désormais), sans jamais atteindre le reste du lot.
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id FROM gmail_messages
+    WHERE ${wh.join(" AND ")}
+    ORDER BY updated_at ASC LIMIT ?
+  `).bind(...binds).all()).results||[];
+  let reclassified=0,stillIgnored=0; const errors=[]; const results=[];
+  for(const row of rows){
+    const messageId=String(row.gmail_message_id||''); if(!messageId)continue;
+    try{
+      const r=await storeGmailMessage(env,messageId);
+      results.push({messageId,status:r?.status});
+      if(r?.status && r.status!=='IGNORED_NON_OPERATIONAL')reclassified++; else stillIgnored++;
+    }catch(e){errors.push({messageId,error:String(e?.message||e)})}
+  }
+  return {ok:errors.length===0,checked:rows.length,reclassified,stillIgnored,errors,results};
+}
+
+async function gmailSyncNow(env,body){
+  await ensureGmailPipelineTables(env);
+  const query=String(body?.query||"in:anywhere").trim();
+  // Plafond relevé de 100 à 200 (demande explicite) : reste très en dessous
+  // de la limite Gmail elle-même (500), tout en gardant une marge de
+  // sécurité sur le temps d'exécution d'un seul appel — chaque message non
+  // déjà connu déclenche un fetch Gmail + parsing MIME + stockage R2 dans le
+  // même appel, contrairement à process-next (base de données seule).
+  const maxMessages=Math.max(1,Math.min(200,Number(body?.maxMessages||25)));
+  const pageToken=String(body?.pageToken||"").trim();
+  const params=new URLSearchParams({q:query,maxResults:String(maxMessages)});
+  if(pageToken)params.set("pageToken",pageToken);
+  const list=await gmailFetch(env,`/messages?${params.toString()}`);
+  const messages=list.messages||[];
+  const results=[];
+  const errors=[];
+
+  /*
+   * Un cron repasse toujours par la page Gmail la plus récente. Ne pas
+   * retélécharger à chaque fois les PDF déjà acquis : cela empêchait le cycle
+   * d'atteindre le parsing et l'injection lors des rafales Altea.
+   * Les états d'erreur restent rejouables automatiquement.
+   */
+  const messageIds=messages.map(m=>String(m?.id||"")).filter(Boolean);
+  const known=new Map();
+  if(messageIds.length){
+    const placeholders=messageIds.map(()=>"?").join(",");
+    const rows=(await env.OPS_DB.prepare(`
+      SELECT
+        g.gmail_message_id,
+        g.status,
+        (SELECT COUNT(*) FROM import_file_versions v WHERE v.gmail_message_id=g.gmail_message_id) AS version_count,
+        (SELECT COUNT(*) FROM gmail_message_documents d WHERE d.gmail_message_id=g.gmail_message_id) AS document_link_count
+      FROM gmail_messages g
+      WHERE g.gmail_message_id IN (${placeholders})
+    `).bind(...messageIds).all()).results||[];
+    rows.forEach(row=>known.set(String(row.gmail_message_id||""),row));
+  }
+
+  let skippedKnown=0;
+  for(const m of messages){
+    const messageId=String(m?.id||"");
+    const prior=known.get(messageId);
+    const priorStatus=String(prior?.status||"").toUpperCase();
+    const retryable=new Set(["ERROR","ERROR_IMPORT","ERROR_INJECT","REVIEW"]);
+    const safelyKnown=prior && !retryable.has(priorStatus) && (
+      priorStatus==="IGNORED_NON_OPERATIONAL" ||
+      Number(prior.version_count||0)>0 ||
+      Number(prior.document_link_count||0)>0
+    );
+    if(safelyKnown){
+      skippedKnown++;
+      results.push({status:priorStatus,messageId,skippedKnown:true});
+      continue;
+    }
+    try{
+      results.push(await storeGmailMessage(env,messageId));
+    }catch(e){
+      // LOT 5.2 : un mail défectueux ne bloque jamais le reste de la page.
+      errors.push({messageId:String(m?.id||""),error:String(e?.message||e)});
+    }
+  }
+  await env.OPS_DB.prepare(`
+    INSERT INTO gmail_sync_state (mailbox,last_full_sync_at,backfill_query,backfill_page_token,backfill_status,updated_at)
+    VALUES ('me',CURRENT_TIMESTAMP,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(mailbox) DO UPDATE SET
+      last_full_sync_at=CURRENT_TIMESTAMP,
+      backfill_query=excluded.backfill_query,
+      backfill_page_token=excluded.backfill_page_token,
+      backfill_status=excluded.backfill_status,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(query,String(list.nextPageToken||""),list.nextPageToken?"RUNNING":"DONE").run();
+  return {
+    ok:errors.length===0,
+    query,
+    maxMessages,
+    processed:results.length,
+    attempted:messages.length,
+    failed:errors.length,
+    skippedKnown,
+    nextPageToken:list.nextPageToken||"",
+    results,
+    errors
+  };
+}
+
+async function gmailOAuthStart(request,env){
+  const clientId=String(env.GOOGLE_CLIENT_ID||"").trim();
+  if(!clientId)return json({ok:false,error:"GOOGLE_CLIENT_ID MANQUANT"},400);
+  const state=crypto.randomUUID();
+  await setIntegrationJson(env,"gmail_oauth_state",{state,created_at:new Date().toISOString()});
+  const params=new URLSearchParams({
+    client_id:clientId,
+    redirect_uri:gmailRedirectUri(request),
+    response_type:"code",
+    access_type:"offline",
+    prompt:"consent",
+    include_granted_scopes:"true",
+    scope:["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/userinfo.email"].join(" "),
+    state
+  });
+  return Response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,302);
+}
+
+async function gmailOAuthCallback(request,env,url){
+  try{
+    const code=url.searchParams.get("code")||"";
+    const state=url.searchParams.get("state")||"";
+    const saved=await getIntegrationJson(env,"gmail_oauth_state");
+    if(!code)throw new Error(url.searchParams.get("error")||"CODE OAUTH MANQUANT");
+    if(!saved?.state||state!==saved.state)throw new Error("STATE OAUTH INVALIDE");
+
+    const form=new URLSearchParams({
+      client_id:String(env.GOOGLE_CLIENT_ID||""),
+      client_secret:String(env.GOOGLE_CLIENT_SECRET||""),
+      code,
+      grant_type:"authorization_code",
+      redirect_uri:gmailRedirectUri(request)
+    });
+    const tokenResp=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:form.toString()});
+    const token=await tokenResp.json().catch(()=>({}));
+    if(!tokenResp.ok||!token.refresh_token)throw new Error(token.error_description||token.error||"REFRESH TOKEN GMAIL ABSENT");
+
+    const infoResp=await fetch("https://www.googleapis.com/oauth2/v2/userinfo",{headers:{Authorization:`Bearer ${token.access_token}`}});
+    const info=await infoResp.json().catch(()=>({}));
+    await setIntegrationJson(env,"gmail_oauth",{refresh_token:token.refresh_token,email:String(info.email||""),connected_at:new Date().toISOString(),scope:token.scope||""});
+    await ensureGmailPipelineTables(env);
+    return googleCallbackHtml(true,`Gmail API connectée : ${String(info.email||"compte Google")}`);
+  }catch(e){
+    return googleCallbackHtml(false,String(e?.message||e));
+  }
+}
+
+async function importPipelineStatus(env){
+  await ensureGmailPipelineTables(env);
+  const rows=await env.OPS_DB.prepare(`
+    SELECT status, COUNT(*) AS count
+    FROM import_jobs
+    GROUP BY status
+  `).all();
+  const files=await env.OPS_DB.prepare(`
+    SELECT status, COUNT(*) AS count
+    FROM import_files
+    GROUP BY status
+  `).all();
+  const recent=await env.OPS_DB.prepare(`
+    SELECT created_at,change_type,airline,flight_number,flight_date,file_id,version_id
+    FROM import_changes
+    ORDER BY id DESC
+    LIMIT 20
+  `).all();
+  return {ok:true,jobs:rows.results||[],files:files.results||[],recentChanges:recent.results||[]};
+}
+
+
+
+/* =========================================================
+ * ALYZIA OPS V50.7 — LOT 2 IMPORT JOB PROCESSOR
+ * ---------------------------------------------------------
+ * Objectif du lot 2 :
+ * - prendre les jobs QUEUED créés par le Lot 1
+ * - lire les fichiers dans R2
+ * - extraire un texte opérationnel quand possible
+ * - classifier le document
+ * - préparer le résultat pour le Lot 3, sans injection fiche vol
+ *
+ * VERROUILLAGE :
+ * - SQ / TK / BJ / TW : parsers spécifiques NON TOUCHÉS.
+ *   Le job est marqué READY_SPECIFIC_PARSER.
+ * - Autres compagnies : GENERIC.
+ *   ALL CUSTOMERS / ALL PAX = MASTER.
+ *   LIST OF: XXXXX = carte correspondante.
+ * ========================================================= */
+
+// VF (AJet) est sortie du groupe verrouillé : BUILD143 ne produit aucune fiche vol
+// pour VF (aucun résultat SPECIFIC_LOCKED n'est jamais confirmé), le vol reste donc
+// éternellement sans fiche. VF a un format PD4ML propre (voir plus bas) : elle est
+// désormais traitée en GENERIC par ce Worker, comme 3O/WB/OZ. BJ reste verrouillé
+// et inchangé.
+// SQ sortie du groupe verrouillé (V50.31) : mapping GENERIC vérifié sur de
+// vraies pièces jointes réelles (specific-list-survey/specific-merge-preview),
+// manifeste MASTER et fusion des listes secondaires validés sans doublon.
+// TW sortie du groupe verrouillé (V50.32) : format "CONTENT" détecté et
+// vérifié (lot2TwContentDetect/lot2TwExtractPassengerItems) sur 2 vrais
+// mails réels (153 et 182 passagers, comptages cabines cohérents).
+// TK sortie du groupe verrouillé (V50.33) : section "ALL PAX" détectée et
+// vérifiée (lot2TkContentDetect/lot2TkExtractPassengerItems) sur 3 vrais
+// mails .eml réels (160 et 186 passagers, comptages cabines cohérents),
+// puis confirmée sur 5/6 vrais mails déjà en base (specific-list-survey).
+// BJ sortie du groupe verrouillé (V50.34) : pipeline PD4ML partagé avec VF
+// vérifié sur de vraies pièces jointes (manifeste 51/51 et 57/57 passagers)
+// puis confirmé sur de vrais mails déjà en base (specific-list-survey).
+// Plus aucune compagnie verrouillée sur un parseur spécifique.
+const LOT2_SPECIFIC_AIRLINES = new Set([]);
+
+async function ensureImportProcessorTables(env){
+  await ensureGmailPipelineTables(env);
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS import_job_results (
+        job_id TEXT PRIMARY KEY,
+        version_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        airline TEXT,
+        flight_number TEXT,
+        flight_date TEXT,
+        parser_mode TEXT,
+        document_type TEXT,
+        list_name TEXT,
+        card_key TEXT,
+        passenger_count INTEGER,
+        class_counts_json TEXT,
+        extracted_text_preview TEXT,
+        result_json TEXT,
+        status TEXT NOT NULL DEFAULT 'CLASSIFIED',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_import_job_results_flight ON import_job_results(airline,flight_number,flight_date,updated_at)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_import_job_results_version ON import_job_results(version_id)`)
+  ]);
+}
+
+function lot2Upper(v){return String(v||"").toUpperCase().replace(/\u00a0/g," ");}
+function lot2CleanText(v){
+  return String(v||"")
+    .replace(/\u0000/g," ")
+    .replace(/[\t ]+/g," ")
+    .replace(/\r/g,"\n")
+    .replace(/\n{3,}/g,"\n\n")
+    .trim();
+}
+
+function lot2FileExtension(filename){
+  const m=String(filename||"").toLowerCase().match(/\.([a-z0-9]{1,8})$/);
+  return m?m[1]:"";
+}
+
+function lot2DecodeUtf8(bytes){
+  try{return new TextDecoder("utf-8",{fatal:false}).decode(bytes)}catch(e){return ""}
+}
+
+function lot2DecodeLatin1(bytes){
+  let out="";
+  const chunk=8192;
+  for(let i=0;i<bytes.length;i+=chunk){
+    out+=String.fromCharCode(...bytes.slice(i,i+chunk));
+  }
+  return out;
+}
+
+function lot2PdfBinaryToBytes(v){
+  const str=String(v||"");
+  const out=new Uint8Array(str.length);
+  for(let i=0;i<str.length;i++)out[i]=str.charCodeAt(i)&255;
+  return out;
+}
+
+function lot2StripPdfStreamNewlines(bytes){
+  let a=0,b=bytes.length;
+  if(bytes[a]===13 && bytes[a+1]===10)a+=2;
+  else if(bytes[a]===10 || bytes[a]===13)a+=1;
+
+  if(bytes[b-2]===13 && bytes[b-1]===10)b-=2;
+  else if(bytes[b-1]===10 || bytes[b-1]===13)b-=1;
+
+  return bytes.slice(a,b);
+}
+
+async function lot2InflatePdfStream(bytes){
+  if(typeof DecompressionStream==="undefined")return null;
+
+  const formats=["deflate","deflate-raw"];
+  for(const format of formats){
+    try{
+      const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format));
+      const ab=await new Response(stream).arrayBuffer();
+      if(ab && ab.byteLength)return new Uint8Array(ab);
+    }catch(e){}
+  }
+
+  return null;
+}
+
+function lot2ExtractPdfStreamCandidates(pdfBytes){
+  const raw=lot2DecodeLatin1(pdfBytes);
+  const streams=[];
+
+  const re=/(<<[\s\S]{0,2500}?\/FlateDecode[\s\S]{0,2500}?>>)\s*stream([\s\S]*?)endstream/g;
+  let m;
+  while((m=re.exec(raw))){
+    const dict=String(m[1]||"");
+    const body=lot2StripPdfStreamNewlines(lot2PdfBinaryToBytes(m[2]||""));
+    streams.push({dict,bytes:body});
+  }
+
+  return streams;
+}
+
+function lot2ParsePdfToUnicodeMap(decodedText){
+  const cmap={};
+  const src=String(decodedText||"");
+
+  for(const block of src.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)){
+    const body=block[1]||"";
+    for(const m of body.matchAll(/<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,12})>/g)){
+      const from=m[1].toUpperCase();
+      const to=m[2].toUpperCase();
+      const ch=lot2PdfDecodeHexWithoutMap(to);
+      if(ch)cmap[from]=ch;
+    }
+  }
+
+  for(const block of src.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)){
+    const body=block[1]||"";
+    for(const m of body.matchAll(/<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,12})>/g)){
+      const start=parseInt(m[1],16);
+      const end=parseInt(m[2],16);
+      const dest=parseInt(m[3],16);
+      if(!Number.isFinite(start)||!Number.isFinite(end)||!Number.isFinite(dest))continue;
+      if(end<start || end-start>300)continue;
+      const width=m[1].length;
+      for(let code=start;code<=end;code++){
+        const from=code.toString(16).toUpperCase().padStart(width,"0");
+        const to=(dest+(code-start)).toString(16).toUpperCase().padStart(4,"0");
+        const ch=lot2PdfDecodeHexWithoutMap(to);
+        if(ch)cmap[from]=ch;
+      }
+    }
+  }
+
+  return cmap;
+}
+
+function lot2PdfDecodeHexWithoutMap(hex){
+  const clean=String(hex||"").replace(/[^0-9A-Fa-f]/g,"");
+  if(clean.length<2)return "";
+
+  try{
+    // UTF-16BE fréquent dans ToUnicode.
+    if(clean.length%4===0){
+      let out="";
+      for(let i=0;i<clean.length;i+=4){
+        const cp=parseInt(clean.slice(i,i+4),16);
+        if(cp)out+=String.fromCharCode(cp);
+      }
+      if(/[A-Za-z0-9 ]/.test(out))return out;
+    }
+
+    let ascii="";
+    for(let i=0;i<clean.length;i+=2){
+      const b=parseInt(clean.slice(i,i+2),16);
+      if(Number.isFinite(b) && b!==0)ascii+=String.fromCharCode(b);
+    }
+    return ascii;
+  }catch(e){
+    return "";
+  }
+}
+
+function lot2PdfDecodeHexWithMap(hex,cmap){
+  const clean=String(hex||"").replace(/[^0-9A-Fa-f]/g,"").toUpperCase();
+  if(!clean)return "";
+
+  const map=cmap||{};
+  if(Object.keys(map).length){
+    // Les PDF Altea Type0 utilisent des codes CID sur 2 octets = 4 hex chars.
+    let out="";
+    for(let i=0;i<clean.length;i+=4){
+      const code=clean.slice(i,i+4);
+      if(code.length<4)continue;
+      out+=map[code] ?? lot2PdfDecodeHexWithoutMap(code);
+    }
+    if(out.trim())return out;
+  }
+
+  return lot2PdfDecodeHexWithoutMap(clean);
+}
+
+function lot2PdfDecodeLiteralString(v){
+  return String(v||"")
+    .replace(/\\n/g,"\n")
+    .replace(/\\r/g,"\n")
+    .replace(/\\t/g," ")
+    .replace(/\\b/g," ")
+    .replace(/\\f/g," ")
+    .replace(/\\([()\\])/g,"$1")
+    .replace(/\\\d{1,3}/g," ");
+}
+
+function lot2ExtractPdfTextOperations(decodedText,cmap){
+  const src=String(decodedText||"");
+  const out=[];
+
+  // Chaînes littérales : (texte) Tj / TJ
+  for(const m of src.matchAll(/\((?:\\.|[^\\()]){1,}\)/g)){
+    const v=lot2PdfDecodeLiteralString(m[0].slice(1,-1));
+    if(/[A-Za-z0-9]{2}/.test(v))out.push(v);
+  }
+
+  // Chaînes hexadécimales : <002f002c...> Tj
+  for(const m of src.matchAll(/<([0-9A-Fa-f]{4,})>/g)){
+    const v=lot2PdfDecodeHexWithMap(m[1],cmap);
+    if(/[A-Za-z0-9]{2}/.test(v))out.push(v);
+  }
+
+  return out.join("\n");
+}
+
+function lot2LooksLikeRealAlteaText(text){
+  const up=lot2Upper(text);
+  if(/\bLIST\s+OF\s*:/.test(up))return true;
+  if(/\b(?:INBOUND|ONCARRIAGE)\s+CUSTOMER\s+SUMMARY\b/.test(up))return true;
+  if(/\bGENERIC\s+REPORT\b/.test(up) && /\bJ\d{1,4}\b/.test(up))return true;
+  if(/\d{1,3}\.[A-Z][A-Z' .-]+\/[A-Z][A-Z' .-]+/.test(up))return true;
+
+  /*
+   * R22.5 — Nouvelair / AJet PDF reports.
+   * This is ONLY an extraction/readability signature, not an airline parser.
+   *
+   * Examples observed:
+   *   ALL Reservetion List
+   *   03/Sep/2026 BJ511 CDG - TUN
+   *   03/Sep/2026 VF12  CDG - SAW
+   *
+   * Keep the service date sourced from document content; filename timestamps
+   * are never used as flight dates.
+   */
+  if(
+    /\b\d{1,2}\/(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\/20\d{2}\s+(?:BJ|VF)\s*\d{1,4}\s+[A-Z]{3}\s*[-–]\s*[A-Z]{3}\b/.test(up)
+  )return true;
+
+  if(
+    /\b(?:ALL\s+RESERVETION\s+LIST|SSR\s*LIST|CHECK[- ]?IN\s*LIST|FQTV\s*LIST|OUTBOUND\s+SUMMARY\s+LIST|ETICKET\s*LIST|EMD\s*LIST|PASSENGER\s+WITH\s+INFANT|PASS2)\b/.test(up) &&
+    /\b(?:BJ|VF)\s*\d{1,4}\b/.test(up)
+  )return true;
+
+  return false;
+}
+
+async function lot2ExtractPdfTextFromBytes(bytes){
+  const streams=lot2ExtractPdfStreamCandidates(bytes);
+  if(!streams.length){
+    // PDF sans Flate stream : tenter uniquement les chaînes visibles non compressées.
+    const raw=lot2DecodeLatin1(bytes);
+    const text=lot2CleanText(lot2ExtractPdfTextOperations(raw,{}));
+    return {text:lot2LooksLikeRealAlteaText(text)?text:"", readable:lot2LooksLikeRealAlteaText(text), reason:lot2LooksLikeRealAlteaText(text)?"PDF_TEXT_EXTRACTED_RAW":"PDF_TEXT_NOT_EXTRACTED"};
+  }
+
+  const decodedTexts=[];
+  let inflated=0;
+
+  for(const stream of streams){
+    const dec=await lot2InflatePdfStream(stream.bytes);
+    if(!dec)continue;
+    inflated++;
+    decodedTexts.push(lot2DecodeLatin1(dec));
+  }
+
+  if(!decodedTexts.length){
+    return {text:"",readable:false,reason:"PDF_TEXT_NOT_EXTRACTED_FLATE_UNAVAILABLE"};
+  }
+
+  // Construire la table ToUnicode avant de décoder les streams de contenu.
+  const cmap={};
+  for(const txt of decodedTexts){
+    Object.assign(cmap,lot2ParsePdfToUnicodeMap(txt));
+  }
+
+  const extractedPieces=[];
+  const validatedPieces=[];
+
+  for(const txt of decodedTexts){
+    const extracted=lot2ExtractPdfTextOperations(txt,cmap);
+    if(!extracted)continue;
+    extractedPieces.push(extracted);
+    if(lot2LooksLikeRealAlteaText(extracted))validatedPieces.push(extracted);
+  }
+
+  /*
+   * Existing Altea behavior remains unchanged by default:
+   * use only streams that individually match an operational-text signature.
+   *
+   * R22.5 BJ/VF compatibility:
+   * PD4ML reports often put the BJ/VF header only on page 1. Other pages
+   * contain passenger rows but no repeated header, so the former per-stream
+   * filter discarded pages 2+.
+   *
+   * If the COMPLETE extracted document has a BJ/VF header, preserve ALL
+   * extracted text streams. No BJ/VF business parser is called here.
+   */
+  const allText=lot2CleanText(extractedPieces.join("\n"));
+  const bjVfDocument=
+    /\b\d{1,2}\/(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\/20\d{2}\s+(?:BJ|VF)\s*\d{1,4}\s+[A-Z]{3}\s*[-–]\s*[A-Z]{3}\b/i.test(allText);
+
+  const text=bjVfDocument
+    ? allText
+    : lot2CleanText(validatedPieces.join("\n"));
+
+  if(!text){
+    return {text:"",readable:false,reason:`PDF_TEXT_NOT_EXTRACTED_INFLATED_${inflated}`};
+  }
+
+  return {
+    text,
+    readable:true,
+    reason:bjVfDocument
+      ? "PDF_TEXT_EXTRACTED_FLATE_BJ_VF_PD4ML"
+      : "PDF_TEXT_EXTRACTED_FLATE_TOUNICODE"
+  };
+}
+
+async function lot2ExtractTextFromR2Object(object,filename,mime){
+  const ext=lot2FileExtension(filename);
+  const size=Number(object?.size||0);
+  const MAX_PARSE_BYTES=25*1024*1024;
+  if(size>MAX_PARSE_BYTES){
+    return {text:"",readable:false,reason:`FICHIER TROP VOLUMINEUX POUR PARSING WORKER (${size} bytes)`};
+  }
+
+  const bytes=new Uint8Array(await object.arrayBuffer());
+  const m=String(mime||"").toLowerCase();
+
+  if(ext==="zip")return {text:"",readable:false,reason:"ZIP STOCKÉ · PARSING DIFFÉRÉ"};
+  if(["xls","xlsx","doc","docx","msg"].includes(ext)){
+    // Ces fichiers sont stockés et indexés au Lot 1. Le parsing natif arrivera par module dédié.
+    return {text:lot2CleanText(lot2DecodeUtf8(bytes).slice(0,200000)),readable:false,reason:`${ext.toUpperCase()} STOCKÉ · PARSING DÉDIÉ À AJOUTER`};
+  }
+  if(ext==="pdf" || m.includes("pdf")){
+    return await lot2ExtractPdfTextFromBytes(bytes);
+  }
+
+  if(ext==="eml" || m==="message/rfc822"){
+    /*
+     * V50.31 — un .eml est un message MIME brut (en-têtes de transport +
+     * corps, parfois multipart/base64/quoted-printable), pas du texte brut.
+     * Avant ce correctif, le fichier entier (en-têtes SMTP "Received:"/
+     * "ARC-Seal:"/... inclus) était renvoyé tel quel comme "texte extrait" :
+     * aucune ligne "LIST OF:" ne pouvait jamais y être trouvée (cardKey
+     * NO_LIST systématique), quel que soit le contenu réel du mail —
+     * repéré sur de vrais mails AT/RJ/SB/WB/AH stockés en base. Réutilise
+     * le même décodeur MIME récursif déjà utilisé et vérifié pour SQ
+     * (cleanParseEmlRecursiveV3 : multipart, base64, quoted-printable).
+     */
+    const raw=lot2DecodeUtf8(bytes);
+    const parsed=cleanParseEmlRecursiveV3(raw);
+    const body=lot2CleanText((parsed.textBodies||[]).join("\n\n"));
+    if(body)return {text:body,readable:true,reason:"EML_BODY_EXTRACTED"};
+    return {text:"",readable:false,reason:"EML_BODY_NOT_EXTRACTED"};
+  }
+
+  if(m.startsWith("text/") || ["txt","csv","html","htm","json","xml"].includes(ext)){
+    return {text:lot2CleanText(lot2DecodeUtf8(bytes)),readable:true,reason:"TEXT_EXTRACTED"};
+  }
+
+  return {text:lot2CleanText(lot2DecodeUtf8(bytes).slice(0,200000)),readable:false,reason:"TYPE STOCKÉ · PARSING NON PRIORITAIRE"};
+}
+
+function lot2DetectListName(text,filename){
+  /*
+   * V50.9 — STRICT EXPLICIT PDF LIST NAME
+   * On ne déduit jamais le nom de liste depuis des mots passagers.
+   *
+   * Sources autorisées :
+   *   1) une ligne explicite "LIST OF: XXXXX"
+   *   2) un titre explicite de rapport résumé Altea :
+   *      "INBOUND CUSTOMER SUMMARY" ou "ONCARRIAGE CUSTOMER SUMMARY"
+   *
+   * Si aucune source explicite n'est trouvée, on retourne "".
+   */
+  const raw=lot2CleanText(String(text||"")).replace(/\r/g,"\n");
+  const lines=raw.split(/\n+/).map(x=>String(x||"").trim()).filter(Boolean);
+
+  function cleanListName(v){
+    return String(v||"")
+      .replace(/\b(?:TOTAL|TTL)\b.*$/i,"")
+      // Retirer seulement les compteurs de classe autonomes. Ne pas tronquer
+      // les codes de rapports comme PDF-S1 / PDF-M2 / PDF-Z8.
+      .replace(/(^|\s)[FJCWSYM]\s*\d+(?=\s|$)/gi,"$1")
+      .replace(/\s+/g," ")
+      .trim();
+  }
+
+  for(const line of lines.slice(0,160)){
+    const m=line.match(/\bLIST\s+OF\s*:\s*(.{2,140})$/i);
+    if(!m)continue;
+    const cleaned=cleanListName(m[1]);
+    if(cleaned)return cleaned;
+  }
+
+  // OCR/text extraction peut parfois coller "LIST OF:" au milieu d'une ligne.
+  const compact=raw.slice(0,12000);
+  const m=compact.match(/\bLIST\s+OF\s*:\s*([^\n\r]{2,140})/i);
+  if(m){
+    const cleaned=cleanListName(m[1]);
+    if(cleaned)return cleaned;
+  }
+
+  // Titres explicites de rapports sommaires, sans inventer de liste.
+  for(const line of lines.slice(0,80)){
+    if(/^INBOUND\s+CUSTOMER\s+SUMMARY\b/i.test(line))return "INBOUND CUSTOMER SUMMARY";
+    if(/^ONCARRIAGE\s+CUSTOMER\s+SUMMARY\b/i.test(line))return "ONCARRIAGE CUSTOMER SUMMARY";
+  }
+
+  return "";
+}
+
+const LOT2_GENERIC_DEFAULT_LIST_MAPPINGS = [
+  ["ALL CUSTOMERS","MASTER"],
+  ["ALL PAX","MASTER"],
+  ["ALL RESERVATION","MASTER"],
+  // "PDF-ACC" (sans suffixe) est un sous-ensemble "accepté" des mêmes
+  // passagers que ALL CUSTOMERS, même structure — vu identique chez LO et S4.
+  ["PDF-ACC","MASTER"],
+  ["FQTV","FQTV"],
+  // "FQA" est le nom de liste réel envoyé par la plupart des compagnies
+  // génériques (A9, AI, AT, EI, FB, LO, MS, RJ, S4, SB, SK, DE...), pas
+  // seulement J2/AH où il était mappé jusqu'ici en dur par compagnie.
+  ["FQA","FQTV"],
+  ["WCH","WCH"],
+  ["WCHR","WCH"],
+  ["WCHS","WCH"],
+  ["WCHC","WCH"],
+  ["WCMP","WCH"],
+  ["WCBD","WCH"],
+  ["WCLB","WCH"],
+  ["INF","INF"],
+  ["INFANT","INF"],
+  ["CHLD","CHLD"],
+  ["CHILD","CHLD"],
+  // "KID" nue peut être un document pur CHLD ou un mélange enfants+bébés
+  // (C et I sur les mêmes lignes) selon la compagnie — vu mixte chez DE/TU/
+  // SB/RJ (comptes rendus utilisateur, même structure que PDF-INFKID
+  // ci-dessous, déjà vérifiée sur RJ). Router vers INFKID plutôt que CHLD
+  // ne change rien pour un document 100% CHLD (INFKID retombe sur le même
+  // résultat, voir cKey==="INFKID" dans lot2ExtractPassengerItemsFromGenericList)
+  // et corrige la perte des lignes I dans les documents mixtes.
+  ["KID","INFKID"],
+  // Enfants + bébés combinés dans un seul document — vu identique chez RJ et
+  // S4. Chacun garde sa propre carte (INF/CHLD), voir lot3MergeFlightData.
+  ["PDF-INFKID","INFKID"],
+  ["ETKT","ETKT"],
+  ["TICKET","ETKT"],
+  // "PDF-ACCWEB" (enregistrement web) vu identique chez 3O/AH/EI/RJ/SB —
+  // contenu vérifié sur 3O (44 passagers, "CHL-WEB", sièges attribués).
+  ["PDF-ACCWEB","WEB"],
+  // "CHL-WEB" est aussi utilisée directement comme LIST OF chez SK/MS/FB/AI
+  // (pas seulement comme SSR à l'intérieur de PDF-ACCWEB) — contenu vérifié
+  // sur un vrai relevé SK réel (39/45 passagers, une ligne "CHL-WEB" par
+  // passager, aucun autre code).
+  ["CHL-WEB","WEB"],
+  ["EMD","EMD"],
+  ["MEAL","MEAL"],
+  ["SPML","MEAL"],
+  ["VGML","MEAL"],
+  ["AVML","MEAL"],
+  ["BBML","MEAL"],
+  ["CHML","MEAL"],
+  ["HNML","MEAL"],
+  ["KSML","MEAL"],
+  ["MOML","MEAL"],
+  // "LGML-GU" (low gluten) — contenu vérifié sur un vrai relevé SK réel.
+  ["LGML","MEAL"],
+  ["INAD","INAD"],
+  ["DEPA","DEPA"],
+  ["DEPU","DEPU"],
+  // "SR-" (Special Request) est un préfixe Amadeus partagé, observé
+  // identique chez A9, AT et SK.
+  ["SR-DEPA","DEPA"],
+  ["SR-DEPU","DEPU"],
+  ["SR-PETC","PETC"],
+  ["SR-AVIH","AVIH"],
+  ["UMNR","UMNR"],
+  ["UM","UMNR"],
+  ["MAAS","MAAS"],
+  // Personnel compagnie (standby/bookable) — vu identique chez EI, LO, RJ.
+  ["STF","STAFF"],
+  // "BS-SA" vu identique chez AH (déjà en dur) ET MS (contenu vérifié : 4
+  // passagers, chacun avec le code "BS-SA" sur sa ligne) — généralisé ici.
+  ["BS-SA","STAFF"],
+  // "PDF-FQTV" vu identique chez AI (contenu vérifié : 16 passagers avec
+  // numéros de fidélité et mentions ACCRUAL/REDEMPTION).
+  ["PDF-FQTV","FQTV"],
+  ["INC","INBOUND"],
+  ["INCARRIAGE","INBOUND"],
+  ["ONC","OUTBOUND"],
+  ["ONCARRIAGE","OUTBOUND"],
+  ["INBOUND CUSTOMER SUMMARY","INBOUND_SUMMARY"],
+  ["ONCARRIAGE CUSTOMER SUMMARY","OUTBOUND_SUMMARY"],
+  // Liste combinée INC+ONC dans un seul document — vue identique chez
+  // OZ, DE, AI et SK. Contenu vérifié sur OZ.
+  ["ONC* INC","CONNECTIONS"]
+];
+
+const LOT2_GENERIC_AIRLINE_LIST_MAPPINGS = {
+  A9: [
+    // Préfixe "PDF-" observé uniquement sur INAD pour cette compagnie.
+    ["PDF-INAD","INAD"]
+  ],
+  // LO n'a pas de canal WEB confirmé par ailleurs (pas de CHL-WEB/PDF-ACCWEB
+  // vu chez LO) — sur demande utilisateur (17/09), PDF-ACC sert d'indicateur
+  // de canal web pour LO plutôt que MASTER (repli DEFAULT) ou IGNORE.
+  LO: [
+    ["PDF-ACC","WEB"]
+  ],
+  // SK (spec utilisateur, priorité 4) : FQA et FQTV nus ne sont pas des
+  // données fidélité exploitables chez SK, contrairement au comportement
+  // DEFAULT (FQA/FQTV -> FQTV) valable ailleurs. cardKey OTHER : le document
+  // reste vu (dédoublonnage passager par nom/ticket) mais ne crée pas de
+  // fausse carte FQTV, même principe que les sous-ensembles CC-x de SQ.
+  SK: [
+    ["FQA","OTHER"],
+    ["FQTV","OTHER"],
+    // Spec utilisateur : codes de liste numérotés propres à SK (même principe
+    // que PDF-02/PDF-10 chez DE) — PDF-07 = personnel SAS (staff), PDF-09 =
+    // repas spécial, PDF-08 = pas de contenu exploitable identifié pour SK.
+    ["PDF-07","STAFF"],
+    ["PDF-09","MEAL"],
+    ["PDF-08","OTHER"]
+  ],
+  // AI (spec utilisateur, priorité 4) : seule la liste "FQA" nue est ignorée
+  // (ambiguïté "A S"/"A G" non résolue, mise de côté par l'utilisateur) —
+  // "PDF-FQTV" reste FQTV, déjà vérifié sur données réelles AI (16 passagers,
+  // numéros de fidélité + ACCRUAL/REDEMPTION).
+  AI: [
+    ["FQA","OTHER"]
+  ],
+  MS: [
+    // "CAS-SB" (Casual Standby) : équivalent MS de STF-SB, sans code
+    // distinctif propre dans la liste elle-même.
+    ["CAS-SB","STAFF"],
+    // Spec utilisateur : "PDF-CHNL" est l'équivalent MS de CHL-WEB (déjà en
+    // DEFAULT) pour le canal d'enregistrement web.
+    ["PDF-CHNL","WEB"]
+  ],
+  TS: [
+    // Même structure que PDF-ACC (liste passagers "accepted"), mais
+    // avec le préfixe numéroté propre à TS.
+    ["PDF-02ACC","MASTER"]
+  ],
+  "3O": [
+    // Certains rapports préfixent les listes standards par "PDF-ACC, " (le
+    // contenu reste identique à la liste ETKT/KID nue observée par ailleurs).
+    ["PDF-ACC, ETKT","ETKT"],
+    ["PDF-ACC, KID","CHLD"]
+  ],
+  OZ: [
+    // Libellés techniques observés dans les rapports Altea Asiana.
+    ["PDF-M2","MEAL"],
+    ["PDF-S1","STAFF"],
+    ["PDF-Z8","WEB"],
+    ["PDF-Z93","EMD"]
+  ],
+  DE: [
+    // Condor utilise des numéros de listes à la place des noms fonctionnels.
+    ["PDF-02","WEB"],
+    ["PDF-10","WCH"]
+  ],
+  WB: [
+    // RwandAir préfixe systématiquement ses listes par "X-TRT". Correctif
+    // (17/09, confirmé sur un vrai relevé WB701/10SEP) : X-TRT seule n'est
+    // PAS un export complet équivalent à ALL CUSTOMERS (hypothèse initiale,
+    // fausse) — c'est un sous-ensemble "passagers joignant à CDG uniquement"
+    // (par opposition aux passagers through BRU->KGL marqués "TRT" dans le
+    // vrai manifeste ALL CUSTOMERS, 162 pax). La laisser en MASTER créait le
+    // même conflit à deux MASTER que CC-Y chez SQ.
+    ["X-TRT","OTHER"],
+    ["X-TRT, ETKT","ETKT"],
+    ["X-TRT, ONC","OUTBOUND"],
+    ["X-TRT, INC","INBOUND"],
+    ["X-TRT, KID","CHLD"],
+    ["X-TRT, INF","INF"],
+    ["X-TRT, WCH","WCH"],
+    ["X-TRT, FQA","FQTV"],
+    ["X-TRT, EMD","EMD"]
+  ],
+  J2: [
+    ["FQA","FQTV"],
+    ["ONC","OUTBOUND"],
+    ["INC","INBOUND"],
+    ["WCH","WCH"],
+    ["INBOUND CUSTOMER SUMMARY","INBOUND_SUMMARY"],
+    ["ONCARRIAGE CUSTOMER SUMMARY","OUTBOUND_SUMMARY"]
+  ],
+  AH: [
+    ["FQA","FQTV"],
+    ["INC","INBOUND"],
+    ["WCH","WCH"],
+    ["BS-SA","STAFF"],
+    ["INBOUND CUSTOMER SUMMARY","INBOUND_SUMMARY"],
+    ["ONCARRIAGE CUSTOMER SUMMARY","OUTBOUND_SUMMARY"],
+    // Priorité 5 (spec utilisateur) : "CAS-AC" seul est ignoré, mais le
+    // compound "PDF-ACCWEB, CAS-AC" reste WEB (repli PREFIX_PATTERN
+    // ci-dessus le couvrirait déjà ; entrée exacte gardée en plus pour ne
+    // dépendre d'aucune logique de repli sur ce cas précis).
+    ["PDF-ACCWEB, CAS-AC","WEB"],
+    ["CAS-AC","OTHER"]
+  ],
+  // SQ : construit à partir d'un vrai relevé (specific-list-survey) sur 30 mails
+  // réels avant toute sortie de LOT2_SPECIFIC_AIRLINES. "PDF-VBCPLIST" seule
+  // (sans suffixe classe) est le manifeste complet du vol (ex. observé : 211 pax
+  // F1/C40/S22/Y148). Les variantes "PDF-VBCPLIST, CC-x" et "CC-x" seules sont
+  // des sous-ensembles déjà couverts par ce manifeste : laissées en OTHER, elles
+  // se rattachent sans dégât aux passagers déjà posés par MASTER (voir
+  // lot3UpsertPassengers, correspondance par nom/ETKT, jamais de doublon).
+  SQ: [
+    ["PDF-VBCPLIST","MASTER"],
+    ["PDF-STFFIRM","STAFF"],
+    ["PDF-OSPLMAAS","MAAS"],
+    ["PDF-PSPLWCHR","WCH"],
+    ["PDF-DINLIST","MEAL"],
+    ["PDF-CINFT","INF"],
+    ["FQT-KFES","FQTV"],
+    ["FQT-KFEG","FQTV"],
+    // IPPS regroupe les paliers PPS Club de Singapore Airlines LPPS/QPPS/TPPS
+    // (LIFE/PPS/SOLITAIRE) : la liste "PDF-IPPS" seule (sans suffixe "FQT-xxx")
+    // est donc déjà une liste FQTV à part entière, pas un manifeste à part.
+    ["PDF-IPPS","FQTV"],
+    ["PDF-IPPS, FQT-QPPS","FQTV"],
+    ["PDF-IPPS, FQT-TPPS","FQTV"],
+    ["PDF-AFQTA, FQT-KFEG","FQTV"],
+    ["PDF-AFQTA, FQT-KFES","FQTV"],
+    /*
+     * Bug corrigé (17/09, relevé lecture seule réel) : ces sous-listes classe
+     * cabine SANS préfixe "PDF-VBCPLIST, " (contrairement au commentaire
+     * ci-dessus qui décrivait l'intention mais ne les avait jamais ajoutées)
+     * tombaient dans le repli par comptage de passagers (>=15 lignes) et se
+     * faisaient promouvoir en second MASTER, en conflit avec le vrai
+     * PDF-VBCPLIST — ex. CC-Y à 157/183 passagers écrasant/doublant le
+     * manifeste réel de 234. GRP et PDF-GOCLIST sont d'autres sous-ensembles
+     * du même manifeste (respectivement groupes et un export nommé), jamais
+     * le manifeste complet lui-même.
+     */
+    ["CC-F","OTHER"],
+    ["CC-J","OTHER"],
+    ["CC-S","OTHER"],
+    ["CC-Y","OTHER"],
+    ["GRP","OTHER"],
+    ["PDF-GOCLIST","OTHER"]
+  ]
+};
+
+function lot2NormalizeListKey(v){
+  return lot2Upper(v)
+    .replace(/[^A-Z0-9]+/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+// "MEAL" lui-même est exclu : mot anglais courant, recherché comme sous-chaîne
+// dans tout le corps du document (voir plus bas), il donnerait de faux positifs.
+const LOT2_KNOWN_MEAL_CODES=LOT2_GENERIC_DEFAULT_LIST_MAPPINGS
+  .filter(([,cardKey])=>cardKey==="MEAL")
+  .map(([name])=>lot2NormalizeListKey(name))
+  .filter(name=>/^[A-Z]{2}ML$/.test(name));
+
+function lot2LookupListMapping(airline,listName,text,allowMasterByCount=true){
+  const raw=lot2NormalizeListKey(listName);
+  if(!raw)return {cardKey:"NO_LIST", mappingScope:"NONE", matchedListName:""};
+
+  const airlineKey=lot2Upper(airline);
+  const airlineRows=LOT2_GENERIC_AIRLINE_LIST_MAPPINGS[airlineKey]||[];
+
+  for(const [name,cardKey] of airlineRows){
+    if(raw===lot2NormalizeListKey(name)){
+      return {cardKey, mappingScope:airlineKey, matchedListName:name};
+    }
+  }
+
+  for(const [name,cardKey] of LOT2_GENERIC_DEFAULT_LIST_MAPPINGS){
+    if(raw===lot2NormalizeListKey(name)){
+      return {cardKey, mappingScope:"DEFAULT", matchedListName:name};
+    }
+  }
+
+  // Groupes de codes repas : si le nom explicite LIST OF est un code meal connu.
+  if(/^[A-Z]{2}ML$/.test(raw)){
+    return {cardKey:"MEAL", mappingScope:"DEFAULT_PATTERN", matchedListName:"MEAL_CODE"};
+  }
+
+  /*
+   * Paliers fidélité SQ "FQT-<code>" (KFES/KFEG/QPPS/TPPS déjà en dur pour
+   * SQ, mais un relevé réel a montré "FQT-LPPS" absent de cette énumération
+   * et tombant en OTHER). Motif général plutôt qu'une liste à tenir à jour
+   * à chaque nouveau palier découvert — couvre aussi bien "FQT-xxx" seul que
+   * via le motif suffixe "PDF-IPPS, FQT-xxx" (voir plus bas).
+   */
+  if(/^FQT [A-Z0-9]+$/.test(raw)){
+    return {cardKey:"FQTV", mappingScope:"DEFAULT_PATTERN", matchedListName:"FQT_CODE"};
+  }
+
+  // Noms composés "<préfixe>, <suffixe>" (ex. "PDF-06, WCH" chez SK,
+  // "X-TRT, MEAL" chez WB) : le préfixe varie d'une compagnie à l'autre (ou
+  // d'un vol à l'autre, quand c'est un simple numéro de séquence sans
+  // signification), mais le suffixe s'auto-désigne déjà avec un code connu —
+  // même principe que "PDF-ACC, ETKT" déjà mappé en dur pour 3O, généralisé
+  // ici pour ne pas avoir à lister chaque combinaison rencontrée au fur et à
+  // mesure. Le préfixe lui-même n'est jamais interprété.
+  const suffixM=String(listName||"").match(/^(.+?),\s*(.+)$/);
+  if(suffixM){
+    // allowMasterByCount=false : un suffixe résolu isolément ("CC-Y" seul,
+    // extrait de "PDF-VBCPLIST, CC-Y") ne doit jamais hériter du repli
+    // "beaucoup de passagers ⇒ MASTER" plus bas — sinon le garde-fou contre
+    // les sous-listes qualifiées par une virgule (voir plus bas) ne sert à
+    // rien, car ce nom-ci ("CC-Y") ne contient lui-même pas de virgule.
+    // Texte volontairement omis ici (pas de 3e argument) : le suffixe doit
+    // s'auto-désigner par son PROPRE nom (table exacte), jamais en refaisant
+    // tourner le repli par contenu sur l'intégralité du document du préfixe —
+    // sinon un seul passager WCHR/STF-/repas isolé dans un manifeste complet
+    // de 150+ passagers (ex. SQ "PDF-VBCPLIST, CC-Y") faisait passer TOUTE la
+    // liste en WCH/STAFF/MEAL au lieu de rester OTHER (bug constaté sur
+    // SQ337 16SEP : 156 passagers comptés comme WCH).
+    const suffixMapping=lot2LookupListMapping(airline,suffixM[2],"",false);
+    if(suffixMapping.cardKey && suffixMapping.cardKey!=="OTHER" && suffixMapping.cardKey!=="NO_LIST"){
+      return {cardKey:suffixMapping.cardKey, mappingScope:"SUFFIX_PATTERN", matchedListName:listName};
+    }
+    /*
+     * Matcher composé avant matcher simple (priorité 5, spec utilisateur —
+     * AH "PDF-ACCWEB, CAS-AC" et formats combinés ONC* INC) : un suffixe non
+     * informatif pris isolément (OTHER/NO_LIST, ex. "CAS-AC" seul -> IGNORE)
+     * ne doit pas masquer un PRÉFIXE déjà reconnu comme une liste à part
+     * entière (ex. "PDF-ACCWEB" -> WEB). Exclusion volontaire de MASTER :
+     * ne jamais rouvrir le bug SQ CC-x/PDF-VBCPLIST (un sous-ensemble filtré
+     * par classe cabine, qualifié par une virgule, ne doit jamais hériter du
+     * MASTER de son préfixe — sinon second manifeste concurrent, déjà corrigé
+     * cette session).
+     */
+    const prefixMapping=lot2LookupListMapping(airline,suffixM[1],"",false);
+    if(prefixMapping.cardKey && prefixMapping.cardKey!=="OTHER" && prefixMapping.cardKey!=="NO_LIST" && prefixMapping.cardKey!=="MASTER"){
+      return {cardKey:prefixMapping.cardKey, mappingScope:"PREFIX_PATTERN", matchedListName:listName};
+    }
+  }
+
+  /*
+   * Dernier recours, universel : reconnaissance par CONTENU réel plutôt que
+   * par nom de liste. Necessaire car chaque compagnie sur "Generic Report"/
+   * "altea_report.pdf" nomme ses listes différemment ("PDF-<n>" chez SK,
+   * "CAS-AC" chez AH...), parfois avec un simple numéro de séquence qui ne
+   * veut rien dire et change de sens d'un vol à l'autre (vérifié sur SK : le
+   * même "PDF-06" désigne tantôt un manifeste, tantôt une sous-liste fauteuil
+   * roulant) — aucune table de correspondance par nom ne peut suivre ça à
+   * l'échelle de toutes les compagnies. On regarde donc d'abord les codes SSR
+   * caractéristiques (universels, indépendants du nom de liste et de la
+   * compagnie), puis, en dernier recours seulement, le nombre de passagers.
+   */
+  /*
+   * Un nom qualifié par une virgule ("X, Y") désigne presque toujours un
+   * SOUS-ENSEMBLE d'une liste de base déjà couverte ailleurs (ex. SQ
+   * "PDF-VBCPLIST, CC-x" = filtre par classe cabine du même manifeste déjà
+   * posé par "PDF-VBCPLIST" seul — volontairement laissé en OTHER). Un tel
+   * sous-ensemble reste un manifeste complet de sa classe cabine (jusqu'à
+   * ~150 passagers pour SQ337 CC-Y) : il contient presque toujours au moins
+   * UN passager avec un vrai SSR WCHR/STF-/repas isolé parmi les remarques —
+   * ça ne fait pas de la LISTE ENTIÈRE une liste fauteuil roulant/staff/repas.
+   * Le repli par contenu ci-dessous (WCH/STAFF/MEAL) ne s'applique donc
+   * jamais à ces sous-ensembles nommés par virgule, exactement comme le
+   * repli par comptage juste en dessous (déjà gardé par !suffixM).
+   */
+  if(text && !suffixM){
+    const body=lot2Upper(text);
+    if(/\bWCH[RSC]\b|\bWCMP\b|\bWCBD\b|\bWCLB\b/.test(body)){
+      return {cardKey:"WCH", mappingScope:"CONTENT_PATTERN", matchedListName:listName};
+    }
+    if(/\bSTF-/.test(body)){
+      return {cardKey:"STAFF", mappingScope:"CONTENT_PATTERN", matchedListName:listName};
+    }
+    if(LOT2_KNOWN_MEAL_CODES.some(code=>body.includes(code))){
+      return {cardKey:"MEAL", mappingScope:"CONTENT_PATTERN", matchedListName:listName};
+    }
+    /*
+     * Jamais promu MASTER par le seul comptage non plus, même avec beaucoup
+     * de passagers, pour ne jamais écraser le vrai manifeste complet par un
+     * sous-total. Seuil (>=15) choisi avec une marge large des deux côtés :
+     * les manifestes complets réellement observés font 24 à 59 passagers,
+     * contre 1 à 14 pour toutes les sous-listes réelles rencontrées.
+     */
+    if(allowMasterByCount){
+      const paxLines=(body.match(/^\s*\d{1,3}\.[A-Z]/gm)||[]).length;
+      if(paxLines>=15){
+        return {cardKey:"MASTER", mappingScope:"CONTENT_PATTERN", matchedListName:listName};
+      }
+    }
+  }
+
+  return {cardKey:"OTHER", mappingScope:"UNMAPPED", matchedListName:""};
+}
+
+function lot2GenericCardFromListName(listName,airline){
+  return lot2LookupListMapping(airline,listName).cardKey;
+}
+
+function lot2ExtractClassCounts(text){
+  /*
+   * V50.15 — Class counts strict.
+   * Ne jamais scanner tout le PDF : cela peut prendre J274 / J2809 pour une classe J.
+   * Les classes viennent uniquement de l'en-tête LIST OF.
+   *
+   * Exemple autorisé :
+   * LIST OF: FQA C0 Y14 TOTAL 14
+   * LIST OF: ONC C2 Y13 TOTAL 15
+   */
+  const up=lot2Upper(text);
+  const out={};
+  const header=up.match(/\bLIST\s+OF\s*:\s*[^\n\r]{0,220}/);
+  if(!header)return out;
+
+  const h=header[0];
+  for(const m of h.matchAll(/\b([FJCWSYM])\s*(\d{1,4})\b/g)){
+    // Chaque compagnie garde sa propre lettre (SK utilise "M" pour l'Éco,
+    // jamais "Y" : convertir en Y masquait un vrai manifeste sous une lettre
+    // qu'aucune fiche vol SK n'affiche jamais). Plus de conversion M→Y/J→C.
+    const k=m[1];
+    const n=Number(m[2]||0);
+    if(Number.isFinite(n))out[k]=(out[k]||0)+n;
+  }
+
+  return out;
+}
+
+function lot2IsConnectionSummaryList(listName,cardKey){
+  const l=lot2Upper(listName);
+  const c=lot2Upper(cardKey);
+  return /(?:INBOUND|ONCARRIAGE)\s+CUSTOMER\s+SUMMARY/.test(l)
+    || /^(?:INBOUND|OUTBOUND)_SUMMARY$/.test(c)
+    || (/(?:INBOUND|OUTBOUND)/.test(c) && /CUSTOMER\s+SUMMARY/.test(l));
+}
+
+function lot2ExtractConnectionSummaryCounts(text){
+  /*
+   * V50.12 — Summary count fix.
+   * Les rapports "INBOUND CUSTOMER SUMMARY" et "ONCARRIAGE CUSTOMER SUMMARY"
+   * ne sont pas des listes nominatives. Il ne faut jamais compter J274/J2809
+   * comme passagers.
+   *
+   * Format Altea observé :
+   * FLTNR STA/STD DEP/ARR DEST CONX C Y C Y TTL
+   * AV54 0655 BOG GYD 05H00 0 1 0 0 0
+   * J2645 2015 SVX 01H10 2 6 2 1 0
+   *
+   * On additionne uniquement les deux premiers chiffres C/Y après CONX.
+   */
+  const up=lot2Upper(text);
+  const out={C:0,Y:0};
+  let rows=0;
+
+  for(const line of up.split(/\n+/)){
+    const r=line.trim().replace(/\s+/g," ");
+    if(!r)continue;
+
+    // Ignore headers and route labels.
+    if(/^(FLTNR|BOOKED|TER:|GATE:|CDG-|INBOUND CONNECTION|OUTBOUND CONNECTION)/.test(r))continue;
+
+    /*
+     * Deux formats observés :
+     * INBOUND  : AV54 0655 BOG GYD 05H00 0 1 0 0 0
+     * OUTBOUND : J2645 2015 SVX 01H10 2 6 2 1 0
+     *
+     * On ne lit jamais les chiffres du numéro de vol.
+     * On cherche le bloc CONX HHHMM puis les colonnes C/Y qui suivent.
+     */
+    const m=r.match(/^([A-Z0-9]{2,4}\d{1,4})\s+\d{3,4}\s+(?:(?:[A-Z]{3})\s+){1,2}\d{2}H\d{2}\s+(\d{1,4})\s+(\d{1,4})(?:\s+\d{1,4}){0,3}\b/);
+    if(!m)continue;
+
+    out.C+=Number(m[2]||0);
+    out.Y+=Number(m[3]||0);
+    rows++;
+  }
+
+  return {classCounts:out,total:out.C+out.Y,rows};
+}
+
+function lot2ExtractClassCountsForDocument(text,listName,cardKey){
+  if(lot2IsConnectionSummaryList(listName,cardKey)){
+    return lot2ExtractConnectionSummaryCounts(text).classCounts;
+  }
+  return lot2ExtractClassCounts(text);
+}
+
+function lot2ExtractPassengerCount(text,listName,cardKey){
+  if(lot2IsConnectionSummaryList(listName,cardKey)){
+    return lot2ExtractConnectionSummaryCounts(text).total;
+  }
+
+  const up=lot2Upper(text);
+  const header=up.match(/\bLIST\s+OF\s*:\s*[^\n\r]{0,200}/);
+  const h=header?header[0]:up.slice(0,2000);
+  let m=h.match(/\bTOTAL\s*(\d{1,5})\b/);
+  if(m)return Number(m[1]);
+  m=h.match(/\bTTL\s*(\d{1,5})\b/);
+  if(m)return Number(m[1]);
+  const classCounts=lot2ExtractClassCounts(h);
+  const sum=Object.values(classCounts).reduce((a,b)=>a+Number(b||0),0);
+  if(sum>0)return sum;
+
+  // Fallback nominatif Altea : lignes commençant par numéro + NOM/PRENOM.
+  const names=new Set();
+  for(const line of up.split(/\n+/)){
+    const r=line.trim();
+    const nm=r.match(/^\s*\d{1,4}[.)]?\s*([A-Z][A-Z' .-]{1,60}\/[A-Z][A-Z' .-]{1,80})/);
+    if(nm)names.add(nm[1].replace(/\s+/g," "));
+  }
+  if(names.size)return names.size;
+  return 0;
+}
+
+
+function lot2Preview(text){
+  return lot2CleanText(text).slice(0,2500);
+}
+
+function lot2DocumentTypeFromCard(cardKey,filename,mime){
+  if(cardKey==="MASTER")return "ALL_CUSTOMERS";
+  if(cardKey && cardKey!=="OTHER")return cardKey;
+  return guessDocumentType(filename,mime,"");
+}
+
+
+const LOTX_MONTHS={JAN:"01",FEB:"02",MAR:"03",APR:"04",MAY:"05",JUN:"06",JUL:"07",AUG:"08",SEP:"09",OCT:"10",NOV:"11",DEC:"12"};
+
+function lot2DateRawToIso(dayMon,contextIso){
+  const m=String(dayMon||"").toUpperCase().match(/^(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$/);
+  if(!m)return "";
+  const day=String(Number(m[1])).padStart(2,"0");
+  const mon=LOTX_MONTHS[m[2]];
+  let year=Number(String(contextIso||"").slice(0,4))||new Date().getUTCFullYear();
+
+  // Gestion passage mois: rapport fin août, vol 01SEP => même année.
+  // Rapport fin décembre, vol 01JAN => année +1.
+  const ctxMon=Number(String(contextIso||"").slice(5,7))||0;
+  const targetMon=Number(mon);
+  if(ctxMon===12 && targetMon===1)year+=1;
+  if(ctxMon===1 && targetMon===12)year-=1;
+
+  return `${year}-${mon}-${day}`;
+}
+
+function lot2DetectFlightDateFromReportLine(text,airline,flightNumber,currentIso){
+  /*
+   * V50.17 — date réelle du vol générique.
+   * Ignore la date d'émission du rapport en haut à droite (ex: 30AUG2026 07:46Z).
+   * Prend la date de la ligne vol :
+   *   AH1003  01SEP  CDG STD1215
+   */
+  const up=lot2Upper(text).replace(/\r/g,"\n");
+  const a=String(airline||"").toUpperCase();
+  const f=String(flightNumber||"").toUpperCase();
+  const num=f.replace(a,"");
+  const variants=[f,`${a}${num}`,`${a} ${num}`].filter(Boolean).map(v=>v.replace(/\s+/g,"\\s*"));
+  for(const line of up.split(/\n+/).slice(0,220)){
+    const l=line.trim().replace(/\s+/g," ");
+    if(!l)continue;
+    if(!/STD\s*\d{3,4}/.test(l))continue;
+    if(!new RegExp(`\\b(?:${variants.join("|")})\\b`).test(l.replace(/\s+/g,""))) {
+      // fallback with spaces normalized
+      if(!new RegExp(`\\b${a}\\s*${num}\\b`).test(l))continue;
+    }
+    const dm=l.match(/\b(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\b/);
+    if(dm){
+      const iso=lot2DateRawToIso(dm[1],currentIso);
+      if(iso)return {iso,raw:dm[1],line:l};
+    }
+  }
+
+  // Fallback plus permissif : AH1003 01SEP même si STD a sauté de l'extraction.
+  const compact=up.slice(0,12000).replace(/\s+/g," ");
+  const re=new RegExp(`\\b${a}\\s*${num}\\s+(\\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\\b`);
+  const m=compact.match(re);
+  if(m){
+    const iso=lot2DateRawToIso(m[1],currentIso);
+    if(iso)return {iso,raw:m[1],line:m[0]};
+  }
+
+  return {iso:"",raw:"",line:""};
+}
+
+async function lot2UpdateJobFlightDate(env,job,version,newIso,reason){
+  /*
+   * V50.18 — D1 schema safe.
+   * import_file_versions n'a pas de colonne flight_date dans la migration Lot 1.
+   * On ne modifie donc plus cette colonne.
+   *
+   * La date corrigée devient authoritative dans :
+   * - gmail_messages.flight_date
+   * - import_files.flight_date
+   * - import_jobs.flight_date
+   * - import_job_results.flight_date via effectiveFlightDate
+   *
+   * On conserve les ids techniques existants file_id/version_id/job_id même s'ils contiennent
+   * l'ancienne date, pour éviter les conflits de clés primaires et ne rien casser.
+   */
+  if(!newIso || newIso===job.flight_date)return {changed:false,flightDate:job.flight_date};
+
+  const oldDate=job.flight_date||"";
+  const fileId=version.file_id||job.file_id||"";
+  const versionId=version.version_id||job.version_id||"";
+  const jobId=job.job_id||"";
+
+  await env.OPS_DB.prepare(`
+    UPDATE gmail_messages
+    SET flight_date=?, updated_at=CURRENT_TIMESTAMP
+    WHERE gmail_message_id=?
+  `).bind(newIso,job.gmail_message_id||version.gmail_message_id||"").run().catch(()=>{});
+
+  await env.OPS_DB.prepare(`
+    UPDATE import_files
+    SET flight_date=?, updated_at=CURRENT_TIMESTAMP
+    WHERE file_id=?
+  `).bind(newIso,fileId).run().catch(()=>{});
+
+  await env.OPS_DB.prepare(`
+    UPDATE import_jobs
+    SET flight_date=?, updated_at=CURRENT_TIMESTAMP
+    WHERE job_id=?
+  `).bind(newIso,jobId).run().catch(()=>{});
+
+  await recordImportChange(env,{
+    scope:"JOB",
+    airline:job.airline,
+    flightNumber:job.flight_number,
+    flightDate:newIso,
+    gmailMessageId:job.gmail_message_id,
+    fileId:fileId,
+    versionId:versionId,
+    changeType:"FLIGHT_DATE_FROM_REPORT_LINE",
+    before:{flightDate:oldDate,fileId,versionId,jobId},
+    after:{flightDate:newIso,fileId,versionId,jobId,reason}
+  }).catch(()=>{});
+
+  return {
+    changed:true,
+    flightDate:newIso,
+    fileId,
+    versionId,
+    jobId
+  };
+}
+
+
+function lot2CleanClock(v){
+  const s=String(v||"").trim();
+  const m=s.match(/(\d{1,2})[:H.]?(\d{2})/);
+  if(!m)return "";
+  return `${String(Number(m[1])).padStart(2,"0")}:${m[2]}`;
+}
+
+
+function lot2PassengerClassFromCode(v){
+  const s=String(v||"").toUpperCase().trim();
+  if(!s)return "";
+  // Chaque compagnie garde sa propre lettre de classe (ex. SK utilise "M"
+  // pour l'Économie, jamais "Y") : plus de conversion M→Y/J→C.
+  return s[0]||"";
+}
+
+function lot2CleanPassengerName(v){
+  return String(v||"")
+    .replace(/\s+/g," ")
+    .replace(/\b(MR|MRS|MS|MISS|MSTR)\b$/i," $1")
+    .trim();
+}
+
+function lot2SplitNameTitle(full){
+  const s=String(full||"").replace(/\s+/g," ").trim();
+  const m=s.match(/\b(MR|MRS|MS|MISS|MSTR)\s*$/i);
+  const title=m?m[1].toUpperCase():"";
+  const name=title?s.replace(/\s+\b(MR|MRS|MS|MISS|MSTR)\s*$/i,"").trim():s;
+  return {name,title};
+}
+
+function lot2SsrFromCard(cardKey,specific){
+  const c=String(cardKey||"").toUpperCase();
+  const s=String(specific||"").toUpperCase();
+  if(c==="ETKT"||c==="EMD"||c==="MASTER"||c==="WEB")return [];
+  if(c==="FQTV")return ["FQTV",s].filter(Boolean);
+  if(c==="CHLD")return ["CHLD"];
+  if(c==="INF")return ["INF"];
+  if(c==="WCH")return [s||"WCH"];
+  if(c==="INBOUND_SUMMARY"||c==="OUTBOUND_SUMMARY")return [];
+  if(c==="INBOUND")return ["INBOUND",s].filter(Boolean);
+  if(c==="OUTBOUND")return ["OUTBOUND",s].filter(Boolean);
+  if(c==="CONNECTIONS")return [];
+  return [c,s].filter(Boolean);
+}
+
+/* =========================================================
+ * V54 — SOURCE IPORT (res2.iport.servers@res2.eu), IZ/TB
+ * ---------------------------------------------------------
+ * Format spécifique : corps mail texte brut, sans "LIST OF:", avec un
+ * en-tête "IZ742 06SEP CDG LIST TOTAL: 97Y", un nom de liste sur sa
+ * propre ligne (ALL PASSENGERS / CHILDREN / PASSENGERS WITH INFT /
+ * PASSENGERS CHECKED-IN VIA INTERNET / PIL BY SSR CATEGORY), un en-tête
+ * de colonnes puis des lignes préfixées par "---" ou un numéro de BCN,
+ * terminées par "END NAMES". Complètement distinct du pipeline Altea
+ * "LIST OF:" : ne touche à aucune compagnie déjà mappée.
+ * ========================================================= */
+
+const IPORT_AIRLINES = new Set(["IZ","TB"]);
+
+const IPORT_LIST_LABELS = {
+  ALL_PASSENGERS:"IPORT ALL PASSENGERS",
+  CHILDREN:"IPORT CHILDREN",
+  INFANTS:"IPORT PASSENGERS WITH INFT",
+  WEB_CHECKIN:"IPORT PASSENGERS CHECKED-IN VIA INTERNET",
+  PIL_SSR:"IPORT PIL BY SSR CATEGORY"
+};
+
+const IPORT_LIST_CARD_KEYS = {
+  ALL_PASSENGERS:"MASTER",
+  CHILDREN:"CHLD",
+  INFANTS:"INF",
+  WEB_CHECKIN:"WEB",
+  PIL_SSR:"IPORT_SSR"
+};
+
+// Source JU (Air Serbia) : rapport "G*L<vol>/<date><station>..." listant TOUS
+// les passagers du vol avec leurs codes documents/billets, jamais un format
+// "LIST OF:" Altea. Sur demande explicite de l'utilisateur, on n'extrait pour
+// le moment que les passagers porteurs d'un SSR WCH/CHD/PETC — pas de tentative
+// de conversion des codes de classe/réservation (Y/U/AL2/AH2/...), qui restent
+// ignorés tels quels.
+const JU_AIRLINES = new Set(["JU"]);
+const JU_LIST_LABELS = { SSR_LIST:"JU SSR LIST" };
+
+function lot2JuListKindFromText(text){
+  if(/^\s*G\*L\d{1,4}\/\d{2}[A-Z]{3}[A-Z]{3}/m.test(String(text||"")))return "SSR_LIST";
+  return "";
+}
+
+function lot2JuExtractPassengerItems(text){
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n+/);
+  const items=[];
+  for(const raw0 of lines){
+    const raw=raw0.replace(/\s+/g," ").trim();
+    if(!raw || /^G\*L/.test(raw))continue;
+    // "<n> <NOM...> [TITRE] [codes réservation...] <station 3 lettres> F <0|NB> [M|F] <flags...>"
+    // La station (ex. BEG) est constante sur tout le document (le point fixe
+    // de la rotation) : elle sert d'ancre fiable pour délimiter le bloc nom.
+    const m=raw.match(/^(\d{1,3})\s+(.+?)\s+[A-Z]{3}\s+F\s+(?:0|NB)\s*(?:[MF]\s+)?(.*)$/);
+    if(!m)continue;
+    const seq=Number(m[1]);
+    const blob=m[2];
+    const flags=String(m[3]||"").toUpperCase();
+
+    let name=blob,title="";
+    const titleMatch=blob.match(/^(.*?)\s+(MR|MRS|MSTR|MISS|MS)\b/);
+    if(titleMatch){
+      name=titleMatch[1];
+      title=titleMatch[2];
+    }else{
+      // Pas de titre détecté : on retire uniquement les codes courts de fin
+      // de bloc (lettre seule ou lettre(s)+chiffre(s), ex. "O", "AE2"), jamais
+      // un vrai mot de nom.
+      const tokens=blob.split(" ");
+      while(tokens.length>1){
+        const last=tokens[tokens.length-1];
+        if(/^[A-Z]{1,2}\d{1,2}$/.test(last)||/^[A-Z]$/.test(last))tokens.pop();
+        else break;
+      }
+      name=tokens.join(" ");
+    }
+    name=lot2CleanPassengerName(name);
+
+    let ssrSection="",specific="";
+    if(/\bWCH[RSC]?\b/.test(flags)){ssrSection="WCH";specific=(flags.match(/\bWCH[RSC]?\b/)||[])[0];}
+    else if(/\bPETC\b/.test(flags)){ssrSection="PETC";specific="PETC";}
+    else if(/\bCHD\b/.test(flags)){ssrSection="CHLD";specific="CHD";}
+    if(!ssrSection)continue;
+
+    items.push({
+      id:`JU-${seq}-${name}`,
+      seq,name,title,
+      class:"",cabinClass:"",
+      seat:"",
+      specific,note:"",
+      listName:JU_LIST_LABELS.SSR_LIST,
+      cardKey:"JU_MIXED",
+      source:"JU_SSR",
+      ssr:[specific],
+      ssrSection
+    });
+  }
+  return items;
+}
+
+function lot2IportListKindFromBody(text){
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/).map(l=>l.trim()).filter(Boolean);
+  for(const line of lines.slice(0,6)){
+    const u=lot2Upper(line);
+    if(/^ALL\s+PASSENGERS$/.test(u))return "ALL_PASSENGERS";
+    if(/^CHILDREN$/.test(u))return "CHILDREN";
+    if(/^PASSENGERS\s+WITH\s+INFT$/.test(u))return "INFANTS";
+    if(/^PASSENGERS\s+CHECKED-IN\s+VIA\s+INTERNET$/.test(u))return "WEB_CHECKIN";
+    if(/^PIL\s+BY\s+SSR\s+CATEGORY/.test(u))return "PIL_SSR";
+  }
+  return "";
+}
+
+function lot2IsIportBodyV1(text){
+  const t=String(text||"");
+  if(!/\bLIST\s+TOTAL\s*:/i.test(t))return false;
+  return !!lot2IportListKindFromBody(t) || /^---\s/m.test(t) || /\bEND\s+NAMES\b/i.test(t);
+}
+
+function lot2IportSplitNameAndRest(tail){
+  const t=String(tail||"");
+  const m=t.match(/^([A-Z][A-Z'\-]*\/[A-Z][A-Z'\-]*)(.*)$/);
+  if(!m)return null;
+  let rest=m[2]||"";
+  // Nom tronqué en largeur fixe et collé au champ suivant par un point
+  // (ex. "SADOVNIKWEISS/LEONA.7F") au lieu d'un espace normal.
+  rest=rest.replace(/^\./," ");
+  return {name:m[1],rest};
+}
+
+function lot2IportPassengerType(pt){
+  const p=String(pt||"").toUpperCase();
+  if(p.startsWith("I"))return "INF";
+  if(p.startsWith("C"))return "CHLD";
+  return "ADT";
+}
+
+function lot2IportGender(pt){
+  const p=String(pt||"").toUpperCase();
+  if(p.endsWith("F"))return "F";
+  if(p.endsWith("M"))return "M";
+  return "";
+}
+
+function lot2IportParsePassengerRow(rawLine,kind){
+  const line=String(rawLine||"").trim();
+  if(!line)return null;
+  if(/^END\s+NAMES$/i.test(line))return null;
+  if(/^BCN\s+NAME\s+SEAT\b/i.test(line))return null;
+  const head=line.match(/^(---|\d{1,6})\s+(.+)$/);
+  if(!head)return null;
+  const bcn=head[1]==="---"?"":head[1];
+  const n1=lot2IportSplitNameAndRest(head[2]);
+  if(!n1)return null;
+  const name=n1.name;
+  let rest=n1.rest.trim();
+  let seat="";
+  const seatMatch=rest.match(/^(\d{1,2}[A-Z])\s+(.*)$/);
+  if(seatMatch){seat=seatMatch[1];rest=seatMatch[2]}
+  const tokens=rest.split(/\s+/).filter(Boolean);
+  const cc=tokens.shift()||"";
+  const pt=tokens.shift()||"";
+  const des=tokens.shift()||"";
+  const st=tokens.shift()||"";
+  let parentName="",infDob="";
+  if(kind==="INFANTS"){
+    const tail=tokens.join(" ");
+    const n2=lot2IportSplitNameAndRest(tail);
+    if(n2){
+      parentName=n2.name;
+      const dobMatch=n2.rest.trim().match(/^(\d{1,2}[A-Z]{3}\d{2,4})/);
+      infDob=dobMatch?dobMatch[1]:n2.rest.trim();
+    }else{
+      // Nom du parent tronqué en largeur fixe au point de perdre jusqu'au
+      // séparateur "/" lui-même (ex. "MARCIANOSMA.26JAN26", sans "/" du tout) :
+      // le nom seul ne matche plus lot2IportSplitNameAndRest, mais la date de
+      // naissance en fin de champ reste récupérable. Sans ce repli, tout
+      // (nom du parent ET date) était silencieusement perdu.
+      const dobMatch=tail.match(/(\d{1,2}[A-Z]{3}\d{2,4})\s*$/);
+      if(dobMatch){
+        infDob=dobMatch[1];
+        parentName=tail.slice(0,dobMatch.index).replace(/\.$/,"").trim();
+      }
+    }
+    tokens.length=0;
+  }
+  return {bcn,name,seat,cc,pt,des,st,parentName,infDob,extra:tokens.join(" ")};
+}
+
+function lot2IportBuildItem(row,kind,seq){
+  const cKey=IPORT_LIST_CARD_KEYS[kind]||"OTHER";
+  const passengerType=lot2IportPassengerType(row.pt);
+  const item={
+    id:`IPORT-${cKey}-${seq}-${row.name}`,
+    seq,
+    name:row.name,
+    title:"",
+    gender:lot2IportGender(row.pt),
+    passengerType,
+    class:row.cc,
+    cabinClass:row.cc,
+    origin:"",
+    destination:row.des,
+    acceptance:row.st,
+    seat:row.seat,
+    specific:"",
+    note:"",
+    listName:IPORT_LIST_LABELS[kind]||kind,
+    cardKey:cKey,
+    source:"IPORT_TEXT",
+    ssr:[],
+    bcn:row.bcn
+  };
+  if(kind==="CHILDREN"){
+    item.ssr=["CHLD"];
+    item.note=row.extra;
+  }else if(kind==="INFANTS"){
+    item.ssr=["INF"];
+    item.parentName=row.parentName;
+    item.infantDob=row.infDob;
+    item.note=[row.parentName?`Parent ${row.parentName}`:"",row.infDob?`DOB ${row.infDob}`:""].filter(Boolean).join(" · ");
+  }else if(kind==="WEB_CHECKIN"){
+    item.status="WEB";
+    item.note=row.extra;
+  }else{
+    item.note=row.extra;
+  }
+  return item;
+}
+
+const IPORT_SSR_SECTION_TARGET = {MEALS:"MEAL",MEDICAL:"WCH",SEATS:"OTHER",OTHER:"OTHER"};
+
+function lot2IportExtractSsrItems(text){
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/);
+  const items=[];
+  let section="";
+  let seq=0;
+  for(const raw of lines){
+    const trimmed=String(raw||"").trim();
+    const sectionMatch=trimmed.match(/^\*-\*-\*-\*-\*-\*\s+([A-Z]+)\s+\*-\*-\*-\*-\*-\*$/i);
+    if(sectionMatch){section=sectionMatch[1].toUpperCase();continue}
+    if(!section)continue;
+    if(/^SEAT\s+NAME\s+PT\s+DES\s+SSR$/i.test(trimmed))continue;
+    if(/^NO\s+(MEALS|SEATS)$/i.test(trimmed))continue;
+    const m=trimmed.match(/^(\d{1,2}[A-Z])\s+(.+?)\s+([A-Z]{2})\s+([A-Z]{3})\s+(\S+)(.*)$/);
+    if(!m)continue;
+    const seat=m[1];
+    const name=m[2];
+    const pt=m[3];
+    const des=m[4];
+    const ssrCode=m[5].replace(/\.$/,"");
+    const tailText=String(m[6]||"").trim();
+    // YCTC/IZIT ne sont pas des SSR d'assistance : ce sont des confirmations
+    // internes de siège payant (bruit commercial), à ne jamais mettre dans la fiche.
+    if(/^(YCTC|IZIT)/i.test(ssrCode))continue;
+    const target=IPORT_SSR_SECTION_TARGET[section]||"OTHER";
+    seq++;
+    items.push({
+      id:`IPORT-SSR-${seq}-${name}`,
+      seq,name,title:"",
+      gender:lot2IportGender(pt),
+      passengerType:lot2IportPassengerType(pt),
+      class:"",cabinClass:"",
+      origin:"",destination:des,
+      acceptance:"",
+      seat,
+      specific:ssrCode,
+      category:ssrCode,
+      note:tailText,
+      listName:IPORT_LIST_LABELS.PIL_SSR,
+      cardKey:"IPORT_SSR",
+      source:"IPORT_TEXT",
+      ssr:[ssrCode],
+      iportSection:target
+    });
+  }
+  return items;
+}
+
+function lot2IportExtractPassengerItems(text,kind){
+  if(kind==="PIL_SSR")return lot2IportExtractSsrItems(text);
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/);
+  const items=[];
+  let seq=0;
+  for(const raw of lines){
+    const row=lot2IportParsePassengerRow(raw,kind);
+    if(!row)continue;
+    seq++;
+    items.push(lot2IportBuildItem(row,kind,seq));
+  }
+  return items;
+}
+
+function lot2IportClassCounts(items){
+  const out={};
+  for(const p of items||[]){
+    const c=String(p.class||p.cabinClass||"").toUpperCase();
+    if(!c)continue;
+    out[c]=(out[c]||0)+1;
+  }
+  return out;
+}
+
+/* =========================================================
+ * V54 — VF (AJet), sortie du groupe verrouillé
+ * ---------------------------------------------------------
+ * Format PD4ML propre à VF : "ALL Reservetion List" / "Check-In List
+ * Boarded" / "Eticket List" / "Outbound Summary List" / "SSR List", avec
+ * un en-tête "DD/Mon/YYYY VF## ORG - DST" (même famille que BJ, mais
+ * traité indépendamment — voir r223DetectVfIdentityFromPdfText). Chaque
+ * champ d'un passager est sur sa propre ligne dans le flux texte extrait
+ * (une valeur par ligne, ordre de colonnes variable selon la liste), donc
+ * l'extraction se fait par RECONNAISSANCE DE FORME de chaque ligne plutôt
+ * que par position fixe. Complètement indépendant du pipeline Altea
+ * "LIST OF:" et du parser BJ verrouillé.
+ * ========================================================= */
+
+const VF_LIST_LABELS = {
+  RESERVATION:"VF ALL RESERVATION LIST",
+  CHECKIN:"VF CHECK-IN LIST BOARDED",
+  ETICKET:"VF ETICKET LIST",
+  OUTBOUND_SUMMARY:"VF OUTBOUND SUMMARY LIST",
+  SSR:"VF SSR LIST",
+  FQTV:"VF FQTV LIST",
+  INFANT:"VF PASSENGER WITH INFANT LIST",
+  OUTBOUND_DETAILS:"VF OUTBOUND PASSENGER DETAILS LIST",
+  INBOUND_DETAILS:"VF INBOUND PASSENGER DETAILS LIST",
+  CHLD:"VF CHILD LIST",
+  STAFF:"VF PASS2 STAFF LIST"
+};
+
+const VF_LIST_CARD_KEYS = {
+  RESERVATION:"MASTER",
+  // Correction (17/09, spec utilisateur explicite) : "Check-In List Boarded"
+  // -> WEB (canal d'enregistrement web), jamais "BOARDED" (cardKey non geré
+  // nulle part dans lot3MergeFlightData, la carte était donc silencieusement
+  // perdue). Vrai pour VF ET BJ, pas seulement BJ comme précédemment supposé.
+  CHECKIN:"WEB",
+  ETICKET:"ETKT",
+  OUTBOUND_SUMMARY:"OUTBOUND_SUMMARY",
+  SSR:"SSR",
+  FQTV:"FQTV",
+  // cardKey "INF" (pas "INFANT") : c'est le littéral attendu partout ailleurs
+  // dans le pipeline générique (map de lot3MergeFlightData, switch de
+  // lot3NormalizePassengerForUi, split INFKID...). Avec "INFANT" ici, aucune
+  // de ces branches ne matchait jamais : la carte INF n'était donc jamais
+  // alimentée malgré un document Passenger With Infant bien injecté.
+  INFANT:"INF",
+  OUTBOUND_DETAILS:"OUTBOUND",
+  INBOUND_DETAILS:"INBOUND",
+  CHLD:"CHLD",
+  // cardKey "STAFF" : déjà reconnu par la carte agrégée générique de
+  // lot3MergeFlightData (map WCH/CHLD/INF/EMD/ETK/FQTV/STAFF/...), aucune
+  // extension nécessaire là-bas.
+  STAFF:"STAFF"
+};
+
+/*
+ * Codes SSR "repas" repérés dans la vraie liste SSR VF (confirmés un par un
+ * contre un vrai PDF SSR List : "BDML : BDML-BUNDLE S" = sandwich, sans texte
+ * CATERING contrairement à CPDR/DSML/EBML qui portent tous "CATERING").
+ * Liste à étendre au fur et à mesure que d'autres codes repas sont identifiés.
+ */
+const VF_MEAL_SSR_CODES=new Set(["BDML","CPDR","DSML","EBML"]);
+
+const VF_HEADER_WORDS = new Set([
+  "NO","SURNAME","NAME","GC","PNR","STATUS","OWNER","TICKET","FLIGHT",
+  "FROM","TO","INV","VOL","DOS","CC","SEAT","SEQ","BAG","DIFF","STS",
+  "EXPLANATION","HAS","CBAG","TK_NO","INBOUND","PAYMENT","SSR","VF","BJ",
+  "MAIN","CI","OUT","RES","TOTAL","CBBG","EXST","PC","WEIGHT","END","LIST",
+  // Colonnes propres à FQTV List et Passenger With Infant (absentes des
+  // autres listes VF, donc jamais rencontrées ailleurs par accident).
+  "GENDER","FFID","BONUS POINTS","TIER POINTS","CARD TYPE",
+  "G","INFANT","INFANT SURNAME","INFANT NAME","INFANT DOB","C.S",
+  // Colonnes à ignorer explicitement dans SSR List (demande utilisateur) :
+  // Payment Status/CC/C.S ne sont pas des informations passager exploitables.
+  "PAYMENT STATUS","CABIN","CLASS","CPN","CPN STATUS",
+  // En-têtes de colonnes imprimés TOUT EN MAJUSCULES dans le PDF réel (contrairement
+  // à la plupart des en-têtes VF/BJ en casse mixte, "Nom"/"Card Type"...), donc pas
+  // filtrés par la casse et pris à tort pour un nom de passager sans cette entrée
+  // explicite : "TKNE"/"C STS" (PASS2 PRINT réel), "B. STS" (Check-In List Boarded
+  // réel — cause du nom erroné "B. STS/<premier passager>" déjà observé).
+  "TKNE","C STS","B. STS"
+]);
+
+function lot2VfListKindFromText(text){
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/).map(l=>l.trim()).filter(Boolean);
+  const title=lot2Upper(lines[0]||"");
+  if(/^ALL\s+RESERVETION\s+LIST$/.test(title))return "RESERVATION";
+  if(/^CHECK-?IN\s+LIST\s+BOARDED$/.test(title))return "CHECKIN";
+  if(/^ETICKET\s+LIST$/.test(title))return "ETICKET";
+  if(/^OUTBOUND\s+SUMMARY\s+LIST$/.test(title))return "OUTBOUND_SUMMARY";
+  if(/^SSR\s+LIST$/.test(title))return "SSR";
+  if(/^FQTV\s+LIST$/.test(title))return "FQTV";
+  if(/^PASSENGER\s+WITH\s+INFANT$/.test(title))return "INFANT";
+  if(/^OUTBOUND\s+PASSENGER\s+DETAILS\s+LIST$/.test(title))return "OUTBOUND_DETAILS";
+  if(/^INBOUND\s+PASSENGER\s+DETAILS\s+LIST$/.test(title))return "INBOUND_DETAILS";
+  if(/^CHILD\s+LIST$/.test(title))return "CHLD";
+  // "PASS2 PRINT" (BJ) : liste du personnel/voyageurs à tarif réduit (ID/staff).
+  // Même structure Nom/Prénom que les autres listes VF/BJ (voir lot2VfScanRecords) :
+  // aucun scanner dédié nécessaire, seule la reconnaissance du titre manquait.
+  if(/^PASS2\s+PRINT$/.test(title))return "STAFF";
+  return "";
+}
+
+function lot2VfExtractRoute(text){
+  // Même en-tête que r223DetectVfIdentityFromPdfText, réutilisé ici pour
+  // connaître précisément les deux seuls codes aéroport valides du document :
+  // sans ça, un nom de famille de 3 lettres (ex. "BAS") est indiscernable
+  // d'un code aéroport générique et casse l'alignement des champs suivants.
+  const m=String(text||"").match(
+    /\b(\d{1,2})\/(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\/(20\d{2})\s+(?:BJ|VF)\s*\d{1,4}\s+([A-Z]{3})\s*[-–]\s*([A-Z]{3})\b/i
+  );
+  return m?{origin:m[3].toUpperCase(),destination:m[4].toUpperCase()}:{origin:"",destination:""};
+}
+
+function lot2VfClassifyToken(raw,route){
+  const t=String(raw||"").trim();
+  if(!t)return {type:"skip"};
+  const u=t.toUpperCase();
+  if(VF_HEADER_WORDS.has(u))return {type:"skip"};
+  if(route && (u===route.origin || u===route.destination))return {type:"airport",value:u};
+  if(/^\d{2}:\d{2}:\d{2}$/.test(u))return {type:"skip"};
+  if(/^\d{2}\/\d{2}\/\d{4}$/.test(u))return {type:"skip"};
+  // Lignes SSR ("CBAG : CBAG- 8KG CAB", "FQTV : TK204054333 T", ...).
+  const ssrM=t.match(/^([A-Z][A-Z0-9]{1,7})\s*:\s*(.+)$/);
+  if(ssrM)return {type:"ssr",code:ssrM[1].toUpperCase(),text:ssrM[2].trim()};
+  if(/^\d{1,2}$/.test(u))return {type:"skip"}; // numéro de ligne ("No")
+  if(/^\d{10,13}$/.test(u))return {type:"ticket",value:u};
+  // Child List porte le numéro de coupon accolé au billet (".../1", ".../3") :
+  // on garde uniquement le numéro de billet, le coupon n'est pas exploité ici.
+  if(/^\d{10,13}\/\d{1,2}$/.test(u))return {type:"ticket",value:u.split("/")[0]};
+  // PNR à 6 caractères, toujours préfixé d'un chiffre dans ce système
+  // (contrairement à un nom de famille pur-lettres qui peut aussi faire 6 caractères).
+  if(/^[0-9][A-Z0-9]{5}$/.test(u))return {type:"pnr",value:u};
+  if(/^\d{1,2}[A-Z]$/.test(u))return {type:"seat",value:u};
+  // Numéro FQTV (FFID) : 2 lettres + 9 chiffres ("TK463971137"), propre à la
+  // liste FQTV. Distinct d'un billet (chiffres purs) ou d'un code groupe
+  // (1-3 chiffres seulement) : aucun risque de collision avec ces formes.
+  // Sur un vrai FQTV List BJ, ce champ porte parfois le niveau de carte accolé
+  // par un point ("BJ194362534.WHITE") : capturé à part (voir lot2VfScanRecords,
+  // qui l'utilise aussi pour ignorer le "WHITE" isolé qui suit sur sa propre
+  // ligne — sinon pris à tort pour un second passager et cassant tout l'alignement).
+  const ffidM=u.match(/^([A-Z]{2}\d{9})(?:\.([A-Z]+))?$/);
+  if(ffidM)return {type:"ffid",value:ffidM[1],tier:ffidM[2]||""};
+  // "YES"/"NO" (colonne "**Has Cbag" de Check-In List Boarded) ressemblent à un
+  // code classe (Y+2 caractères) mais n'en sont pas : à exclure explicitement.
+  if(u==="YES"||u==="NO")return {type:"skip"};
+  if(/^Y[A-Z0-9]{1,2}$/.test(u))return {type:"class",value:u};
+  if(/^[A-Z]{2}$/.test(u))return {type:"skip"}; // statut vol / code 2 lettres bruit
+  // Code groupe (GC, ex. "A1","D32") : plusieurs passagers d'un même PNR
+  // partagent ce code. Capturé pour permettre la recherche par groupe.
+  if(/^[A-Z]{1,2}\d{1,3}$/.test(u))return {type:"groupcode",value:u};
+  if(/^(?:TK|CX|OP|1[A-Z])?\s*TICKET$/i.test(t))return {type:"skip"};
+  if(/^[A-Z][A-Z .'-]*$/.test(t) && t.length>=2)return {type:"name",value:t.replace(/\s+/g," ").trim()};
+  return {type:"skip"};
+}
+
+function lot2VfScanRecords(text){
+  const route=lot2VfExtractRoute(text);
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/);
+  const records=[];
+  let cur=null;
+  const fresh=(surname)=>({surname,name:undefined,pnr:"",ticket:"",seat:"",cls:"",ssr:[],ffid:"",cardTier:"",groupCode:""});
+  for(const raw of lines){
+    const tok=lot2VfClassifyToken(raw,route);
+    if(tok.type==="name"){
+      // Sur un vrai FQTV List BJ, le niveau de carte ("WHITE") apparaît une
+      // deuxième fois, seul sur sa propre ligne, juste après le jeton FFID
+      // ("BJ194362534.WHITE") qui le porte déjà : sans ce garde-fou, il est
+      // pris pour un second passager et décale tous les enregistrements
+      // suivants (19 "passagers" extraits au lieu des 13 réels).
+      if(cur && cur.cardTier && tok.value.toUpperCase()===cur.cardTier)continue;
+      if(!cur)cur=fresh(tok.value);
+      else if(cur.surname===undefined)cur.surname=tok.value;
+      else if(cur.name===undefined)cur.name=tok.value;
+      else{records.push(cur);cur=fresh(tok.value)}
+    }else if(cur){
+      if(tok.type==="pnr")cur.pnr=tok.value;
+      else if(tok.type==="ticket")cur.ticket=tok.value;
+      else if(tok.type==="seat")cur.seat=tok.value;
+      else if(tok.type==="class")cur.cls=tok.value;
+      else if(tok.type==="ssr")cur.ssr.push({code:tok.code,text:tok.text});
+      else if(tok.type==="ffid"){cur.ffid=tok.value; if(tok.tier)cur.cardTier=tok.tier;}
+      else if(tok.type==="groupcode")cur.groupCode=tok.value;
+    }
+  }
+  if(cur && cur.surname!==undefined && cur.name!==undefined)records.push(cur);
+  return records.filter(r=>r.surname && r.name);
+}
+
+function lot2VfBuildItem(rec,kind,seq){
+  const cKey=VF_LIST_CARD_KEYS[kind]||"OTHER";
+  // La classe cabine affichée/comptée reste la lettre seule ("Y"), comme pour
+  // le pipeline Altea générique (lot2PassengerClassFromCode) : le code
+  // tarifaire brut ("YL","Y2"...) est conservé à part dans "acceptance",
+  // jamais dans class/cabinClass.
+  const cabinClass=lot2PassengerClassFromCode(rec.cls);
+  const item={
+    id:`VF-${cKey}-${seq}-${rec.surname}-${rec.name}`,
+    seq,
+    name:`${rec.surname}/${rec.name}`,
+    title:"",
+    gender:"",
+    passengerType:kind==="CHLD"?"CHLD":"ADT",
+    class:cabinClass,
+    cabinClass:cabinClass,
+    origin:"",
+    destination:"",
+    acceptance:rec.cls,
+    seat:rec.seat,
+    specific:"",
+    note:"",
+    listName:VF_LIST_LABELS[kind]||kind,
+    cardKey:cKey,
+    source:"VF_PD4ML",
+    ssr:[],
+    pnr:rec.pnr,
+    etkt:rec.ticket,
+    documentNumber:rec.ticket,
+    groupCode:rec.groupCode||""
+  };
+  if(kind==="SSR"){
+    item.ssr=rec.ssr.map(s=>s.code);
+    item.note=rec.ssr.map(s=>`${s.code}: ${s.text}`).join(" · ");
+  }
+  if(kind==="FQTV" && rec.ffid){
+    // lot3NormalizePassengerForUi construit déjà x.fqtv.number depuis x.ffid
+    // pour cardKey FQTV : pas besoin de dupliquer dans etkt/documentNumber.
+    item.ffid=rec.ffid;
+    // Niveau de carte réel ("WHITE"...) plutôt que le repli générique "FQA"
+    // de lot2FqtvCategories (p.category||p.specific||"FQA").
+    if(rec.cardTier)item.category=rec.cardTier;
+  }
+  return item;
+}
+
+// Passenger With Infant a une structure différente des autres listes VF :
+// chaque enregistrement porte DEUX identités consécutives (adulte puis
+// bébé), et non un simple couple nom/prénom. Le classifieur générique
+// (lot2VfClassifyToken/lot2VfScanRecords) ne peut pas s'y appliquer tel
+// quel : il compterait 4 "name" par ligne et casserait l'alignement.
+// On utilise donc un scanner dédié, avec la lettre de genre (F/M, seule
+// sur sa ligne) comme marqueur de bascule adulte → bébé.
+function lot2VfClassifyInfantToken(raw,route){
+  const t=String(raw||"").trim();
+  if(!t)return {type:"skip"};
+  const u=t.toUpperCase();
+  if(VF_HEADER_WORDS.has(u))return {type:"skip"};
+  if(/^[FM]$/.test(u))return {type:"gender"};
+  if(route && (u===route.origin || u===route.destination))return {type:"airport",value:u};
+  if(/^\d{2}\/\d{2}\/\d{4}$/.test(u))return {type:"dob",value:u};
+  if(/^Y[A-Z0-9]{1,2}$/.test(u))return {type:"class",value:u};
+  if(/^\d{1,2}$/.test(u))return {type:"skip"};
+  if(/^[A-Z]{2}$/.test(u))return {type:"skip"};
+  if(/^[A-Z][A-Z .'-]*$/.test(t) && t.length>=2)return {type:"name",value:t.replace(/\s+/g," ").trim()};
+  return {type:"skip"};
+}
+
+function lot2VfScanInfantRecords(text){
+  const route=lot2VfExtractRoute(text);
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/);
+  const records=[];
+  let cur=null;
+  const fresh=()=>({surname:undefined,name:undefined,infantSurname:undefined,infantName:undefined,infantDob:"",cls:""});
+  const adultDone=(r)=>r.surname!==undefined && r.name!==undefined;
+  const recordDone=(r)=>adultDone(r) && r.infantSurname!==undefined && r.infantName!==undefined;
+  // Le document réel n'affiche pas de lettre de genre entre le couple
+  // adulte et le couple bébé (vérifié sur un PDF réel) : la bascule se
+  // fait donc sur l'état des champs déjà remplis (2 noms = adulte, puis
+  // 2 noms suivants = bébé), pas sur un jeton "genre" qui n'existe pas
+  // toujours dans le flux.
+  for(const raw of lines){
+    const tok=lot2VfClassifyInfantToken(raw,route);
+    if(tok.type==="name"){
+      if(!cur || recordDone(cur)){
+        if(cur)records.push(cur);
+        cur=fresh();
+      }
+      if(!adultDone(cur)){
+        if(cur.surname===undefined)cur.surname=tok.value;
+        else cur.name=tok.value;
+      }else{
+        if(cur.infantSurname===undefined)cur.infantSurname=tok.value;
+        else cur.infantName=tok.value;
+      }
+    }else if(cur){
+      if(tok.type==="dob")cur.infantDob=tok.value;
+      else if(tok.type==="class")cur.cls=tok.value;
+    }
+  }
+  if(cur && cur.surname!==undefined && cur.name!==undefined)records.push(cur);
+  return records.filter(r=>r.surname && r.name);
+}
+
+function lot2VfBuildInfantItem(rec,seq){
+  const hasInfant=Boolean(rec.infantSurname && rec.infantName);
+  const parentName=`${rec.surname}/${rec.name}`;
+  const infantName=hasInfant?`${rec.infantSurname}/${rec.infantName}`:"";
+  const cabinClass=lot2PassengerClassFromCode(rec.cls);
+  return {
+    /*
+     * Le nom affiché dans la LISTE doit être celui du BÉBÉ, pas du parent :
+     * avec le nom du parent, lot3FindPassengerIndex rapprochait cette ligne
+     * du dossier MASTER du même adulte (déjà réservé en tant que passager),
+     * donnant l'impression d'un doublon du parent. Le nom du parent reste
+     * disponible dans le dossier (specific/note) pour rattacher le bébé au
+     * bon adulte, sans provoquer ce rapprochement.
+     */
+    id:`VF-INFANT-${seq}-${rec.surname}-${rec.name}`,
+    seq,
+    name:hasInfant?infantName:parentName,
+    title:"",
+    gender:"",
+    passengerType:"INF",
+    class:cabinClass,
+    cabinClass:cabinClass,
+    origin:"",
+    destination:"",
+    acceptance:rec.cls,
+    seat:"",
+    specific:`PARENT: ${parentName}`,
+    note:`PARENT: ${parentName}${rec.infantDob?` · NÉ(E) LE ${rec.infantDob}`:""}`,
+    listName:VF_LIST_LABELS.INFANT,
+    cardKey:VF_LIST_CARD_KEYS.INFANT,
+    source:"VF_PD4ML",
+    ssr:[],
+    pnr:"",
+    etkt:"",
+    documentNumber:"",
+    parentName,
+    infantName,
+    infantDob:rec.infantDob
+  };
+}
+
+function lot2VfExtractInfantItems(text){
+  const records=lot2VfScanInfantRecords(text);
+  return records.map((rec,i)=>lot2VfBuildInfantItem(rec,i+1));
+}
+
+/*
+ * Outbound/Inbound Passenger Details List : structure entièrement différente
+ * des autres listes VF (un passager par correspondance, pas une simple table
+ * nom/classe/siège). Chaque enregistrement est repérable par le marqueur
+ * répété "VF12/CDG-SAW=>" (le vol principal), immuable pour tout le document :
+ * on découpe le texte sur ce marqueur plutôt que de classer token par token.
+ * Vérifié contre le vrai PDF fourni : Nom/Prénom sont dans l'ordre PRÉNOM puis
+ * NOM (inversé par rapport aux autres listes VF), et les colonnes Genre/Classe
+ * cabine ne portent aucun texte extractible dans ce document (comme les
+ * colonnes à 0 des autres listes) — la classe cabine VF n'ayant qu'un seul
+ * niveau, elle est donc fixée à "Y".
+ */
+function lot2VfScanConnectionRecords(text){
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n/).map(l=>l.trim()).filter(Boolean);
+  const boundaryRe=/^VF\d{1,4}\/[A-Z]{3}-[A-Z]{3}=>$/;
+  const pnrRe=/^[0-9][A-Z0-9]{5}$/;
+  const flightRe=/^(VF\d{1,4})\/(\d{1,2}[A-Z]{3})\/([A-Z]{3})\/STD:(\d{2}:\d{2})/;
+  const records=[];
+  let i=0;
+  while(i<lines.length){
+    if(!boundaryRe.test(lines[i])){i++;continue;}
+    i++;
+    if(i<lines.length && /^STA:/i.test(lines[i]))i++;
+    const flightLine1=lines[i]||"";i++;
+    i++; // continuation "Time Diff : XhYm", toujours sur exactement 2 lignes au total
+    const m=flightLine1.match(flightRe);
+    const given=lines[i]||"";i++;
+    const surnameParts=[];
+    while(i<lines.length && !pnrRe.test(lines[i]) && !boundaryRe.test(lines[i])){
+      surnameParts.push(lines[i]);i++;
+    }
+    let pnr="";
+    if(i<lines.length && pnrRe.test(lines[i])){pnr=lines[i].toUpperCase();i++;}
+    let weight="";
+    while(i<lines.length && /^\d{1,3}$/.test(lines[i])){weight=lines[i];i++;}
+    if(m && given && surnameParts.length){
+      records.push({
+        flightNumber:m[1].toUpperCase(),
+        destination:m[3].toUpperCase(),
+        std:m[4],
+        given:given.replace(/\s+/g," ").trim(),
+        surname:surnameParts.join(" ").replace(/\s+/g," ").trim(),
+        pnr,weight
+      });
+    }
+  }
+  return records;
+}
+
+function lot2VfBuildConnectionItem(rec,direction,seq){
+  return {
+    id:`VF-${direction}-${seq}-${rec.surname}-${rec.given}`,
+    seq,
+    name:`${rec.surname}/${rec.given}`,
+    title:"",
+    gender:"",
+    passengerType:"ADT",
+    class:"Y",
+    cabinClass:"Y",
+    origin:"",
+    destination:rec.destination,
+    acceptance:"",
+    seat:"",
+    specific:"",
+    note:"",
+    listName:direction==="OUTBOUND"?VF_LIST_LABELS.OUTBOUND_DETAILS:VF_LIST_LABELS.INBOUND_DETAILS,
+    cardKey:direction,
+    source:"VF_PD4ML",
+    ssr:[],
+    pnr:rec.pnr,
+    etkt:"",
+    documentNumber:"",
+    connection:{flight:rec.flightNumber,airport:rec.destination,direction:direction.toLowerCase(),std:rec.std}
+  };
+}
+
+function lot2VfExtractConnectionItems(text,direction){
+  const records=lot2VfScanConnectionRecords(text);
+  return records.map((rec,i)=>lot2VfBuildConnectionItem(rec,direction,i+1));
+}
+
+function lot2VfExtractPassengerItems(text,kind){
+  if(kind==="OUTBOUND_SUMMARY")return [];
+  if(kind==="INFANT")return lot2VfExtractInfantItems(text);
+  if(kind==="OUTBOUND_DETAILS")return lot2VfExtractConnectionItems(text,"OUTBOUND");
+  if(kind==="INBOUND_DETAILS")return lot2VfExtractConnectionItems(text,"INBOUND");
+  const records=lot2VfScanRecords(text);
+  return records.map((rec,i)=>lot2VfBuildItem(rec,kind,i+1));
+}
+
+function lot2VfClassCounts(items){
+  // base.booked (widget "Booked / Classes") attend une classe cabine ("Y"/"C"/"F"),
+  // pas le code tarifaire brut ("Y2","YL","YR"...) porté par chaque passager VF.
+  // Sans ce regroupement, aucun code tarifaire n'égale jamais "Y" et le total
+  // Booked reste à 0 malgré une injection réussie.
+  const out={};
+  for(const p of items||[]){
+    const c=lot2PassengerClassFromCode(p.class||p.cabinClass||"");
+    if(!c)continue;
+    out[c]=(out[c]||0)+1;
+  }
+  return out;
+}
+
+// ========================================================
+// TW (t'way) — corps de mail "CONTENT" : un flux dense continu,
+// une réservation par passager (nom dupliqué, codes SSR sur plusieurs
+// lignes, classe/sous-classe/statut/route/PNR/siège), jamais un tableau
+// "LIST OF:" Altea. Format vérifié sur un vrai relevé TW402/06SEP réel
+// (153/153 passagers extraits sans reste, comptage cabines C16/Y137
+// cohérent). TK utilise vraisemblablement le même format ("V3.5 R3 :
+// tk_prepa_plain_text.txt / tw_prepa_plain_text.txt") mais n'a pas
+// encore été vérifié sur de vraies données : seule TW est activée ici.
+const TW_CONTENT_AIRLINES=new Set(["TW"]);
+const TW_WEB_PREFIXES=new Set(["WEBAPI","WEBAPM","KRAPP","FRWEB","FRMOB"]);
+function lot2TwNameAnchorRe(){
+  return /([A-Z]{2,10})?(\d{1,6})\s+([A-Z][A-Z\s'\-]*?\s*\/\s*[A-Z][A-Z\s'\-]*?)\s\3(?=\s)/g;
+}
+function lot2TwContentDetect(text){
+  const flat=String(text||"").replace(/\s+/g," ").trim();
+  if(!/\bCONTENT\b/.test(flat))return "";
+  const re=lot2TwNameAnchorRe();
+  let count=0;
+  while(re.exec(flat)){count++; if(count>=3)break;}
+  return count>=3?"CONTENT":"";
+}
+function lot2TwExtractPassengerItems(text){
+  const flat=String(text||"").replace(/\s+/g," ").trim();
+  const re=lot2TwNameAnchorRe();
+  const anchors=[];
+  let m;
+  while((m=re.exec(flat)))anchors.push({index:m.index,end:m.index+m[0].length,prefix:String(m[1]||""),name:m[3].trim()});
+  const items=[];
+  for(let i=0;i<anchors.length;i++){
+    const start=anchors[i].end;
+    const end=i+1<anchors.length?anchors[i+1].index:flat.length;
+    const tail=flat.slice(start,end).trim();
+    const name=anchors[i].name;
+    const prefix=anchors[i].prefix;
+    const gt=tail.match(/^([MF])\s+(MSTR|MISS|MRS|MR|MS)\s+(\S+)\s+/);
+    let rest=tail,gender="",title="",ptype="";
+    if(gt){gender=gt[1];title=gt[2];ptype=gt[3];rest=tail.slice(gt[0].length)}
+    // Repère fixe du format : <CABINE> <SOUS-CLASSE> HK[ CK/BD...]  CDG ICN[ AÉROPORT][ TWxxxx]  <jambe>/<jambes> <PNR>[ SIÈGE]
+    // "NULL" est une valeur littérale de champ vide dans une variante réelle
+    // du format (vue sur un vrai mail TW402/31AOÛT après activation) : tous
+    // les champs optionnels doivent aussi accepter ce jeton, sans quoi le
+    // repère ne matche plus jamais et TOUS les passagers du document sont
+    // silencieusement ignorés (extraction à 0 malgré un document valide).
+    // Le ratio "<jambe>/<jambes>" n'est pas toujours à un seul chiffre (ex.
+    // "31/31", "16/31" vus sur un vrai mail TW402/16SEP à forte affluence) :
+    // \d/\d seul ne matchait que "1/2", "7/8"... et faisait échouer le
+    // repère entier (donc perdre le passager en silence) dès qu'un groupe
+    // dépassait 9 passagers.
+    const core=rest.match(/\b(C|Y)\s+([A-Z]{1,2})\s+HK(?:\s+(?:CK|BD|NULL))*\s+CDG\s+ICN(?:\s+(?:([A-Z]{3})|NULL))?(?:\s+(?:(TW\d{2,4})|NULL))?\s+(\d{1,2}\/\d{1,2})\s+([A-Z0-9]{6})(?:\s+NULL)?(?:\s+([0-9]{2}[A-Z]))?/);
+    if(!core)continue; // repère absent : ligne non fiable, ignorée plutôt que de créer un passager corrompu
+    const ssrBlock=rest.slice(0,core.index).trim();
+    items.push({
+      id:`TW-${i+1}-${name}`,seq:i+1,name,title,gender,passengerType:ptype||"ADULT",
+      class:core[1],cabinClass:core[1],bookingClass:core[2],
+      origin:"CDG",destination:core[3]||"ICN",
+      seat:core[7]||"",pnr:core[6],legRatio:core[5],connectingFlight:core[4]||"",
+      specific:"",note:"",listName:"TW CONTENT",cardKey:"MASTER",source:"TW_CONTENT",
+      prefix,web:TW_WEB_PREFIXES.has(prefix),
+      ssr:ssrBlock?ssrBlock.split(/\s+/).filter(x=>x&&x!=="NULL"):[]
+    });
+  }
+  return items;
+}
+function lot2TwClassCounts(items){
+  const out={};
+  for(const p of items||[]){
+    const c=String(p.cabinClass||p.class||"").toUpperCase();
+    if(!c)continue;
+    out[c]=(out[c]||0)+1;
+  }
+  return out;
+}
+// Grille horaire réelle des vols TW au départ d'ICN, fournie par
+// l'utilisateur — le manifeste CONTENT ne porte que le numéro de vol et
+// l'aéroport de la correspondance, jamais son heure ni la ville. Clé =
+// numéro de vol nu (sans préfixe "TW", sans zéro de tête) pour matcher
+// aussi bien "TW33" que "TW033" comme vu dans le texte source réel.
+// L'aéroport réellement extrait du document reste toujours prioritaire
+// (voir lot2TwDeriveSecondaryCards) : cette grille ne sert qu'à enrichir
+// l'heure/la ville, jamais à réécrire la destination constatée.
+const TW_OUTBOUND_SCHEDULE={
+  7:{airport:"DAD",city:"Da Nang",std1:"07:55",std2:""},
+  11:{airport:"DAD",city:"Da Nang",std1:"19:00",std2:""},
+  13:{airport:"DAD",city:"Da Nang",std1:"21:35",std2:""},
+  33:{airport:"CXR",city:"Nha Trang",std1:"19:00",std2:""},
+  49:{airport:"CNX",city:"Chiang Mai",std1:"16:25",std2:""},
+  55:{airport:"PQC",city:"Phu Quoc",std1:"16:35",std2:""},
+  61:{airport:"HAN",city:"Hanoi",std1:"20:10",std2:""},
+  101:{airport:"BKK",city:"Bangkok",std1:"19:50",std2:"18:00"},
+  121:{airport:"CEB",city:"Cebu",std1:"08:00",std2:""},
+  125:{airport:"KLO",city:"Kalibo",std1:"08:30",std2:""},
+  131:{airport:"VTE",city:"Vientiane",std1:"19:15",std2:"20:05"},
+  149:{airport:"BKI",city:"Kota Kinabalu",std1:"18:05",std2:""},
+  153:{airport:"BKI",city:"Kota Kinabalu",std1:"18:30",std2:""},
+  155:{airport:"CGK",city:"Jakarta",std1:"",std2:""},
+  161:{airport:"SIN",city:"Singapore",std1:"15:50",std2:""},
+  171:{airport:"DAC",city:"Dhaka",std1:"19:30",std2:""},
+  201:{airport:"FUK",city:"Fukuoka",std1:"10:05",std2:""},
+  203:{airport:"FUK",city:"Fukuoka",std1:"",std2:""},
+  205:{airport:"FUK",city:"Fukuoka",std1:"15:00",std2:""},
+  207:{airport:"FUK",city:"Fukuoka",std1:"18:05",std2:""},
+  237:{airport:"NRT",city:"Tokyo",std1:"",std2:""},
+  239:{airport:"NRT",city:"Tokyo",std1:"12:25",std2:""},
+  241:{airport:"NRT",city:"Tokyo",std1:"08:35",std2:""},
+  243:{airport:"NRT",city:"Tokyo",std1:"10:20",std2:""},
+  245:{airport:"NRT",city:"Tokyo",std1:"15:00",std2:""},
+  247:{airport:"NRT",city:"Tokyo",std1:"",std2:""},
+  249:{airport:"NRT",city:"Tokyo",std1:"",std2:""},
+  263:{airport:"CTS",city:"Sapporo",std1:"10:20",std2:"10:10"},
+  279:{airport:"OKA",city:"Okinawa",std1:"07:20",std2:""},
+  281:{airport:"OKA",city:"Okinawa",std1:"11:00",std2:""},
+  285:{airport:"HSG",city:"Saga",std1:"07:55",std2:""},
+  287:{airport:"KMJ",city:"Kumamoto",std1:"07:55",std2:""},
+  301:{airport:"KIX",city:"Osaka",std1:"08:00",std2:""},
+  303:{airport:"KIX",city:"Osaka",std1:"10:50",std2:""},
+  305:{airport:"KIX",city:"Osaka",std1:"15:50",std2:""},
+  307:{airport:"KIX",city:"Osaka",std1:"",std2:""},
+  317:{airport:"KIX",city:"Osaka",std1:"",std2:""},
+  401:{airport:"CDG",city:"Paris",std1:"09:50",std2:"10:10"},
+  403:{airport:"FRA",city:"Frankfurt",std1:"09:35",std2:"09:50"},
+  405:{airport:"FCO",city:"Rome",std1:"12:35",std2:""},
+  407:{airport:"BCN",city:"Barcelona",std1:"11:05",std2:""},
+  409:{airport:"ZAG",city:"Zagreb",std1:"",std2:""},
+  421:{airport:"UBN",city:"Ulaanbaatar",std1:"11:10",std2:""},
+  431:{airport:"TAS",city:"Tashkent",std1:"17:50",std2:""},
+  437:{airport:"BSZ",city:"Bishkek",std1:"19:45",std2:"18:50"},
+  501:{airport:"SYD",city:"Sydney",std1:"22:10",std2:""},
+  513:{airport:"SPN",city:"Saipan",std1:"20:00",std2:""},
+  525:{airport:"SPN",city:"Saipan",std1:"22:10",std2:""},
+  529:{airport:"GUM",city:"Guam",std1:"",std2:""},
+  531:{airport:"YVR",city:"Vancouver",std1:"21:10",std2:""},
+  605:{airport:"TNA",city:"Jinan",std1:"",std2:""},
+  607:{airport:"TAO",city:"Qingdao",std1:"",std2:""},
+  613:{airport:"SHE",city:"Shenyang",std1:"23:05",std2:"08:05"},
+  615:{airport:"WUH",city:"Wuhan",std1:"",std2:""},
+  643:{airport:"HKG",city:"Hong Kong",std1:"08:45",std2:""},
+  669:{airport:"RMQ",city:"Taichung",std1:"14:25",std2:"13:55"},
+  671:{airport:"KHH",city:"Kaohsiung",std1:"",std2:""},
+  9617:{airport:"LYI",city:"Linyi",std1:"",std2:""},
+  9623:{airport:"YCU",city:"Yuncheng",std1:"",std2:""},
+  9635:{airport:"HLD",city:"Hailar",std1:"",std2:""}
+};
+
+/*
+ * TW livre tout le manifeste dans une seule carte MASTER (pas de liste WCH/
+ * CHLD/INF/OUTBOUND séparée comme chez SQ) alors que les codes SSR et le
+ * vol de correspondance existent bien par passager dans le texte source
+ * (ex. "LE / THI LAM ... WCHR RWCH", "LISITO ... INFT", "CDG ICN FUK
+ * TW207"). On dérive donc ici, à partir du MASTER déjà extrait, les
+ * sous-cartes que le reste du pipeline sait déjà injecter (voir l'appel
+ * dans lot3MergeFlightData, section MASTER/TW CONTENT).
+ * Pas de dérivation INBOUND : le format TW CONTENT ne porte aucune
+ * information de vol entrant, seulement un éventuel vol de correspondance
+ * en sortie (ex. CDG-ICN puis ICN-FUK), donc seul OUTBOUND est dérivable.
+ */
+function lot2TwDeriveSecondaryCards(items){
+  const wchRe=/^(WCHR|WCHS|WCHC|WCMP|WCBD|WCLB)$/;
+  const out=[];
+
+  // cardKey doit être réécrit sur CHAQUE item dérivé (pas seulement sur la
+  // carte englobante) : lot3CleanImportedPassengerStrict vide ssr/specific/
+  // note de tout item dont cardKey==="MASTER" (règle voulue pour le vrai
+  // MASTER), et ces items l'héritent tous de lot2TwExtractPassengerItems.
+  const wch=[];
+  for(const p of items||[]){
+    const code=(p.ssr||[]).find(s=>wchRe.test(s));
+    if(!code)continue;
+    wch.push({...p,cardKey:"WCH",category:code,specific:code});
+  }
+  if(wch.length)out.push({cardKey:"WCH",passengerItems:wch});
+
+  // MSTR/MISS = jeune passager (garçon/fille), convention déjà utilisée
+  // ailleurs dans ce pipeline pour distinguer un enfant d'un adulte.
+  const chld=(items||[]).filter(p=>p.title==="MSTR"||p.title==="MISS").map(p=>({...p,cardKey:"CHLD"}));
+  if(chld.length)out.push({cardKey:"CHLD",passengerItems:chld});
+
+  // SSR INFT ou type tarifaire "IFxx" (ex. "IF00" vu sur un vrai vol TW) :
+  // les deux formes vues dans des données réelles pour un nourrisson.
+  const inf=(items||[]).filter(p=>(p.ssr||[]).includes("INFT")||/^IF/i.test(p.passengerType||"")).map(p=>({...p,cardKey:"INF"}));
+  if(inf.length)out.push({cardKey:"INF",passengerItems:inf});
+
+  // WEB est porté par le préfixe de la ligne source. Un INF n'a pas de ligne
+  // cabine autonome : il est ajouté à la cabine de son passager accompagnant,
+  // ce qui restitue le total opérationnel affiché par T'way.
+  const web=(items||[]).filter(p=>p.web).map(p=>({...p,cardKey:"WEB"}));
+  if(web.length){
+    const classCounts=lot2TwClassCounts(web);
+    for(const p of inf)if(p.web){const c=String(p.cabinClass||p.class||"").toUpperCase();if(c)classCounts[c]=(classCounts[c]||0)+1;}
+    out.push({cardKey:"WEB",passengerItems:web,classCounts});
+  }
+
+  const outbound=[];
+  for(const p of items||[]){
+    if(!p.connectingFlight)continue;
+    const flight=String(p.connectingFlight).toUpperCase();
+    const airport=String(p.destination||"").toUpperCase();
+    const flightNum=Number((flight.match(/(\d+)/)||[])[1]||NaN);
+    const sched=TW_OUTBOUND_SCHEDULE[flightNum];
+    const conn={direction:"OUTBOUND",flight,airport};
+    if(sched){
+      if(sched.std1)conn.std=sched.std1;
+      if(sched.city)conn.city=sched.city;
+    }
+    outbound.push({...p,cardKey:"OUTBOUND",connection:conn});
+  }
+  if(outbound.length)out.push({cardKey:"OUTBOUND",passengerItems:outbound});
+
+  return out;
+}
+
+// ========================================================
+// TK (Turkish Airlines) — corps de mail texte, plusieurs sections dans le
+// MÊME document (CHECK IN INFORMATION, TOY'S R US, REBATE PAX, ONCARRIAGE
+// PAX, EMD/E-TKT/FQTV FULL LIST, ALL PAX, ...), chaque section terminée par
+// "END NAMES". Format vérifié sur 3 vrais mails réels (fichiers .eml
+// fournis par l'utilisateur, décodés proprement — base64 et
+// quoted-printable) : "ALL PAX" est le manifeste complet ligne par ligne
+// (nom tronqué + destination/classe/siège/eticket, puis une ligne détail
+// "SURNAME-GIVEN-TYPE-TITLE"). Sur le mail complet non tronqué (TK1830/
+// 28AUG) : 160/160 passagers extraits, comptage cabine C20/Y140 EXACT par
+// rapport à l'en-tête "0 F 20 C 140Y". Les autres sections ne sont
+// volontairement pas parsées ici (redondantes avec ALL PAX, comme les CC-x
+// de SQ) : seule ALL PAX construit la fiche, le reste tombe en repli
+// générique sans dégât (voir lot3UpsertPassengers/lot5InjectAvailable qui
+// ignorent déjà cardKey OTHER).
+const TK_ALLPAX_AIRLINES=new Set(["TK"]);
+function lot2TkAllPaxHeaderMatch(text){
+  return String(text||"").match(/\b[A-Z]{2}\d{2,4}\s+\d{1,2}[A-Z]{3}\s+\w{3}\s+ALL PAX\s+(\d+)\s+F\s+(\d+)\s+C\s+(\d+)\s*Y/);
+}
+function lot2TkContentDetect(text){
+  const m=lot2TkAllPaxHeaderMatch(text);
+  if(!m)return "";
+  const total=Number(m[1]||0)+Number(m[2]||0)+Number(m[3]||0);
+  return total>0?"ALL_PAX":"";
+}
+function lot2TkExtractPassengerItems(text){
+  const flat=String(text||"");
+  const m=lot2TkAllPaxHeaderMatch(flat);
+  if(!m)return [];
+  const after=flat.slice(m.index+m[0].length);
+  const endIdx=after.indexOf("END NAMES");
+  const section=endIdx>=0?after.slice(0,endIdx):after;
+  const lines=section.replace(/\r/g,"").split("\n");
+  const records=[];
+  let current=null;
+  for(const line of lines){
+    const numMatch=line.match(/^\s*(\d{1,3})\.(.*)$/);
+    if(numMatch){
+      if(current)records.push(current);
+      current={seq:Number(numMatch[1]),lines:[numMatch[2]]};
+    }else if(current && line.trim()){
+      current.lines.push(line);
+    }
+  }
+  if(current)records.push(current);
+
+  const items=[];
+  for(const r of records){
+    const l1=r.lines[0]||"";
+    // Le champ nom tronqué colle parfois l'initiale avec "!" sans espace
+    // (ex. "AGBADAMU!J") au lieu de "ADAMS    J" : peu importe, le vrai nom
+    // vient de la ligne 2 détail. On cherche juste IST (toujours présent
+    // pour ces vols CDG-IST) pour repartir sur la classe et le reste.
+    const m1=l1.match(/\bIST\s+([FCY])\s*(.*)$/);
+    let cls="",rest1="";
+    if(m1){cls=m1[1];rest1=m1[2]}
+    const etktMatch=rest1.match(/(\d{10,14}[A-Z]\d)/);
+    const etkt=etktMatch?etktMatch[1]:"";
+    const seatMatch=rest1.match(/(\d{2,3}[A-Z]?(?:-[A-Z])?)\s+[FM]?\s*\d\s+\d{10,14}[A-Z]\d/);
+    const seat=seatMatch?seatMatch[1]:"";
+    const l2=(r.lines[1]||"").trim();
+    const m2=l2.match(/^([A-Z][A-Z' ]*?)\s*-\s*([A-Z][A-Z' ]*?)\s*-\s*(\w*)\s*-\s*(\w*)\s*$/);
+    if(!m2)continue; // ligne détail absente/illisible : ignorée plutôt que de créer un passager sans nom fiable
+    const surname=m2[1].trim(),given=m2[2].trim(),ptype=m2[3].trim(),title=m2[4].trim();
+    items.push({
+      id:`TK-${r.seq}-${surname}/${given}`,seq:r.seq,name:`${surname}/${given}`,
+      title,gender:"",passengerType:ptype==="CHD"?"CHD":(ptype||"ADT"),
+      class:cls,cabinClass:cls,seat,etkt,
+      origin:"CDG",destination:"IST",
+      // Clé de rapprochement avec les autres sections du même mail (COMMENTED
+      // PAX/ONCARRIAGE PAX/...), qui ne portent QUE le nom tronqué de la
+      // ligne 1 (ex. "ERGUN    L"), jamais le "SURNAME/GIVEN" complet de la
+      // ligne 2 — voir lot2TkTruncNameFromLine (priorité 7, vérifié sur un
+      // vrai mail TK1828/17SEP).
+      tkTruncKey:lot2TkTruncNameFromLine(l1),
+      specific:"",note:"",listName:"TK ALL PAX",cardKey:"MASTER",source:"TK_ALLPAX",ssr:[]
+    });
+  }
+  return items;
+}
+// Clé de rapprochement partagée par TOUTES les sections TK (ALL PAX,
+// COMMENTED PAX, ONCARRIAGE PAX, PASSENGERS WITH INFANTS...) : chacune tronque
+// le nom de la même façon sur sa ligne 1 ("SURNAME  I" ou "SURNAME!I" si le
+// nom dépasse 8 caractères) — vérifié identique sur un vrai mail TK1828/17SEP
+// (ex. "ERGUN    L" et "CHRISTIA!N" retrouvés à l'identique dans ALL PAX,
+// COMMENTED PAX et PASSENGERS WITH INFANTS pour les mêmes passagers).
+function lot2TkTruncNameFromLine(line){
+  const m=String(line||"").match(/^\s*(.+?)\s+(?:IST|CDG)\b/);
+  if(!m)return "";
+  return m[1].toUpperCase().replace(/[^A-Z]/g,"");
+}
+// CHECK IN INFORMATION : config avion + booked/accepted/on sby/available
+// séparés (priorité 7, vérifié sur TK1828/17SEP réel). Structure réelle :
+// une ligne "TYPE ... CFG 0F 28C 261Y REGN TCJNL ..." puis un petit tableau
+// à deux lignes (station de départ CDG : seule AVAILABLE est renseignée ;
+// station d'arrivée IST : BOOKED/ACCEPTED/ON SBY dans l'ordre, AVAILABLE en
+// "Z/Z/Z" = non applicable côté arrivée).
+function lot2TkExtractCheckInInfo(text){
+  const flat=String(text||"");
+  const idx=flat.indexOf("CHECK IN INFORMATION");
+  if(idx<0)return null;
+  const block=flat.slice(idx,idx+800);
+  const typeM=block.match(/TYPE\s+(\S+)\s+\S+\s+CFG\s+(\d+)F\s+(\d+)C\s+(\d+)Y\s+REGN\s+(\S+)/);
+  const out={
+    type:typeM?typeM[1]:"",
+    reg:typeM?typeM[5]:"",
+    config:typeM?{F:Number(typeM[2]),C:Number(typeM[3]),Y:Number(typeM[4])}:null,
+    booked:null,accepted:null,onStandby:null,available:null
+  };
+  const tripletRe=/(\d+|Z)\s*\/\s*(\d+|Z)\s*\/\s*(\d+|Z)/g;
+  const parseTriplets=(line)=>{
+    const found=[];
+    let mm;
+    tripletRe.lastIndex=0;
+    while((mm=tripletRe.exec(String(line||"")))){
+      found.push(mm[1]==="Z"?null:{F:Number(mm[1]),C:Number(mm[2]),Y:Number(mm[3])});
+    }
+    return found;
+  };
+  const originLine=(block.match(/^\s*\d{3,4}\s+CDG\s+.*$/m)||[])[0]||"";
+  const originTriplets=parseTriplets(originLine).filter(Boolean);
+  if(originTriplets.length)out.available=originTriplets[originTriplets.length-1];
+  const destLine=(block.match(/^\s*\d{3,4}\s+IST\s+.*$/m)||[])[0]||"";
+  const destReal=parseTriplets(destLine).filter(Boolean);
+  out.booked=destReal[0]||null;
+  out.accepted=destReal[1]||null;
+  out.onStandby=destReal[2]||null;
+  return out;
+}
+// VIP/UPGR : marqueurs libres "!VIP!"/"!UPGR!" dans le commentaire attaché à
+// chaque passager des blocs "COMMENTED PAX" (il peut y en avoir PLUSIEURS
+// dans le même mail — vu 2 blocs réels sur TK1828/17SEP, se recoupant
+// partiellement). Les deux marqueurs coexistent sur un même passager (ex.
+// ERGUN, YILDIZ). Fusion par tkTruncKey pour dédupliquer les blocs qui se
+// recoupent, sans jamais perdre un VIP vu dans un bloc et un UPGR vu dans
+// l'autre pour le même passager.
+function lot2TkExtractCommentedPax(text){
+  const flat=String(text||"").replace(/\r/g,"");
+  const re=/CDG COMMENTED PAX[^\n]*\n([\s\S]*?)END NAMES/g;
+  const byKey=new Map();
+  let m;
+  while((m=re.exec(flat))){
+    const lines=m[1].split("\n");
+    let currentKey="";
+    for(const line of lines){
+      const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+      if(numM){
+        currentKey=lot2TkTruncNameFromLine(numM[1]);
+        if(currentKey && !byKey.has(currentKey))byKey.set(currentKey,{tkTruncKey:currentKey,vip:false,upgr:false});
+        // Le marqueur peut être présent DIRECTEMENT sur la ligne numérotée
+        // (ex. "7.YILDIZ Z IST C * 01B F 0/0 !UPGR! OTO MI @ K"), pas
+        // seulement sur la ligne de commentaire suivante — vérifié sur un
+        // vrai mail TK1828/17SEP (YILDIZ porte !UPGR! sur sa ligne propre et
+        // !VIP! sur la ligne suivante).
+      }
+      if(!currentKey)continue;
+      const entry=byKey.get(currentKey);
+      if(!entry)continue;
+      if(/!VIP!/.test(line))entry.vip=true;
+      if(/!UPGR!/.test(line))entry.upgr=true;
+    }
+  }
+  return [...byKey.values()];
+}
+// ONCARRIAGE PAX : connexions multi-segments (priorité 7). Un passager peut
+// avoir PLUSIEURS lignes de vol de correspondance à la suite (ex. "TK0060
+// IST-KUL" puis "TK7907 KUL-BNE" sur la ligne suivante, sans numéro) : toute
+// la chaîne est conservée, la destination finale est celle du DERNIER
+// tronçon, jamais un second passager créé pour la ligne de continuation
+// (vérifié sur TK1828/17SEP réel : PONCHAUT/TUCKEY/OVERMARS ont 2 tronçons).
+function lot2TkExtractOncarriagePax(text){
+  const flat=String(text||"").replace(/\r/g,"");
+  const m=flat.match(/CDG ONCARRIAGE PAX[^\n]*\n([\s\S]*?)END NAMES/);
+  if(!m)return [];
+  const lines=m[1].split("\n");
+  const items=[];
+  let current=null;
+  const legRe=/\b([A-Z]{2}\d{2,4})\s+([A-Z]{3})-([A-Z]{3})\s+[FCY]\s+OK\b/;
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(numM){
+      if(current)items.push(current);
+      const rest=numM[1];
+      const key=lot2TkTruncNameFromLine(rest);
+      const legM=rest.match(legRe);
+      current=key?{tkTruncKey:key,legs:legM?[{flight:legM[1],from:legM[2],to:legM[3]}]:[]}:null;
+      continue;
+    }
+    if(current){
+      const legM=line.match(legRe);
+      if(legM)current.legs.push({flight:legM[1],from:legM[2],to:legM[3]});
+    }
+  }
+  if(current)items.push(current);
+  return items.filter(it=>it.legs.length).map(it=>({
+    ...it,
+    destination:it.legs[it.legs.length-1].to,
+    chain:it.legs.map(l=>`${l.flight} ${l.from}-${l.to}`).join(" / ")
+  }));
+}
+// Sections annexes TK complémentaires (au-delà du périmètre strict de la
+// priorité 7), construites et vérifiées contre le même vrai mail TK1828/17SEP.
+function lot2TkExtractSimpleSection(text,headerLiteral){
+  const flat=String(text||"").replace(/\r/g,"\n");
+  const re=new RegExp(`CDG ${headerLiteral}[^\\n]*\\n([\\s\\S]*?)END NAMES`);
+  const m=flat.match(re);
+  return m?m[1].split("\n"):null;
+}
+// PASSENGERS WITH INFANTS : les lignes listent le PARENT adulte, pas un bébé
+// séparé (vérifié : "CHRISTIA!N" a un titre MR dans ALL PAX + une ligne "*
+// ET INF TICKET" liée juste en dessous) — on tague donc le parent avec INF.
+function lot2TkExtractInfantParents(text){
+  const lines=lot2TkExtractSimpleSection(text,"PASSENGERS WITH INFANTS");
+  const out=new Set();
+  if(!lines)return out;
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(key)out.add(key);
+  }
+  return out;
+}
+// TOY'S R US : CHLD si marqueur "CHL" présent, sinon INF-parent si également
+// listé dans PASSENGERS WITH INFANTS ; le reliquat (ex. GURROBY, ni l'un ni
+// l'autre) se résout par le titre MSTR/MISS déjà connu du MASTER, voir
+// l'appel dans lot3MergeFlightData.
+function lot2TkExtractToysRUs(text){
+  const lines=lot2TkExtractSimpleSection(text,"TOY'S R US");
+  if(!lines)return [];
+  const infantParents=lot2TkExtractInfantParents(text);
+  const out=[];
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(!key)continue;
+    const hasChl=/\bCHL\b/.test(numM[1]);
+    out.push({tkTruncKey:key,chld:hasChl,infParent:!hasChl && infantParents.has(key)});
+  }
+  return out;
+}
+// REBATE PAX : code staff/rebate conservé (ex. "R9A/Y01").
+function lot2TkExtractRebatePax(text){
+  const lines=lot2TkExtractSimpleSection(text,"REBATE PAX");
+  if(!lines)return [];
+  const out=[];
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(!key)continue;
+    const codeM=numM[1].match(/\b([A-Z0-9]{2,4}\/[A-Z0-9]{2,4})\b/);
+    out.push({tkTruncKey:key,code:codeM?codeM[1]:""});
+  }
+  return out;
+}
+// PAX WITH SPECIAL MEAL : code repas conservé (VGML/KSML/...).
+function lot2TkExtractSpecialMeal(text){
+  const lines=lot2TkExtractSimpleSection(text,"PAX WITH SPECIAL MEAL");
+  if(!lines)return [];
+  const out=[];
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(!key)continue;
+    const mealM=numM[1].match(/\b([A-Z]{2}ML)\b/);
+    out.push({tkTruncKey:key,meal:mealM?mealM[1]:""});
+  }
+  return out;
+}
+// WCHR/WCHS/WCHC/WCMP : section sans nom d'en-tête propre, détectée par le
+// contenu ("!WCHR"/"!WCHS!"/"!WCHC!" sur la ligne du passager) — même
+// principe que le repli générique WCH par contenu utilisé ailleurs.
+function lot2TkExtractWchByContent(text){
+  const flat=String(text||"").replace(/\r/g,"\n");
+  const wchRe=/!(WCHR|WCHS|WCHC|WCMP)!?/;
+  const out=[];
+  for(const line of flat.split("\n")){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const wm=numM[1].match(wchRe);
+    if(!wm)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(key)out.push({tkTruncKey:key,code:wm[1]});
+  }
+  return out;
+}
+// E-TKT FULL PAX LIST / EMD FULL PAX LIST : numéro de document + code
+// service EMD conservé (RQST/XBAG/PETC/PDUG/SPEQ/FQTU/...).
+function lot2TkExtractEtktList(text){
+  const lines=lot2TkExtractSimpleSection(text,"E-TKT FULL PAX LIST");
+  if(!lines)return [];
+  const out=[];
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(!key)continue;
+    const etM=numM[1].match(/(\d{10,14}[A-Z]\d)/);
+    out.push({tkTruncKey:key,etkt:etM?etM[1]:""});
+  }
+  return out;
+}
+function lot2TkExtractEmdList(text){
+  const lines=lot2TkExtractSimpleSection(text,"EMD FULL PAX LIST");
+  if(!lines)return [];
+  const out=[];
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(!key)continue;
+    const emdM=numM[1].match(/(\d{10,14}[A-Z]\d)/);
+    const codeM=numM[1].match(/\*([A-Z]{4})\*/);
+    out.push({tkTruncKey:key,emd:emdM?emdM[1]:"",code:codeM?codeM[1]:""});
+  }
+  return out;
+}
+// PAX WITH INBOUND CONNECTION : un seul tronçon entrant par passager dans le
+// vrai mail vérifié (contrairement à ONCARRIAGE qui peut en avoir plusieurs).
+function lot2TkExtractInboundConnectionPax(text){
+  const lines=lot2TkExtractSimpleSection(text,"PAX WITH INBOUND CONNECTION");
+  if(!lines)return [];
+  const out=[];
+  const legRe=/\b([A-Z]{2}\d{2,4})\s+([A-Z]{3})\s+[FCY]\s+OK\b/;
+  for(const line of lines){
+    const numM=line.match(/^\s*\d{1,3}\.(.+)$/);
+    if(!numM)continue;
+    const key=lot2TkTruncNameFromLine(numM[1]);
+    if(!key)continue;
+    const legM=numM[1].match(legRe);
+    if(legM)out.push({tkTruncKey:key,flight:legM[1],airport:legM[2]});
+  }
+  return out;
+}
+// INBOUND CONNECTIONS / OUTBOUND CONNECTIONS : tableau récapitulatif par vol
+// de correspondance (attendu EXP vs réel ACT, F/C/Y/INF), vérifié sur le
+// vrai mail TK1828/17SEP. Le total est recalculé à partir des lignes plutôt
+// que reparsé depuis la ligne "TOTAL ..." (alignement en colonnes fixes trop
+// fragile à faire tenir dans une regex fiable).
+function lot2TkExtractConnectionSummary(text,direction){
+  const flat=String(text||"").replace(/\r/g,"\n");
+  const label=direction==="INBOUND"?"INBOUND CONNECTIONS":"OUTBOUND CONNECTIONS";
+  const re=new RegExp(`CDG\\s+${label}\\s*\\n([\\s\\S]*?)(?:\\n\\s*\\n|$)`);
+  const m=flat.match(re);
+  if(!m)return null;
+  const rowRe=/^([A-Z]{2}\d{2,4})\s*\/([A-Z]{3})\/(\d{3,4})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([A-Z]{2}\d{2,4})\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*:\s*(\d+)\s+(\d+)/;
+  const rows=[];
+  for(const line of m[1].split("\n")){
+    const rm=line.match(rowRe);
+    if(!rm)continue;
+    rows.push({
+      flight:rm[1],airport:rm[2],time:rm[3],
+      exp:{F:Number(rm[4]),C:Number(rm[5]),Y:Number(rm[6]),INF:Number(rm[7])},
+      actFlight:rm[8],
+      act:{F:Number(rm[9]),C:Number(rm[10]),Y:Number(rm[11]),INF:Number(rm[12])},
+      bag:Number(rm[13]),weight:Number(rm[14])
+    });
+  }
+  if(!rows.length)return null;
+  const total={exp:{F:0,C:0,Y:0,INF:0},act:{F:0,C:0,Y:0,INF:0}};
+  for(const r of rows){
+    for(const k of ["F","C","Y","INF"]){
+      total.exp[k]+=r.exp[k];
+      total.act[k]+=r.act[k];
+    }
+  }
+  return {rows,total};
+}
+function lot2TkClassCounts(items){
+  const out={};
+  for(const p of items||[]){
+    const c=String(p.cabinClass||p.class||"").toUpperCase();
+    if(!c)continue;
+    out[c]=(out[c]||0)+1;
+  }
+  return out;
+}
+
+function lot2ExtractPassengerItemsFromGenericList(text,listName,cardKey,airline=""){
+  /*
+   * V50.23 — extraction nominative générique propre.
+   * - MASTER/ALL CUSTOMERS : ticket ou TKNE jamais en SSR.
+   * - FQTV : SSR=FQTV, catégorie=TAHAT/DJURDJURA, numéro carte séparé.
+   * - WCH : SSR=WCHR/WCHS/...
+   * - INC : noms liés au vol inbound réel.
+   */
+  const lines=String(text||"").replace(/\r/g,"\n").split(/\n+/);
+  const items=[];
+  const cKey=String(cardKey||"").toUpperCase();
+  const lName=String(listName||"").toUpperCase();
+  // Numéro du vol lui-même (ex. "SB501" dans l'en-tête "SB501 09SEP CDG
+  // STD2130..."), utilisé pour distinguer une vraie correspondance d'une
+  // simple continuation du même avion vers une escale suivante (voir
+  // cKey==="INBOUND"/"OUTBOUND"/"CONNECTIONS" plus bas).
+  const ownFlightMatch=String(text||"").match(/\b([A-Z]{1,3}\d{1,4})\s+\d{1,2}[A-Z]{3}\s+[A-Z]{3}\s+STD\d{3,4}/);
+  const ownFlightNumber=ownFlightMatch?ownFlightMatch[1].toUpperCase():"";
+
+  for(let i=0;i<lines.length;i++){
+    const raw=String(lines[i]||"").replace(/\s+/g," ").trim();
+    const m=raw.match(/^\s*(\d{1,3})\.\s*(.+?)\s+([MFACI])\s+([A-Z]{3})\s+([A-Z]{3})\s+([A-Z]{1,2}[A-Z0-9]?)\s*(.*)$/i);
+    if(!m)continue;
+
+    const seq=Number(m[1]);
+    const split=lot2SplitNameTitle(lot2CleanPassengerName(m[2]));
+    const name=split.name;
+    const title=split.title;
+    const gender=String(m[3]||"").toUpperCase();
+    const passengerType=gender==="C"?"CHLD":gender==="I"?"INF":"ADT";
+    const origin=String(m[4]||"").toUpperCase();
+    const destination=String(m[5]||"").toUpperCase();
+    const cls=lot2PassengerClassFromCode(m[6]);
+    const acceptance=String(m[6]||"").toUpperCase();
+    const rest=String(m[7]||"").trim();
+    const continuation=[];
+    for(let j=i+1;j<lines.length;j++){
+      const next=String(lines[j]||"").replace(/\s+/g," ").trim();
+      // Le format réel Altea n'a jamais d'espace après le point ("2.NOM"), contrairement
+      // à l'ancienne regex qui exigeait "\s+" et ne s'arrêtait donc jamais ici : chaque
+      // passager avalait tout le reste du document jusqu'à la limite de 12 lignes.
+      if(/^\d{1,3}\.\s*\S/.test(next))break;
+      if(/^(?:LIST\s+OF:|[A-Z0-9]{2,6}\s+\d{1,2}[A-Z]{3}\s+[A-Z]{3}\s+STD)/i.test(next))break;
+      // En-tête de page répété ("Report content") : bruit à ignorer, pas une fin de bloc.
+      if(/^REPORT\s+CONTENT$/i.test(next))continue;
+      if(next)continuation.push(next);
+      if(continuation.length>=12)break;
+    }
+    const details=[rest,...continuation].filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+    const seatMatch=details.match(/\b0*(\d{1,3})([A-Z])\b/);
+    const seat=seatMatch?`${String(Number(seatMatch[1])).padStart(2,"0")}${seatMatch[2].toUpperCase()}`:"";
+
+    const item={
+      id:`${cKey||"GEN"}-${seq}-${name}`,
+      seq,name,title,gender,passengerType,
+      class:cls,cabinClass:cls,
+      origin,destination,acceptance,
+      seat,
+      specific:"",
+      note:"",
+      listName,
+      cardKey:cKey,
+      source:"GENERIC_LIST_OF",
+      ssr:[]
+    };
+
+    if(cKey==="MASTER"){
+      const tk=(details.match(/\b(\d{10,})\b/)||[])[1]||"";
+      if(tk)item.etkt=tk;
+      item.specific="";
+      item.note="";
+      item.ssr=[];
+    }else if(cKey==="ETKT"){
+      const tk=(details.match(/\b(\d{10,})\b/)||[])[1]||"";
+      item.etkt=tk;
+      item.documentNumber=tk;
+      item.specific="";
+      item.ssr=[];
+    }else if(cKey==="EMD"){
+      const docs=[...details.matchAll(/\b(\d{10,}[A-Z0-9]*)\b/g)].map(x=>x[1]);
+      const emd=docs.length>1?docs[docs.length-1]:(docs[0]||"");
+      item.emd=emd;
+      item.documentNumber=emd;
+      item.specific="";
+      item.ssr=[];
+    }else if(cKey==="WCH"){
+      const code=(details.match(/\b(WCHR|WCHS|WCHC|WCMP|WCBD|WCLB)\b/i)||[])[1]||"WCH";
+      item.specific=String(code).toUpperCase();
+      item.category=item.specific;
+      item.ssr=[item.specific];
+      item.codes=details.split(/\s+/).filter(Boolean);
+      item.note=details;
+    }else if(cKey==="FQTV"){
+      const tokens=details.split(/\s+/).filter(Boolean);
+      // Le palier fidélité (ex. "ELITE SILVER", "ELITE GOLD" chez SQ) suit
+      // le numéro de siège (ex. "042G") et précède les lignes techniques
+      // (numéros de billet, "ACCRUAL,", "SERVICE", "REDEMPTION"). On saute
+      // le siège et les billets, puis on accumule les mots purement
+      // alphabétiques du palier et on s'arrête au premier jeton technique
+      // (numéro, virgule...) plutôt que de tout garder après le siège, sous
+      // peine d'avaler ces lignes techniques dans le palier.
+      const seatTok=/^0*\d{1,3}[A-Z]$/i;
+      const ticketTok=/^[A-Z]{2}\d{6,}$/i;
+      // "ACCRUAL"/"SERVICE"/"REDEMPTION" sont des mots purement alphabétiques
+      // (donc jamais arrêtés par le test "non-alphabétique" ci-dessous) mais
+      // ce sont des lignes techniques, jamais le palier lui-même — vu sur AI
+      // ("A ACCRUAL" au lieu de "A") sans la virgule qui les distinguait chez TW.
+      const stopWord=/^(ACCRUAL|SERVICE|REDEMPTION)$/i;
+      let tier="";
+      for(const t of tokens){
+        if(seatTok.test(t)||ticketTok.test(t))continue;
+        if(stopWord.test(t))break;
+        if(!/^[A-Z]+$/i.test(t))break;
+        tier+=(tier?" ":"")+t;
+      }
+      tier=tier||"FQA";
+      const next1=String(lines[i+1]||"").trim();
+      const next2=String(lines[i+2]||"").trim();
+      const ffid=(next1.match(/\b[A-Z]{2}\d{6,}\b/i)||[])[0]||"";
+      item.specific=String(tier||"FQA").toUpperCase();
+      item.category=item.specific;
+      item.fqtv={program:String(airline||"").toUpperCase(),tier:item.specific,number:ffid,ffid};
+      item.ssr=["FQTV"];
+      item.note=[ffid,next2 && /ACCRUAL/i.test(next2)?"ACCRUAL":""].filter(Boolean).join(" · ");
+    }else if(cKey==="INBOUND" || cKey==="OUTBOUND" || cKey==="CONNECTIONS"){
+      // {2,5} loupait silencieusement tout vol à 4 chiffres (ex. "AF1349",
+      // 6 caractères) : confirmé sur un vrai relevé SB501/09SEP où TOUTES
+      // les correspondances INBOUND réelles ("I-AF1349 BCN" etc.) étaient
+      // ainsi perdues, indépendamment de la compagnie.
+      const conn=details.match(/\b([IO])-([A-Z0-9]{2,7})\s+([A-Z]{3})\b/i);
+      /*
+       * Un jeton "O-<CE VOL>"/"I-<CE VOL>" qui répète le numéro du vol
+       * lui-même (ex. "O-SB501 NOU" trouvé sur SB501, vu sur un vrai
+       * relevé SB501/09SEP) n'est pas une correspondance vers un autre
+       * vol : c'est la continuation du MÊME avion vers une escale
+       * suivante (ex. SB501 CDG-BKK-NOU). Le traiter comme une vraie
+       * correspondance créerait un second "SB501" fictif en sortie — une
+       * vraie correspondance porte toujours un numéro de vol différent
+       * (ex. "O-SB600 PPT", vu sur le même relevé).
+       */
+      const isSameFlightContinuation=!!(conn && ownFlightNumber && conn[2].toUpperCase()===ownFlightNumber);
+      if(conn && !isSameFlightContinuation){
+        item.connection={
+          direction:conn[1].toUpperCase()==="I"?"INBOUND":"OUTBOUND",
+          flight:conn[2].toUpperCase(),
+          airport:conn[3].toUpperCase()
+        };
+        item.specific=`${item.connection.direction} ${item.connection.flight} ${item.connection.airport}`;
+      }else{
+        item.specific="";
+      }
+      item.ssr=item.connection?[item.connection.direction]:[];
+      item.note=details;
+    }else if(cKey==="CHLD"){
+      item.ssr=["CHLD"];
+      item.specific="";
+      item.note=details;
+    }else if(cKey==="INF"){
+      item.ssr=["INF"];
+      item.specific="";
+      item.note=details;
+    }else if(cKey==="INFKID"){
+      // Enfants/bébés combinés dans un seul document : chaque ligne garde
+      // son vrai type (INF/CHLD), la séparation en cartes distinctes se
+      // fait ensuite dans lot3MergeFlightData.
+      item.ssr=[item.passengerType==="INF"?"INF":"CHLD"];
+      item.specific="";
+      item.note=details;
+    }else if(cKey==="WEB"){
+      // Canal d'enregistrement : "CHL-WEB" (web) par défaut, mais certaines
+      // compagnies distinguent d'autres canaux sur la même ligne passager
+      // (spec utilisateur : TU "CHL-MOB" -> MOBILE, DE "CHL-JFE"/"CHL-EDS").
+      // Repli sur WEB si aucun code de canal explicite n'est présent.
+      const chanMatch=details.match(/\bCHL-(WEB|MOB|JFE|EDS)\b/i);
+      const chan=chanMatch?chanMatch[1].toUpperCase():"";
+      item.status=chan==="MOB"?"MOBILE":(chan==="JFE"||chan==="EDS"?chan:"WEB");
+      item.ssr=[];
+      item.specific="";
+      item.note="";
+    }else if(cKey==="STAFF"){
+      const staffCode=(details.match(/\b(STF-(?:BK|SB)|BOOKABLE\s+STAFF|REBATE\s+STAFF)\b/i)||[])[1]||"STAFF";
+      item.category=String(staffCode).toUpperCase();
+      item.specific=item.category;
+      item.ssr=["STAFF"];
+      item.note=details;
+    }else if(cKey==="MEAL"){
+      const meal=(details.match(/\b([A-Z]{2}ML)(?:-[A-Z0-9]+)?\b/i)||[])[1]||"MEAL";
+      item.category=String(meal).toUpperCase();
+      item.specific=item.category;
+      item.ssr=["MEAL",item.category].filter((v,k,a)=>a.indexOf(v)===k);
+      item.note=details;
+    }else{
+      item.specific=details;
+      item.ssr=lot2SsrFromCard(cKey,item.specific);
+      item.note=details;
+    }
+
+    items.push(item);
+  }
+
+  return items;
+}
+
+function lot2FqtvCategories(passengerItems){
+  const out={};
+  for(const p of passengerItems||[]){
+    const cat=String(p.category||p.specific||"FQA").toUpperCase()||"FQA";
+    out[cat]=(out[cat]||0)+1;
+  }
+  return out;
+}
+
+function lot2ExtractConnectionRows(text,listName,cardKey){
+  const rawCard=String(cardKey||"").toUpperCase();
+  const c=rawCard==="INBOUND_SUMMARY"?"INBOUND":rawCard==="OUTBOUND_SUMMARY"?"OUTBOUND":rawCard;
+  if(c!=="INBOUND" && c!=="OUTBOUND")return [];
+  const rows=[];
+  const up=lot2Upper(text);
+  for(const line of up.split(/\n+/)){
+    const r=line.trim().replace(/\s+/g," ");
+    if(!r || /^(FLTNR|BOOKED|TER:|GATE:|CDG-|INBOUND CONNECTION|OUTBOUND CONNECTION)/.test(r))continue;
+    const m=r.match(/\b([A-Z0-9]{2,5})\s+(\d{3,4})\s+([A-Z]{3})\s+([A-Z]{3})\s+(\d{1,2}H[0-5]\d)\s+(\d{1,3})\s+(\d{1,3})\b/);
+    if(m){
+      rows.push({
+        flight:m[1],
+        time:lot2CleanClock(m[2]),
+        from:m[3],
+        to:m[4],
+        conx:m[5],
+        classCounts:{C:Number(m[6]),Y:Number(m[7])},
+        direction:c
+      });
+    }
+  }
+  return rows;
+}
+
+function lot2ParseOperationalInfo(text,airline,flightNumber,currentIso){
+  /*
+   * V50.20 — OPERATIONAL_INFO strict.
+   * Priorité 8 (verrouillage JFE, spec utilisateur) : un JFE SCREEN COPY
+   * n'alimente QUE STD, STA, AIRCRAFT, CONFIG, BOOKED, FLIGHT TIME.
+   * Injection autorisée UNIQUEMENT :
+   * - STD
+   * - STA
+   * - DUREE / duration depuis TOTAL ELAPSED TIME (FLIGHT TIME)
+   * - ROUTE dep/dest (identité du vol, pas une donnée opérationnelle affichée)
+   * - TYPE A/C (AIRCRAFT)
+   * - CONFIGURATION (CONFIG) et BOOKED
+   *
+   * Ne pas injecter :
+   * - BOARDING
+   * - GATE
+   * - ACCEPTANCE STATUS
+   *
+   * Exemple Amadeus :
+   * SCHEDULED:
+   *   12:15
+   *   13:30
+   * TOTAL ELAPSED TIME:
+   *   02H15
+   *
+   * On conserve STD et STA en heures locales affichées par Altea.
+   * La durée vient de TOTAL ELAPSED TIME, ce qui évite les erreurs timezone.
+   */
+  const raw=String(text||"").replace(/\r/g,"\n");
+  const up=lot2Upper(raw);
+  const genericReport=/\bGENERIC\s+REPORT\b/.test(up);
+  if(!/\bJFE\s+SCREEN\s+COPY\b/.test(up) && !/\bAIRCRAFT\b/.test(up) && !genericReport)return null;
+
+  const info={};
+  const detectedDate=lot2DetectFlightDateFromReportLine(raw,airline,flightNumber,currentIso);
+  if(detectedDate.iso)info.date=detectedDate.iso;
+
+  // Rapports Altea génériques : identité et STD dans l'en-tête, route dans
+  // les lignes passagers (ex. OZ502 06SEP CDG STD1910 / ... CDG ICN ...).
+  if(genericReport){
+    const cleanFlight=String(flightNumber||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+    const headerRe=new RegExp(`\\b${cleanFlight}\\s+\\d{1,2}[A-Z]{3}\\s+([A-Z]{3})\\s+STD\\s*([0-2]?\\d{3})\\b`);
+    const hm=up.match(headerRe);
+    if(hm){
+      info.dep=hm[1];
+      info.std=lot2CleanClock(hm[2]);
+    }
+    const passengerRoute=up.match(/^\s*\d+\.[^\n]*?\s([A-Z]{3})\s+([A-Z]{3})\s+[A-Z][A-Z0-9]?\s/m);
+    if(passengerRoute){
+      info.dep=info.dep||passengerRoute[1];
+      if(passengerRoute[2]!==info.dep)info.dest=passengerRoute[2];
+    }
+  }
+
+  // Route depuis bloc AIRPORT ou ligne CDG-ALG.
+  const airportBlock=raw.match(/\bAIRPORT\s*:\s*([\s\S]{0,180}?)(?:\bELAPSED\s+TIME\b|\bSCHEDULED\b|\bTOTAL\s+ELAPSED\b)/i);
+  if(airportBlock){
+    const codes=(airportBlock[1].match(/\b[A-Z]{3}\b/g)||[]).filter(c=>!["STD","STA"].includes(c));
+    if(codes.length>=2){
+      info.dep=codes[0];
+      info.dest=codes[1];
+    }
+  }
+  let m=up.match(/\b([A-Z]{3})-([A-Z]{3})\b/);
+  if(m){
+    info.dep=info.dep||m[1];
+    info.dest=info.dest||m[2];
+  }
+
+  // STD direct en haut.
+  m=raw.match(/\bSTD\s*:\s*([0-2]?\d[:.]?\d{2})/i);
+  if(m)info.std=lot2CleanClock(m[1]);
+
+  // Bloc SCHEDULED : première heure = STD, deuxième heure = STA.
+  const scheduledBlock=raw.match(/\bSCHEDULED\s*:\s*([\s\S]{0,180}?)(?:\bTOTAL\s+ELAPSED\s+TIME\b|\bCOMMENTS\b|\[|$)/i);
+  if(scheduledBlock){
+    const times=[...scheduledBlock[1].matchAll(/\b([0-2]?\d[:.]?\d{2})\b/g)].map(x=>lot2CleanClock(x[1])).filter(Boolean);
+    if(times[0])info.std=info.std||times[0];
+    if(times[1])info.sta=times[1];
+  }
+
+  // Parfois le texte réécrit "STD 12:15 / STD 13:30".
+  if(!info.sta){
+    const stdTimes=[...raw.matchAll(/\bSTD\s*[: ]\s*([0-2]?\d[:.]?\d{2})\b/gi)].map(x=>lot2CleanClock(x[1])).filter(Boolean);
+    if(stdTimes[0])info.std=info.std||stdTimes[0];
+    if(stdTimes[1])info.sta=stdTimes[1];
+  }
+
+  // Durée : source officielle = TOTAL ELAPSED TIME, pas différence simple STD/STA.
+  m=raw.match(/\bTOTAL\s+ELAPSED\s+TIME\s*:\s*([\s\S]{0,80})/i);
+  if(m){
+    const dm=m[1].match(/\b(\d{1,2})H\s*([0-5]\d)\b/i) || m[1].match(/\b(\d{1,2})[:.]([0-5]\d)\b/);
+    if(dm){
+      const h=String(Number(dm[1])).padStart(2,"0");
+      const mm=String(dm[2]).padStart(2,"0");
+      info.duration=`${h}H${mm}`;
+      info.durationMinutes=Number(dm[1])*60+Number(dm[2]);
+    }
+  }
+
+  // Ligne avion : CDG-ALG |738 | |14 |165 |14 |165 |10
+  // Format JFE Amadeus standard : CONFIG puis BOOKED, deux paires C/Y
+  // consécutives (pas CONFIG puis "capacity" — la 2e paire n'a jamais été
+  // affichée sous ce nom côté UI, qui recalcule sa propre "CAPACITY" à
+  // partir de CONFIG ; priorité 8, spec utilisateur : JFE alimente BOOKED).
+  // REG peut être vide. On ne doit jamais prendre "14" comme immatriculation.
+  for(const line of up.split(/\n+/)){
+    const l=line.trim();
+    if(!/\b[A-Z]{3}-[A-Z]{3}\b/.test(l))continue;
+    const clean=l.replace(/\|/g," ").replace(/\s+/g," ").trim();
+    const t=clean.split(" ");
+    const routeIdx=t.findIndex(x=>/^[A-Z]{3}-[A-Z]{3}$/.test(x));
+    if(routeIdx<0 || !t[routeIdx+1])continue;
+
+    const route=t[routeIdx].split("-");
+    info.dep=info.dep||route[0];
+    info.dest=info.dest||route[1];
+    info.aircraft=t[routeIdx+1]; // TYPE A/C
+
+    let p=routeIdx+2;
+    if(t[p] && !/^\d+$/.test(t[p])){
+      // immat renseignée explicitement uniquement si alphanum non numérique.
+      // Pour AH1003, REG vide => on ne touche pas immat.
+      p++;
+    }
+
+    const nums=t.slice(p).filter(x=>/^\d+$/.test(x)).map(Number);
+    if(nums.length>=4){
+      info.config={C:nums[0],Y:nums[1]};
+      info.booked={C:nums[2],Y:nums[3]};
+    }
+    break;
+  }
+
+    const has=Object.keys(info).length>0;
+  return has?info:null;
+}
+
+async function lot2ProcessOneJob(env,job){
+  const jobId=String(job.job_id||"");
+  await env.OPS_DB.prepare(`UPDATE import_jobs SET status='PROCESSING',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(jobId).run();
+
+  try{
+    const version=await env.OPS_DB.prepare(`
+      SELECT * FROM import_file_versions WHERE version_id=? LIMIT 1
+    `).bind(job.version_id).first();
+    if(!version)throw new Error("VERSION INTROUVABLE");
+    if(!env.OPS_FILES)throw new Error("BINDING R2 OPS_FILES ABSENT");
+
+    const object=await env.OPS_FILES.get(version.r2_key);
+    if(!object)throw new Error("FICHIER R2 INTROUVABLE");
+
+    const filename=version.filename_original||version.filename_normalized||"file";
+    const mime=version.mime_type||object.httpMetadata?.contentType||"application/octet-stream";
+    const extracted=await lot2ExtractTextFromR2Object(object,filename,mime);
+    const airline=String(job.airline||version.airline||"").toUpperCase();
+    const parserMode=LOT2_SPECIFIC_AIRLINES.has(airline)?"SPECIFIC_LOCKED":"GENERIC";
+
+    let effectiveFlightDate=String(job.flight_date||version.flight_date||"");
+    let effectiveJobId=jobId;
+    let effectiveFileId=version.file_id;
+    let effectiveVersionId=version.version_id;
+
+    // Source iPort (IZ/TB) : format "LIST TOTAL:" texte, jamais "LIST OF:" Altea.
+    // Détecté en premier pour ne jamais retomber sur la logique GENERIC/Altea.
+    const iportKind=(parserMode==="GENERIC" && IPORT_AIRLINES.has(airline) && extracted.readable)
+      ? lot2IportListKindFromBody(extracted.text)
+      : "";
+    // Source JU (Air Serbia) : rapport "G*L<vol>/<date><station>..." — voir
+    // lot2JuListKindFromText. Jamais "LIST OF:" Altea non plus.
+    const juKind=(parserMode==="GENERIC" && JU_AIRLINES.has(airline) && extracted.readable)
+      ? lot2JuListKindFromText(extracted.text)
+      : "";
+    // Source VF (AJet, PD4ML) : "ALL Reservetion List"/"Eticket List"/... jamais
+    // "LIST OF:" Altea non plus. VF n'est plus SPECIFIC_LOCKED (voir plus haut) :
+    // parserMode vaut déjà GENERIC ici, mais son format reste entièrement différent
+    // d'Altea et se détecte/s'extrait via son propre pipeline dédié.
+    // BJ partage EXACTEMENT ce même pipeline PD4ML (vérifié sur de vraies pièces
+    // jointes réelles : "ALL Reservetion List"/"FQTV List"/"Check-In List
+    // Boarded" identiques, y compris l'orthographe "Reservetion") — déjà
+    // suggéré par r223DetectBjVfIdentityFromPdfText qui traite les deux
+    // compagnies ensemble depuis le début.
+    const vfKind=(parserMode==="GENERIC" && (airline==="VF"||airline==="BJ") && extracted.readable)
+      ? lot2VfListKindFromText(extracted.text)
+      : "";
+    // Source TW (corps "CONTENT") : voir lot2TwContentDetect. TW est encore
+    // dans LOT2_SPECIFIC_AIRLINES tant que ce n'est pas activé (comme VF/IZ
+    // avant elles) ; ce détecteur ne sert donc à rien tant que parserMode
+    // reste SPECIFIC_LOCKED pour TW, il est prêt pour l'activation.
+    const twKind=(parserMode==="GENERIC" && TW_CONTENT_AIRLINES.has(airline) && extracted.readable)
+      ? lot2TwContentDetect(extracted.text)
+      : "";
+    // Source TK (multi-sections "ALL PAX"/... END NAMES) : voir
+    // lot2TkContentDetect. Même remarque que TW : inactif tant que TK reste
+    // dans LOT2_SPECIFIC_AIRLINES.
+    const tkKind=(parserMode==="GENERIC" && TK_ALLPAX_AIRLINES.has(airline) && extracted.readable)
+      ? lot2TkContentDetect(extracted.text)
+      : "";
+    const specialKind=iportKind||juKind||vfKind||twKind||tkKind;
+
+    if(parserMode==="GENERIC" && extracted.readable && !specialKind){
+      const detectedDate=lot2DetectFlightDateFromReportLine(extracted.text,airline,job.flight_number||version.flight_number||"",effectiveFlightDate);
+      if(detectedDate.iso && detectedDate.iso!==effectiveFlightDate){
+        const upd=await lot2UpdateJobFlightDate(env,job,version,detectedDate.iso,detectedDate);
+        effectiveFlightDate=upd.flightDate||detectedDate.iso;
+        effectiveJobId=upd.jobId||effectiveJobId;
+        effectiveFileId=upd.fileId||effectiveFileId;
+        effectiveVersionId=upd.versionId||effectiveVersionId;
+      }
+    }
+
+    const operationalInfo=(!specialKind && extracted.readable)?lot2ParseOperationalInfo(extracted.text,airline,job.flight_number||version.flight_number||"",effectiveFlightDate):null;
+    const listName=iportKind?(IPORT_LIST_LABELS[iportKind]||iportKind):(juKind?(JU_LIST_LABELS[juKind]||juKind):(vfKind?(VF_LIST_LABELS[vfKind]||vfKind):(twKind?"TW CONTENT":(tkKind?"TK ALL PAX":lot2DetectListName(extracted.text,filename)))));
+    // Un rapport générique complet (ex. "GENERIC REPORT") porte à la fois l'en-tête
+    // opérationnel ET la liste nominative des passagers. Le classer en OPERATIONAL_INFO
+    // effacerait les passagers (V50.16 ligne 4073) et empêcherait toute création de fiche
+    // avec contenu : on détecte donc d'abord un vrai manifeste nominatif avant de retomber
+    // sur le mode "info seule".
+    const genericManifestItems=(!specialKind && !listName && parserMode==="GENERIC" && extracted.readable)
+      ? lot2ExtractPassengerItemsFromGenericList(extracted.text,"","MASTER",airline)
+      : [];
+    const listMapping=iportKind
+      ? {cardKey:IPORT_LIST_CARD_KEYS[iportKind]||"OTHER",mappingScope:"IPORT",matchedListName:listName}
+      : (juKind
+        ? {cardKey:"JU_MIXED",mappingScope:"JU",matchedListName:listName}
+      : (vfKind
+        ? {cardKey:VF_LIST_CARD_KEYS[vfKind]||"OTHER",mappingScope:"VF",matchedListName:listName}
+        : (twKind
+          ? {cardKey:"MASTER",mappingScope:"TW_CONTENT",matchedListName:listName}
+        : (tkKind
+          ? {cardKey:"MASTER",mappingScope:"TK_ALLPAX",matchedListName:listName}
+        : (genericManifestItems.length && parserMode==="GENERIC"
+          ? {cardKey:"MASTER",mappingScope:"GENERIC_REPORT",matchedListName:"GENERIC REPORT"}
+          : (operationalInfo && !listName && parserMode==="GENERIC"
+            ? {cardKey:"OPERATIONAL_INFO",mappingScope:"OPERATIONAL_INFO",matchedListName:"JFE SCREEN COPY"}
+            : (parserMode==="SPECIFIC_LOCKED"
+              ? {cardKey:"SPECIFIC",mappingScope:"SPECIFIC_LOCKED",matchedListName:""}
+              : lot2LookupListMapping(airline,listName,extracted.text))))))));
+    const cardKey=listMapping.cardKey;
+    const documentType=cardKey==="OPERATIONAL_INFO"?"OPERATIONAL_INFO":lot2DocumentTypeFromCard(cardKey,filename,mime);
+    const passengerItems=iportKind
+      ? lot2IportExtractPassengerItems(extracted.text,iportKind)
+      : (juKind
+        ? lot2JuExtractPassengerItems(extracted.text)
+      : (vfKind
+        ? lot2VfExtractPassengerItems(extracted.text,vfKind)
+        : (twKind
+          ? lot2TwExtractPassengerItems(extracted.text)
+          : (tkKind
+            ? lot2TkExtractPassengerItems(extracted.text)
+            : ((cardKey==="OPERATIONAL_INFO"||!extracted.readable||cardKey==="INBOUND_SUMMARY"||cardKey==="OUTBOUND_SUMMARY")?[]:lot2ExtractPassengerItemsFromGenericList(extracted.text,listName,cardKey,airline))))));
+    const passengerCount=specialKind?passengerItems.length:(cardKey==="OPERATIONAL_INFO"?0:(extracted.readable?lot2ExtractPassengerCount(extracted.text,listName,cardKey):0));
+    const classCounts=iportKind?lot2IportClassCounts(passengerItems):(juKind?{}:(vfKind?lot2VfClassCounts(passengerItems):(twKind?lot2TwClassCounts(passengerItems):(tkKind?lot2TkClassCounts(passengerItems):(cardKey==="OPERATIONAL_INFO"?{}:(extracted.readable?lot2ExtractClassCountsForDocument(extracted.text,listName,cardKey):{}))))));
+    const connectionRows=(specialKind||cardKey==="OPERATIONAL_INFO"||!extracted.readable)?[]:lot2ExtractConnectionRows(extracted.text,listName,cardKey);
+    const fqtvCategories=cardKey==="FQTV"?lot2FqtvCategories(passengerItems):{};
+
+    let resultStatus="CLASSIFIED";
+    let changeType="DOC_CLASSIFIED";
+
+    if(cardKey==="OPERATIONAL_INFO"){
+      resultStatus="OPERATIONAL_INFO_READY";
+      changeType="OPERATIONAL_INFO_READY";
+    }else if(parserMode==="SPECIFIC_LOCKED"){
+      resultStatus="READY_SPECIFIC_PARSER";
+      changeType="SPECIFIC_READY"; // V3.5: conservé, parser existant inchangé; source désormais rejouable/archivable.
+    }else if(cardKey==="NO_LIST"){
+      resultStatus=extracted.readable?"GENERIC_LIST_NOT_FOUND":"ARCHIVED_ONLY";
+      changeType=extracted.readable?"GENERIC_LIST_NOT_FOUND":"ARCHIVED_ONLY";
+    }else if(cardKey==="MASTER"){
+      resultStatus="GENERIC_MASTER_READY";
+      changeType="GENERIC_MASTER_READY";
+    }else if(cardKey==="OTHER"){
+      // OTHER est autorisé uniquement si un vrai "LIST OF: XXXXX" existe
+      // mais que XXXXX n'est pas encore mappé.
+      resultStatus=extracted.readable?"GENERIC_CARD_OTHER":"ARCHIVED_ONLY";
+      changeType=extracted.readable?"GENERIC_CARD_OTHER":"ARCHIVED_ONLY";
+    }else{
+      resultStatus="GENERIC_CARD_READY";
+      changeType="GENERIC_CARD_READY";
+    }
+
+    const result={
+      lot:"LOT2",
+      parserMode,
+      documentType,
+      listName,
+      cardKey,
+      passengerCount,
+      classCounts,
+      readable:extracted.readable,
+      reason:extracted.reason,
+      rules: parserMode==="SPECIFIC_LOCKED"
+        ? "Parser spécifique verrouillé : aucune transformation Worker Lot 2."
+        : "GENERIC V50.23 : nettoyage SSR MASTER/TKNE, dossiers propres, inbound noms sur vol réel.",
+      mappingScope:listMapping.mappingScope,
+      matchedListName:listMapping.matchedListName,
+      operationalInfo: operationalInfo||null,
+      // TK uniquement (priorité 7) : sections annexes du même mail que ALL
+      // PAX, rapprochées par tkTruncKey dans lot3MergeFlightData.
+      tkCheckInInfo: tkKind?lot2TkExtractCheckInInfo(extracted.text):null,
+      tkCommentedPax: tkKind?lot2TkExtractCommentedPax(extracted.text):[],
+      tkOncarriage: tkKind?lot2TkExtractOncarriagePax(extracted.text):[],
+      tkToysRUs: tkKind?lot2TkExtractToysRUs(extracted.text):[],
+      tkInfantParents: tkKind?[...lot2TkExtractInfantParents(extracted.text)]:[],
+      tkRebatePax: tkKind?lot2TkExtractRebatePax(extracted.text):[],
+      tkSpecialMeal: tkKind?lot2TkExtractSpecialMeal(extracted.text):[],
+      tkWchContent: tkKind?lot2TkExtractWchByContent(extracted.text):[],
+      tkEtktList: tkKind?lot2TkExtractEtktList(extracted.text):[],
+      tkEmdList: tkKind?lot2TkExtractEmdList(extracted.text):[],
+      tkInboundConnectionPax: tkKind?lot2TkExtractInboundConnectionPax(extracted.text):[],
+      tkInboundSummary: tkKind?lot2TkExtractConnectionSummary(extracted.text,"INBOUND"):null,
+      tkOutboundSummary: tkKind?lot2TkExtractConnectionSummary(extracted.text,"OUTBOUND"):null,
+      passengerItems,
+      connectionRows,
+      fqtvCategories
+    };
+
+    await env.OPS_DB.prepare(`
+      INSERT INTO import_job_results
+        (job_id,version_id,file_id,airline,flight_number,flight_date,parser_mode,document_type,list_name,card_key,passenger_count,class_counts_json,extracted_text_preview,result_json,status,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      ON CONFLICT(job_id) DO UPDATE SET
+        version_id=excluded.version_id,
+        file_id=excluded.file_id,
+        airline=excluded.airline,
+        flight_number=excluded.flight_number,
+        flight_date=excluded.flight_date,
+        parser_mode=excluded.parser_mode,
+        document_type=excluded.document_type,
+        list_name=excluded.list_name,
+        card_key=excluded.card_key,
+        passenger_count=excluded.passenger_count,
+        class_counts_json=excluded.class_counts_json,
+        extracted_text_preview=excluded.extracted_text_preview,
+        result_json=excluded.result_json,
+        status=excluded.status,
+        updated_at=CURRENT_TIMESTAMP
+    `).bind(
+      effectiveJobId,effectiveVersionId,effectiveFileId,job.airline||"",job.flight_number||"",effectiveFlightDate||job.flight_date||"",
+      parserMode,documentType,listName,cardKey,passengerCount,JSON.stringify(classCounts),lot2Preview(extracted.text),JSON.stringify(result),resultStatus
+    ).run();
+
+    await env.OPS_DB.prepare(`UPDATE import_file_versions SET status=? WHERE version_id=?`).bind(resultStatus,effectiveVersionId).run();
+    await env.OPS_DB.prepare(`UPDATE import_files SET status=?, document_type=?, updated_at=CURRENT_TIMESTAMP WHERE file_id=?`).bind(resultStatus,documentType,effectiveFileId).run();
+    await env.OPS_DB.prepare(`UPDATE import_jobs SET status='DONE', error_message=NULL, updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(effectiveJobId).run();
+
+    await recordImportChange(env,{
+      scope:"JOB",
+      airline:job.airline,
+      flightNumber:job.flight_number,
+      flightDate:effectiveFlightDate||job.flight_date,
+      gmailMessageId:job.gmail_message_id,
+      fileId:effectiveFileId,
+      versionId:effectiveVersionId,
+      changeType,
+      after:result
+    });
+
+    return {ok:true,jobId:effectiveJobId,status:resultStatus,airline:job.airline,flightNumber:job.flight_number,flightDate:effectiveFlightDate||job.flight_date,documentType,listName,cardKey,passengerCount,mappingScope:listMapping.mappingScope,matchedListName:listMapping.matchedListName};
+  }catch(e){
+    const msg=String(e?.message||e);
+    await env.OPS_DB.prepare(`UPDATE import_jobs SET status='ERROR',error_message=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(msg,jobId).run();
+    await recordImportChange(env,{scope:"JOB",airline:job.airline,flightNumber:job.flight_number,flightDate:job.flight_date,gmailMessageId:job.gmail_message_id,fileId:job.file_id,versionId:job.version_id,changeType:"JOB_ERROR",after:{error:msg}}).catch(()=>{});
+    return {ok:false,jobId,error:msg};
+  }
+}
+
+async function lot2ProcessNext(env,body){
+  await ensureImportProcessorTables(env);
+  const limit=Math.max(1,Math.min(50,Number(body?.limit||10)));
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT *
+    FROM import_jobs
+    WHERE status='QUEUED'
+      AND (run_after IS NULL OR run_after='' OR run_after<=CURRENT_TIMESTAMP)
+    -- flight_date DESC avant created_at DESC : created_at reflète l'instant
+    -- d'écriture en base, pas la date du vol. Lors d'une resynchronisation en
+    -- masse, les vols anciens sont écrits APRÈS les récents (pagination Gmail
+    -- du plus récent au plus ancien) : trier sur created_at seul aurait donc
+    -- fait passer les vols anciens AVANT les vols récents dès que le volume
+    -- dépasse la capacité d'un seul lot. Demande explicite : traiter du plus
+    -- récent au plus ancien.
+    ORDER BY priority ASC, flight_date DESC, created_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+
+  const processed=[];
+  for(const job of results){
+    processed.push(await lot2ProcessOneJob(env,job));
+  }
+  return {ok:true,requested:limit,found:results.length,processed};
+}
+
+async function lot2Requeue(env,body){
+  await ensureImportProcessorTables(env);
+  const status=String(body?.status||"ERROR").toUpperCase();
+  const allowed=new Set(["ERROR","DONE","PROCESSING"]);
+  if(!allowed.has(status))return {ok:false,error:"STATUT NON AUTORISÉ"};
+  const r=await env.OPS_DB.prepare(`UPDATE import_jobs SET status='QUEUED',error_message=NULL,updated_at=CURRENT_TIMESTAMP WHERE status=?`).bind(status).run();
+  return {ok:true,requeued:r.meta?.changes||0,fromStatus:status};
+}
+
+async function lot2Results(env,url){
+  await ensureImportProcessorTables(env);
+  const airline=String(url.searchParams.get("airline")||"").toUpperCase();
+  const flight=String(url.searchParams.get("flight")||"").toUpperCase();
+  const date=String(url.searchParams.get("date")||"");
+  const limit=Math.max(1,Math.min(200,Number(url.searchParams.get("limit")||50)));
+  const wh=[]; const binds=[];
+  if(airline){wh.push("airline=?");binds.push(airline)}
+  if(flight){wh.push("flight_number=?");binds.push(flight)}
+  if(date){wh.push("flight_date=?");binds.push(date)}
+  binds.push(limit);
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT job_id,version_id,file_id,airline,flight_number,flight_date,parser_mode,document_type,list_name,card_key,passenger_count,class_counts_json,status,updated_at,extracted_text_preview
+    FROM import_job_results
+    ${wh.length?`WHERE ${wh.join(" AND ")}`:""}
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).bind(...binds).all();
+  return {ok:true,count:results.length,results:results.map(r=>({...r,class_counts:safeJsonParse(r.class_counts_json,{})}))};
+}
+
+async function lot2PipelineSummary(env){
+  await ensureImportProcessorTables(env);
+  const jobs=await env.OPS_DB.prepare(`SELECT status,COUNT(*) AS count FROM import_jobs GROUP BY status`).all();
+  const files=await env.OPS_DB.prepare(`SELECT status,COUNT(*) AS count FROM import_files GROUP BY status`).all();
+  const results=await env.OPS_DB.prepare(`SELECT status,parser_mode,card_key,COUNT(*) AS count FROM import_job_results GROUP BY status,parser_mode,card_key ORDER BY status,parser_mode,card_key`).all();
+  const recent=await env.OPS_DB.prepare(`
+    SELECT created_at,change_type,airline,flight_number,flight_date,file_id,version_id,after_json
+    FROM import_changes
+    ORDER BY id DESC
+    LIMIT 50
+  `).all();
+  let cards={results:[]};
+  try{
+    await ensureLot3Tables(env);
+    cards=await env.OPS_DB.prepare(`SELECT card_key,COUNT(*) AS count,SUM(passenger_count) AS passenger_count FROM flight_import_cards GROUP BY card_key ORDER BY card_key`).all();
+  }catch(e){}
+  return {ok:true,jobs:jobs.results||[],files:files.results||[],classified:results.results||[],flightCards:cards.results||[],recentChanges:recent.results||[]};
+}
+
+
+/* =========================================================
+ * LOT 3 — Injection vers fiche vol
+ * ========================================================= */
+
+async function ensureLot3Tables(env){
+  await ensureImportProcessorTables(env);
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS flight_import_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        identity TEXT NOT NULL,
+        airline TEXT NOT NULL,
+        flight_number TEXT NOT NULL,
+        flight_date TEXT NOT NULL,
+        card_key TEXT NOT NULL,
+        list_name TEXT NOT NULL DEFAULT '',
+        source_status TEXT NOT NULL DEFAULT 'ACTIVE',
+        passenger_count INTEGER NOT NULL DEFAULT 0,
+        class_counts_json TEXT NOT NULL DEFAULT '{}',
+        version_id TEXT,
+        file_id TEXT,
+        job_id TEXT,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(identity, card_key, list_name, version_id)
+      )
+    `),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_flight_import_cards_identity ON flight_import_cards(identity,card_key,updated_at)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_flight_import_cards_flight ON flight_import_cards(airline,flight_number,flight_date)`),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS flight_import_injections (
+        result_job_id TEXT PRIMARY KEY,
+        identity TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'INJECTED',
+        before_json TEXT,
+        after_json TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+  ]);
+}
+
+function lot3IdentityFromRow(row){
+  return [
+    String(row?.flight_date||"").trim(),
+    String(row?.airline||"").trim().toUpperCase(),
+    String(row?.flight_number||"").trim().toUpperCase()
+  ].join("|");
+}
+
+function lot3CardLabel(cardKey,listName){
+  const c=lot2Upper(cardKey);
+  const l=String(listName||"").trim();
+  if(c==="FQTV")return "FQTV";
+  if(c==="INBOUND")return l.includes("SUMMARY")?"INBOUND SUMMARY":"INBOUND";
+  if(c==="OUTBOUND")return l.includes("SUMMARY")?"OUTBOUND SUMMARY":"OUTBOUND";
+  if(c==="MASTER")return "BOOKED / MASTER";
+  return c || l || "OTHER";
+}
+
+function lot3SafeResultJson(v){
+  const x=safeJsonParse(v,{});
+  return x && typeof x==="object"?x:{};
+}
+
+function lot3BuildImportCard(row){
+  const result=lot3SafeResultJson(row.result_json);
+  const classCounts=safeJsonParse(row.class_counts_json,{});
+  return {
+    cardKey:String(row.card_key||""),
+    label:lot3CardLabel(row.card_key,row.list_name),
+    listName:String(row.list_name||""),
+    documentType:String(row.document_type||row.card_key||""),
+    passengerCount:Number(row.passenger_count||0),
+    classCounts,
+    parserMode:String(row.parser_mode||""),
+    status:String(row.status||""),
+    mappingScope:String(result.mappingScope||""),
+    matchedListName:String(result.matchedListName||""),
+    source:{
+      jobId:String(row.job_id||""),
+      fileId:String(row.file_id||""),
+      versionId:String(row.version_id||""),
+      injectedAt:new Date().toISOString()
+    },
+    // "passengers" et "passengerItems" étaient historiquement dupliqués à
+    // l'identique dans la fiche vol JSON alors que seul passengerItems est
+    // jamais relu : sur un vol à gros volume (ex. VF avec MASTER 250+/ETKT
+    // 240+ passagers), ce doublon fait dépasser la limite de taille D1
+    // (SQLITE_TOOBIG) et bloque l'injection de TOUTES les cartes du vol.
+    passengerItems:Array.isArray(result.passengerItems)?result.passengerItems:[],
+    connectionRows:Array.isArray(result.connectionRows)?result.connectionRows:[],
+    fqtvCategories:result.fqtvCategories||{},
+    // TK uniquement (priorité 7) : voir lot2TkExtractCheckInInfo/lot2TkExtractCommentedPax/lot2TkExtractOncarriagePax.
+    tkCheckInInfo:result.tkCheckInInfo||null,
+    tkCommentedPax:Array.isArray(result.tkCommentedPax)?result.tkCommentedPax:[],
+    tkOncarriage:Array.isArray(result.tkOncarriage)?result.tkOncarriage:[],
+    tkToysRUs:Array.isArray(result.tkToysRUs)?result.tkToysRUs:[],
+    tkInfantParents:Array.isArray(result.tkInfantParents)?result.tkInfantParents:[],
+    tkRebatePax:Array.isArray(result.tkRebatePax)?result.tkRebatePax:[],
+    tkSpecialMeal:Array.isArray(result.tkSpecialMeal)?result.tkSpecialMeal:[],
+    tkWchContent:Array.isArray(result.tkWchContent)?result.tkWchContent:[],
+    tkEtktList:Array.isArray(result.tkEtktList)?result.tkEtktList:[],
+    tkEmdList:Array.isArray(result.tkEmdList)?result.tkEmdList:[],
+    tkInboundConnectionPax:Array.isArray(result.tkInboundConnectionPax)?result.tkInboundConnectionPax:[],
+    tkInboundSummary:result.tkInboundSummary||null,
+    tkOutboundSummary:result.tkOutboundSummary||null,
+    rules:"LOT3 : injection depuis import_job_results validé ; n'écrase pas les corrections manuelles."
+  };
+}
+
+
+function lot3PaxKey(p){
+  return String(p?.name||"").toUpperCase().replace(/[^A-Z0-9/]/g,"");
+}
+
+
+function lot3IsProtectedSpecificAirline(airline){
+  // BJ retirée : elle utilise le même pipeline PD4ML que VF (déjà hors de
+  // cette liste). Vérifié sur de vraies pièces jointes BJ : la liste
+  // secondaire CHECK-IN LIST BOARDED extrait un nom erroné sur ce format
+  // (colonnes différentes de VF) — le filet de sécurité provisoire/nettoyage
+  // du flux non protégé (voir lot3UpsertPassengers) est nécessaire pour
+  // qu'une ligne mal extraite ne devienne pas un faux passager permanent.
+  return ["SQ","TK","TW"].includes(String(airline||"").trim().toUpperCase());
+}
+
+function lot3PaxNameKey(p){
+  return String(p?.name||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+}
+function lot3PaxSeatKey(p){
+  return String(p?.seat||"").trim().toUpperCase().replace(/\s+/g,"");
+}
+function lot3PaxClassKey(p){
+  return String(p?.class||p?.cabinClass||"").trim().toUpperCase();
+}
+function lot3PaxPnrKey(p){
+  return String(p?.pnr||p?.recordLocator||p?.record_locator||"").trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+}
+function lot3PaxEtktKeys(p){
+  const vals=[];
+  const add=v=>{
+    if(v==null||v==="")return;
+    if(Array.isArray(v)){v.forEach(add);return;}
+    if(typeof v==="object"){
+      add(v.number);add(v.documentNumber);add(v.document_number);add(v.id);return;
+    }
+    const s=String(v).toUpperCase().replace(/[^A-Z0-9]/g,"");
+    if(s)vals.push(s);
+  };
+  add(p?.etkt);add(p?.etkts);add(p?.tickets);add(p?.documentNumber);add(p?.documents?.etkt);
+  return [...new Set(vals)];
+}
+
+/*
+ * V50.26 — matching hiérarchique GENERIC uniquement.
+ * Ordre : ETKT > PNR+NOM > NOM+SIÈGE > NOM+CLASSE > NOM unique.
+ * SQ/TK/TW/BJ restent sur le comportement historique, sans aucun changement.
+ */
+function lot3FindPassengerIndex(passengers,incoming,airline){
+  const list=Array.isArray(passengers)?passengers:[];
+  if(lot3IsProtectedSpecificAirline(airline)){
+    const k=lot3PaxKey(incoming);
+    return list.findIndex(p=>lot3PaxKey(p)===k);
+  }
+
+  const et=lot3PaxEtktKeys(incoming);
+  if(et.length){
+    const hits=[];
+    list.forEach((p,i)=>{if(lot3PaxEtktKeys(p).some(v=>et.includes(v)))hits.push(i)});
+    if(hits.length===1)return hits[0];
+  }
+
+  const name=lot3PaxNameKey(incoming);
+  const pnr=lot3PaxPnrKey(incoming);
+  if(name&&pnr){
+    const hits=[];list.forEach((p,i)=>{if(lot3PaxNameKey(p)===name&&lot3PaxPnrKey(p)===pnr)hits.push(i)});
+    if(hits.length===1)return hits[0];
+  }
+
+  const seat=lot3PaxSeatKey(incoming);
+  if(name&&seat){
+    const hits=[];list.forEach((p,i)=>{if(lot3PaxNameKey(p)===name&&lot3PaxSeatKey(p)===seat)hits.push(i)});
+    if(hits.length===1)return hits[0];
+  }
+
+  const cls=lot3PaxClassKey(incoming);
+  if(name&&cls){
+    const hits=[];list.forEach((p,i)=>{if(lot3PaxNameKey(p)===name&&lot3PaxClassKey(p)===cls)hits.push(i)});
+    if(hits.length===1)return hits[0];
+  }
+
+  if(name){
+    const hits=[];list.forEach((p,i)=>{if(lot3PaxNameKey(p)===name)hits.push(i)});
+    if(hits.length===1)return hits[0];
+  }
+  return -1;
+}
+
+
+function lot3CleanImportedPassenger(p){
+  const x={...(p||{})};
+  const bad=/\b(?:MASTER|TKNE|AS)\b/i;
+
+  // MASTER / TKNE / AS ne sont pas des SSR à afficher dans les dossiers.
+  x.ssr=[...new Set((Array.isArray(x.ssr)?x.ssr:[])
+    .map(v=>String(v||"").trim().toUpperCase())
+    .filter(v=>v && !/^(MASTER|TKNE|AS)$/.test(v) && !/^\d{10,}/.test(v)))];
+
+  // La spécificité doit être une vraie catégorie opérationnelle, pas un numéro billet.
+  if(/^\d{10,}/.test(String(x.specific||"")) || bad.test(String(x.specific||"")) && !/^(TAHAT|DJURDJURA|WCHR|WCHS|WCHC|WCMP|WCBD|WCLB)$/i.test(String(x.specific||""))){
+    x.specific="";
+  }
+
+  if(/^\d{10,}/.test(String(x.note||"")) || /\bMASTER\b/i.test(String(x.note||""))){
+    x.note="";
+  }
+
+  delete x.document; // Colonne document inutile dans les listes génériques.
+  return x;
+}
+
+
+function lot3CleanGenericTokenText(v){
+  let s=String(v||"").trim();
+  if(!s)return "";
+  // Jamais afficher ces jetons techniques comme SSR / spécificité.
+  s=s.replace(/\bMASTER\b/gi,"")
+     .replace(/\bTKNE\b/gi,"")
+     .replace(/\bAS\b/gi,"")
+     .replace(/\bETK[TN]?[-\s]*\d{10,}\b/gi,"")
+     .replace(/\bEMD[-\s]*\d{10,}[A-Z0-9]*\b/gi,"")
+     .replace(/\b\d{10,}\b/g,"")
+     .replace(/\s*[·,;/|-]\s*/g," · ")
+     .replace(/(?:\s*·\s*){2,}/g," · ")
+     .replace(/^\s*·\s*|\s*·\s*$/g,"")
+     .replace(/\s+/g," ")
+     .trim();
+  return s;
+}
+
+function lot3CleanGenericSsrArray(v){
+  const bad=new Set(["MASTER","TKNE","AS",""]);
+  const out=[];
+  for(const raw of (Array.isArray(v)?v:[v])){
+    let s=String(raw||"").trim().toUpperCase();
+    if(!s || bad.has(s))continue;
+    if(/^\d{10,}$/.test(s))continue;
+    if(/^ETK[TN]?[-\s]*\d{10,}/.test(s))continue;
+    if(/^EMD[-\s]*\d{10,}/.test(s))continue;
+    if(!out.includes(s))out.push(s);
+  }
+  return out;
+}
+
+function lot3CleanImportedPassengerStrict(p){
+  const x={...(p||{})};
+  x.name=String(x.name||"").replace(/\s+/g," ").trim();
+  x.class=String(x.class||x.cabinClass||"").toUpperCase();
+  x.cabinClass=x.class;
+  x.title=String(x.title||"").toUpperCase();
+  x.gender=String(x.gender||"").toUpperCase();
+  x.passengerType=String(x.passengerType||"").toUpperCase();
+  x.ssr=lot3CleanGenericSsrArray(x.ssr);
+  x.specific=lot3CleanGenericTokenText(x.specific);
+  x.note=lot3CleanGenericTokenText(x.note);
+  if(x.cardKey==="MASTER"){
+    x.ssr=[];x.specific="";x.note="";
+  }
+  if(x.cardKey==="ETKT"){
+    x.ssr=[];x.specific="";x.note="";
+  }
+  if(x.cardKey==="EMD"){
+    x.ssr=[];x.specific="";x.note="";
+  }
+  if(x.cardKey==="WEB"){
+    // Ne pas écraser un canal déjà distingué en amont (MOBILE/JFE/EDS,
+    // voir cKey==="WEB" dans lot2ExtractPassengerItemsFromGenericList).
+    x.ssr=[];x.specific="";x.note="";
+    if(!["WEB","MOBILE","JFE","EDS"].includes(String(x.status||"").toUpperCase()))x.status="WEB";
+  }
+  return x;
+}
+
+function lot3DedupePassengerArray(arr){
+  const out=[];
+  const map=new Map();
+  for(const raw of Array.isArray(arr)?arr:[]){
+    const p=lot3CleanImportedPassengerStrict(raw);
+    const key=lot3PaxKey(p);
+    if(!key)continue;
+    if(map.has(key)){
+      const idx=map.get(key);
+      out[idx]=lot3MergePassengerInfo(out[idx],p);
+    }else{
+      map.set(key,out.length);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+function lot3CleanConnectionRows(rows,dir,base){
+  const out=[];
+  const byFlight=new Map();
+  for(const raw of Array.isArray(rows)?rows:[]){
+    const r={...(raw||{})};
+    r.flight=String(r.flight||"").trim().toUpperCase();
+    if(!r.flight || r.flight==="—" || r.flight==="-")continue;
+    r.from=String(r.from||"").trim().toUpperCase();
+    r.to=String(r.to||"").trim().toUpperCase();
+    r.time=String(r.time||"").trim();
+    r.passengers=lot3DedupePassengerArray(r.passengers||[]);
+    /*
+     * Une ligne INBOUND/OUTBOUND non-résumé représente UN passager (voir
+     * "V50.28 STRICT CONNECTION MODEL ... une ligne par passager, comme
+     * SQ" dans lot3MergeFlightData). Dédoublonner sur le seul numéro de
+     * vol fusionnait silencieusement tous les passagers d'une même
+     * correspondance en une seule ligne — confirmé sur un vrai vol TW où
+     * 19 passagers sur 4 vols de correspondance ne donnaient que 4
+     * lignes (7 passagers de TW207 réduits à 1 seul affiché). La clé
+     * inclut donc l'identité du passager (billet/PNR/nom + siège) en plus
+     * du vol ; une ligne sans passager identifiable retombe sur le seul
+     * numéro de vol, comme avant.
+     */
+    const paxKey=lot3PaxEtktKeys(r)[0]||lot3PaxPnrKey(r)||lot3PaxNameKey(r);
+    const key=paxKey?`${r.flight}|${paxKey}|${lot3PaxSeatKey(r)}`:r.flight;
+    if(!byFlight.has(key)){
+      byFlight.set(key,out.length);
+      out.push(r);
+    }else{
+      const cur=out[byFlight.get(key)];
+      // Préférer la provenance réelle de la summary (ex YYZ) au faux CDG issu de la ligne INC.
+      if((!cur.from || cur.from===base.dep) && r.from && r.from!==base.dep)cur.from=r.from;
+      if(!cur.to && r.to)cur.to=r.to;
+      if(!cur.time && r.time)cur.time=r.time;
+      cur.conx=cur.conx||r.conx||"";
+      cur.classCounts={...(cur.classCounts||{}),...(r.classCounts||{})};
+      cur.passengers=lot3DedupePassengerArray([...(cur.passengers||[]),...(r.passengers||[])]);
+      cur.paxCount=Math.max(Number(cur.paxCount||0),Number(r.paxCount||0),cur.passengers.length);
+      cur.count=Math.max(Number(cur.count||0),Number(r.count||0),cur.passengers.length);
+    }
+  }
+  return out;
+}
+
+function lot3SanitizeFlightGeneric(base){
+  if(!base||typeof base!=="object")return base;
+  base.passengers=lot3DedupePassengerArray(base.passengers||[]);
+  if(base.common_lists&&typeof base.common_lists==="object"){
+    Object.keys(base.common_lists).forEach(k=>{
+      base.common_lists[k]=lot3DedupePassengerArray(base.common_lists[k]||[]);
+    });
+  }
+  base.inbound=lot3CleanConnectionRows(base.inbound||[],"INBOUND",base);
+  base.outbound=lot3CleanConnectionRows(base.outbound||[],"OUTBOUND",base);
+  return base;
+}
+function lot3MergePassengerInfo(a,b){
+  a=lot3CleanImportedPassengerStrict(lot3CleanImportedPassenger(a||{}));
+  b=lot3CleanImportedPassengerStrict(lot3CleanImportedPassenger(b||{}));
+  const out={...(a||{})};
+  for(const [k,v] of Object.entries(b||{})){
+    if(v==null || v==="")continue;
+    if(k==="ssr"){
+      out.ssr=[...new Set([...(Array.isArray(out.ssr)?out.ssr:[]),...(Array.isArray(v)?v:[v])].filter(Boolean))];
+    }else if(k==="note"){
+      const notes=[out.note,v].filter(Boolean).map(x=>String(x));
+      out.note=[...new Set(notes)].join(" · ");
+    }else if(k==="specific"){
+      const vals=[out.specific,v].filter(Boolean).map(x=>String(x));
+      out.specific=[...new Set(vals)].join(" · ");
+    }else if(k==="fqtv"){
+      out.fqtv={...(out.fqtv||{}),...(v||{})};
+    }else if(!out[k]){
+      out[k]=v;
+    }
+  }
+  return out;
+}
+
+function lot3NormalizePassengerForUi(p,card){
+  const x={...(p||{})};
+  const c=String(card?.cardKey||x.cardKey||"").toUpperCase();
+  x.name=String(x.name||"").trim();
+  x.class=String(x.class||x.cabinClass||"").toUpperCase();
+  x.title=String(x.title||"").toUpperCase();
+  x.gender=String(x.gender||"").toUpperCase();
+
+  if(c==="WCH"){
+    x.ssr=[x.category||x.specific||"WCH"].filter(Boolean);
+  }else if(c==="FQTV"){
+    x.ssr=["FQTV"];
+    if(!x.fqtv)x.fqtv={tier:x.category||x.specific||"FQA",number:x.ffid||""};
+  }else if(c==="CHLD"){
+    x.ssr=["CHLD"];
+  }else if(c==="INF"){
+    x.ssr=["INF"];
+  }else if(c==="INBOUND"||c==="OUTBOUND"){
+    x.ssr=[c];
+  }else if(c==="EMD"||c==="ETKT"||c==="MASTER"||c==="WEB"){
+    x.ssr=Array.isArray(x.ssr)?x.ssr:[];
+    if(c==="WEB" && !["WEB","MOBILE","JFE","EDS"].includes(String(x.status||"").toUpperCase()))x.status="WEB";
+  }else if(c==="CONNECTIONS"){
+    x.ssr=x.connection?.direction?[String(x.connection.direction).toUpperCase()]:[];
+  }else{
+    x.ssr=[c].filter(Boolean);
+  }
+
+  if(c==="EMD" && !x.emd)x.emd=x.documentNumber||x.emd||"";
+  if(c==="ETKT" && !x.etkt)x.etkt=x.documentNumber||x.etkt||"";
+  x.sourceList=x.listName||card?.listName||"";
+  x.imported=true;
+  return lot3CleanImportedPassengerStrict(lot3CleanImportedPassenger(x));
+}
+
+function lot3UpsertPassengers(base,card){
+  base.passengers=Array.isArray(base.passengers)?base.passengers:[];
+  const items=Array.isArray(card?.passengerItems)?card.passengerItems:[];
+  if(!items.length)return;
+
+  const protectedFlow=lot3IsProtectedSpecificAirline(base.airline);
+  const cardKey=String(card?.cardKey||"").toUpperCase();
+
+  // Garde-fou absolu : on garde exactement l'ancien matching pour SQ/TK/TW/BJ.
+  if(protectedFlow){
+    const byKey=new Map(base.passengers.map((p,i)=>[lot3PaxKey(p),i]));
+    for(const raw of items){
+      const p=lot3NormalizePassengerForUi(raw,card);
+      const key=lot3PaxKey(p);
+      if(!key)continue;
+      if(byKey.has(key)){
+        const idx=byKey.get(key);
+        base.passengers[idx]=lot3MergePassengerInfo(base.passengers[idx],p);
+      }else if(cardKey==="MASTER" || !base.passengers.length || !byKey.has(key)){
+        byKey.set(key,base.passengers.length);
+        base.passengers.push(p);
+      }
+    }
+    return;
+  }
+
+  const hasMasterAlready=!!base.imports?.cards?.MASTER || base.passengers.some(p=>p?._genericMaster===true);
+
+  for(const raw of items){
+    const p=lot3NormalizePassengerForUi(raw,card);
+    if(!lot3PaxNameKey(p) && !lot3PaxEtktKeys(p).length)continue;
+
+    const idx=lot3FindPassengerIndex(base.passengers,p,base.airline);
+    if(idx>=0){
+      const merged=lot3MergePassengerInfo(base.passengers[idx],p);
+      if(cardKey==="MASTER"){
+        merged._genericMaster=true;
+        delete merged._genericProvisional;
+      }
+      base.passengers[idx]=merged;
+      continue;
+    }
+
+    if(cardKey==="MASTER"){
+      p._genericMaster=true;
+      delete p._genericProvisional;
+      base.passengers.push(p);
+      continue;
+    }
+
+    // Avant l'arrivée du MASTER on garde temporairement l'information.
+    // Dès que le MASTER est présent, une carte secondaire ne crée plus de faux dossier passager.
+    if(!hasMasterAlready && !base.passengers.some(q=>q?._genericMaster===true)){
+      p._genericProvisional=true;
+      base.passengers.push(p);
+    }
+  }
+
+  if(cardKey==="MASTER"){
+    // La population MASTER est l'autorité du dossier passager générique.
+    // Les lignes secondaires non rapprochées restent dans leurs cartes/listes mais ne créent pas de dossier fantôme.
+    base.passengers=base.passengers.filter(p=>p?._genericMaster===true || p?._genericProvisional!==true);
+  }
+}
+
+function lot3MergeFlightData(current,row,card){
+  let base=lot3SanitizeFlightGeneric(current && typeof current==="object"?{...current}:{});
+  const identity=lot3IdentityFromRow(row);
+
+  base.date=base.date || String(row.flight_date||"");
+  base.airline=base.airline || String(row.airline||"").toUpperCase();
+  base.flight=base.flight || String(row.flight_number||"").toUpperCase();
+  base.identity=base.identity || identity;
+
+  const imports=base.imports && typeof base.imports==="object" && !Array.isArray(base.imports)
+    ? {...base.imports}
+    : {};
+
+  const cards=imports.cards && typeof imports.cards==="object" && !Array.isArray(imports.cards)
+    ? {...imports.cards}
+    : {};
+
+  /*
+   * Nettoyage de la bouillie historique : avant ce correctif, "sources"
+   * s'accumulait sans limite sur TOUTES les cartes à chaque réinjection
+   * (une copie complète de passengerItems par cycle), et "passengers" dupliquait
+   * "passengerItems" partout. Sur un vol déjà volumineux (VF12), ça peut suffire
+   * à elle seule à dépasser la limite de taille D1 même pour l'écriture qui
+   * corrige UNE carte. On nettoie donc toutes les cartes existantes ici, pas
+   * seulement celle en cours de traitement, pour que la toute première écriture
+   * réussie après déploiement dégonfle déjà l'ensemble de la fiche.
+   */
+  for(const k of Object.keys(cards)){
+    if(!cards[k] || typeof cards[k]!=="object")continue;
+    if(cards[k].passengers!==undefined){cards[k]={...cards[k]};delete cards[k].passengers;}
+    if(k!=="INBOUND_SUMMARY" && k!=="OUTBOUND_SUMMARY" && cards[k].sources!==undefined){
+      cards[k]={...cards[k]};delete cards[k].sources;
+    }
+  }
+
+  const key=String(card.cardKey||"OTHER").toUpperCase();
+  const previous=cards[key] && typeof cards[key]==="object" && !Array.isArray(cards[key]) ? cards[key] : null;
+
+  /*
+   * "sources" n'est relu QUE pour INBOUND_SUMMARY/OUTBOUND_SUMMARY (agrégation
+   * des connectionRows de plusieurs documents). Pour toute autre carte, cette
+   * liste n'est jamais relue nulle part : la conserver ne fait qu'accumuler
+   * indéfiniment une copie complète de passengerItems à CHAQUE reparse/réinjection
+   * du même document (requeue, cron répété...), ce qui a fait dépasser la limite
+   * de taille d'une ligne D1 (SQLITE_TOOBIG) sur un vol VF déjà volumineux.
+   * On ne garde donc "sources" que là où il sert, et on déduplique par job_id
+   * pour qu'un même document réinjecté plusieurs fois ne soit compté qu'une fois.
+   */
+  const needsSources=key==="INBOUND_SUMMARY"||key==="OUTBOUND_SUMMARY";
+  const dedupeSources=(list,incoming)=>{
+    const jobId=String(incoming?.source?.jobId||"");
+    const kept=jobId?list.filter(s=>String(s?.source?.jobId||"")!==jobId):list.slice();
+    kept.push(incoming);
+    return kept;
+  };
+
+  // Protection corrections manuelles : si une carte porte manualLocked=true, on archive seulement la source.
+  if(previous && previous.manualLocked===true){
+    cards[key]={...previous,serverUpdatedAt:new Date().toISOString()};
+    if(needsSources)cards[key].sources=dedupeSources(Array.isArray(previous.sources)?previous.sources:[],card);
+    else delete cards[key].sources;
+  }else{
+    // Si plusieurs sources d'une même carte existent, on garde le plus haut compteur en affichage
+    // et toutes les sources restent consultables.
+    const prevCount=Number(previous?.passengerCount||0);
+    const nextCount=Number(card.passengerCount||0);
+    const display=nextCount>=prevCount?card:previous;
+
+    cards[key]={
+      ...(display||card),
+      passengerCount:Math.max(prevCount,nextCount),
+      serverUpdatedAt:new Date().toISOString()
+    };
+    if(needsSources)cards[key].sources=dedupeSources(Array.isArray(previous?.sources)?previous.sources:[],card);
+    else delete cards[key].sources;
+  }
+
+  imports.cards=cards;
+  imports.lastInjectionAt=new Date().toISOString();
+  imports.lastInjectionLot="LOT3";
+  imports.status="INJECTED";
+
+  // Injection dans les structures déjà existantes de la fiche vol.
+  base.common=base.common||{};
+  base.common_lists=base.common_lists||{};
+  base.booked=base.booked||{};
+
+  lot3UpsertPassengers(base,card);
+
+  if(card.cardKey==="MASTER"){
+    Object.entries(card.classCounts||{}).forEach(([k,v])=>{
+      const n=Number(v||0);
+      if(n>0)base.booked[String(k).toUpperCase()]=n;
+    });
+  }
+
+  if(card.cardKey==="WEB"){
+    base.web=base.web||{};
+    Object.entries(card.classCounts||{}).forEach(([k,v])=>{
+      const n=Number(v||0);
+      if(n>0)base.web[String(k).toUpperCase()]=Math.max(Number(base.web[String(k).toUpperCase()]||0),n);
+    });
+  }
+
+  // PETC/AVIH (animal en cabine/soute) partagent la même case d'affichage
+  // générique "PET_AV" (voir icons.PET_AV côté frontend) — déjà le cas pour
+  // BJ (sa propre carte "PETC / AVIH" dédiée), jamais branché jusqu'ici pour
+  // les autres compagnies alors que les mappings SR-PETC/SR-AVIH existent
+  // déjà plus haut (AT/A9/SK).
+  const map={WCH:"WCH",CHLD:"CHLD",INF:"INF",EMD:"EMD",ETKT:"ETK",FQTV:"FQTV",STAFF:"STAFF",MEAL:"MEAL",UMNR:"UMNR",MAAS:"MAAS",INAD:"INAD",DEPA:"DEPA",DEPU:"DEPU",CBAG:"CBAG",PETC:"PET_AV",AVIH:"PET_AV",VIP:"VIP",UPGR:"UPGR"};
+  const existingKey=map[String(card.cardKey||"").toUpperCase()];
+  if(existingKey){
+    const count=Number(card.passengerCount||0);
+    if(count>0)base.common[existingKey]=Math.max(Number(base.common[existingKey]||0),count);
+    if(Array.isArray(card.passengerItems)&&card.passengerItems.length){
+      /*
+       * Upsert par IDENTITÉ passager (ETKT/PNR+nom/...), jamais par contenu.
+       * L'ancien code dédupliquait sur [name,seat,class,specific,note] : dès
+       * qu'un correctif changeait specific/note pour un passager déjà présent,
+       * la clé changeait et une DEUXIÈME entrée était ajoutée au lieu de
+       * remplacer l'ancienne (corrompue) — un simple rejeu ne pouvait donc
+       * jamais corriger des données déjà injectées, seulement en empiler
+       * une copie corrigée à côté de l'ancienne toujours affichée.
+       */
+      const list=Array.isArray(base.common_lists[existingKey])?base.common_lists[existingKey].slice():[];
+      for(const p0 of card.passengerItems){
+        const p=lot3NormalizePassengerForUi(p0,card);
+        const masterIdx=lot3FindPassengerIndex(base.passengers||[],p,base.airline);
+        const master=masterIdx>=0?(base.passengers||[])[masterIdx]:null;
+        /*
+         * L'entrée de LISTE (p) doit rester la base du merge, pas le MASTER :
+         * lot3MergePassengerInfo(a,b) ne réécrit jamais un champ déjà renseigné
+         * dans a (ex. cardKey/listName), donc fusionner (master,p) faisait
+         * hériter cardKey="MASTER" sur CHAQUE entrée de carte dérivée (FQTV,
+         * CBAG, MEAL...). lot3SanitizeFlightGeneric vide ensuite ssr/specific/
+         * note de TOUT enregistrement dont cardKey==="MASTER" (comportement
+         * voulu pour la fiche MASTER elle-même), ce qui effaçait ces mêmes
+         * champs sur les entrées de liste à chaque nouveau cycle de fusion.
+         * Le MASTER ne sert donc plus qu'à compléter les champs manquants
+         * (ETKT, code groupe...), jamais à écraser l'identité de la carte.
+         */
+        const merged=master?lot3MergePassengerInfo(p,master):p;
+        const idx=lot3FindPassengerIndex(list,merged,base.airline);
+        if(idx>=0)list[idx]=merged;
+        else list.push(merged);
+      }
+      base.common_lists[existingKey]=list;
+    }
+  }
+
+
+  /*
+   * Certaines compagnies livrent INC et ONC dans un seul PDF. On conserve la
+   * source CONNECTIONS puis on injecte chaque passager dans la direction
+   * portée par sa ligne I-/O-, sans créer de SSR technique CONNECTIONS.
+   */
+  if(card.cardKey==="CONNECTIONS"){
+    base.imports=imports;
+    let merged=base;
+    for(const direction of ["INBOUND","OUTBOUND"]){
+      const passengerItems=(card.passengerItems||[]).filter(p=>String(p?.connection?.direction||"").toUpperCase()===direction);
+      if(!passengerItems.length)continue;
+      merged=lot3MergeFlightData(merged,row,{
+        ...card,
+        cardKey:direction,
+        label:direction,
+        passengerItems,
+        passengers:passengerItems,
+        passengerCount:passengerItems.length,
+        connectionRows:[]
+      });
+    }
+    return lot3SanitizeFlightGeneric(merged);
+  }
+
+  /*
+   * Certaines compagnies livrent enfants et bébés dans un seul PDF
+   * (ex. "PDF-INFKID"). Chacun garde sa propre carte (INF ou CHLD) au
+   * lieu d'être fusionné dans une carte unique.
+   */
+  if(card.cardKey==="INFKID"){
+    base.imports=imports;
+    let merged=base;
+    for(const type of ["INF","CHLD"]){
+      const passengerItems=(card.passengerItems||[]).filter(p=>String(p?.passengerType||"").toUpperCase()===type);
+      if(!passengerItems.length)continue;
+      merged=lot3MergeFlightData(merged,row,{
+        ...card,
+        cardKey:type,
+        label:type,
+        passengerItems,
+        passengers:passengerItems,
+        passengerCount:passengerItems.length
+      });
+    }
+    return lot3SanitizeFlightGeneric(merged);
+  }
+
+  /*
+   * Source iPort (IZ/TB) : "PIL BY SSR CATEGORY" regroupe plusieurs sections
+   * (MEALS/MEDICAL/SEATS/OTHER) dans un seul mail. Chaque passager est routé
+   * vers sa vraie carte (MEAL/WCH/OTHER) via son SSR réel, jamais fusionné
+   * dans une carte technique "IPORT_SSR".
+   */
+  if(card.cardKey==="IPORT_SSR"){
+    base.imports=imports;
+    let merged=base;
+    for(const target of ["MEAL","WCH","OTHER"]){
+      const passengerItems=(card.passengerItems||[]).filter(p=>String(p?.iportSection||"").toUpperCase()===target);
+      if(!passengerItems.length)continue;
+      merged=lot3MergeFlightData(merged,row,{
+        ...card,
+        cardKey:target,
+        label:target,
+        passengerItems,
+        passengers:passengerItems,
+        passengerCount:passengerItems.length
+      });
+    }
+    return lot3SanitizeFlightGeneric(merged);
+  }
+
+  /*
+   * Source JU (Air Serbia) : le rapport "G*L..." liste TOUS les passagers du
+   * vol (documents/billets), mais seuls ceux porteurs d'un SSR WCH/CHLD/PETC
+   * sont extraits (voir lot2JuExtractPassengerItems). Chacun est routé vers
+   * sa vraie carte via ssrSection, jamais fusionné dans une carte technique
+   * "JU_MIXED".
+   */
+  if(card.cardKey==="JU_MIXED"){
+    base.imports=imports;
+    let merged=base;
+    for(const target of ["WCH","CHLD","PETC"]){
+      const passengerItems=(card.passengerItems||[]).filter(p=>String(p?.ssrSection||"").toUpperCase()===target);
+      if(!passengerItems.length)continue;
+      merged=lot3MergeFlightData(merged,row,{
+        ...card,
+        cardKey:target,
+        label:target,
+        passengerItems,
+        passengers:passengerItems,
+        passengerCount:passengerItems.length
+      });
+    }
+    return lot3SanitizeFlightGeneric(merged);
+  }
+
+  if(["INBOUND","OUTBOUND","INBOUND_SUMMARY","OUTBOUND_SUMMARY"].includes(card.cardKey)){
+    const isInbound=card.cardKey==="INBOUND" || card.cardKey==="INBOUND_SUMMARY";
+    const isSummary=card.cardKey==="INBOUND_SUMMARY" || card.cardKey==="OUTBOUND_SUMMARY";
+    const dir=isInbound?"inbound":"outbound";
+
+    /*
+     * V50.28 STRICT CONNECTION MODEL
+     * SUMMARY = metadata vols uniquement.
+     * INC / ONC = passagers uniquement.
+     * La fiche vol expose ensuite UNE LIGNE PAR PASSAGER, comme SQ.
+     */
+    if(!isSummary && Array.isArray(card.passengerItems) && card.passengerItems.length){
+      const summaryKey=isInbound?"INBOUND_SUMMARY":"OUTBOUND_SUMMARY";
+      const summaryCard=cards[summaryKey]||null;
+      const summaryRows=[];
+      const srcs=summaryCard&&Array.isArray(summaryCard.sources)&&summaryCard.sources.length?summaryCard.sources:[summaryCard].filter(Boolean);
+      for(const s of srcs){
+        for(const r of (Array.isArray(s?.connectionRows)?s.connectionRows:[]))summaryRows.push(r);
+      }
+      if(!summaryRows.length && Array.isArray(summaryCard?.connectionRows))summaryRows.push(...summaryCard.connectionRows);
+      const byFlight=new Map(summaryRows.filter(r=>r?.flight).map(r=>[String(r.flight).toUpperCase(),r]));
+
+      base[dir]=Array.isArray(base[dir])?base[dir]:[];
+      // Remove prior generic rows produced by the same nominative list; summary rows are never displayed as pax rows.
+      base[dir]=base[dir].filter(r=>{
+        if(!r)return false;
+        if(Array.isArray(r.passengers))return false;
+        const src=String(r.sourceList||"").toUpperCase();
+        return src!==String(card.listName||"").toUpperCase();
+      });
+
+      for(const p0 of card.passengerItems){
+        const p=lot3NormalizePassengerForUi(p0,card);
+        const conn=p.connection||{};
+        const flight=String(conn.flight||"").trim().toUpperCase();
+        if(!flight)continue;
+        const meta=byFlight.get(flight)||{};
+        const masterIdx=lot3FindPassengerIndex(base.passengers||[],p,base.airline);
+        const master=masterIdx>=0?(base.passengers||[])[masterIdx]:null;
+        // Voir commentaire équivalent plus haut : p (la ligne OUTBOUND/INBOUND)
+        // doit rester la base du merge, le MASTER ne fait que compléter.
+        const pax=master?lot3MergePassengerInfo(p,master):p;
+        const airport=String(conn.airport||"").trim().toUpperCase();
+        const metaFrom=String(meta.from||"").trim().toUpperCase();
+        const metaTo=String(meta.to||"").trim().toUpperCase();
+        const from=isInbound
+          ? ((metaFrom && metaFrom!==String(base.dep||"").toUpperCase() && metaFrom!==String(base.dest||"").toUpperCase())?metaFrom:(airport||metaFrom))
+          : (String(base.dest||metaFrom||"").toUpperCase());
+        const to=isInbound
+          ? String(base.dep||"CDG").toUpperCase()
+          : ((metaTo && metaTo!==String(base.dep||"").toUpperCase() && metaTo!==String(base.dest||"").toUpperCase())?metaTo:(airport||metaTo));
+        const row={
+          ...pax,
+          passenger:pax.name||pax.fullName||"",
+          name:pax.name||pax.fullName||"",
+          flight,
+          from,
+          to,
+          // À défaut de résumé (OUTBOUND/INBOUND_SUMMARY vide, cas VF), l'heure
+          // vient directement de la ligne passager elle-même (conn.std).
+          time:String(meta.time||conn.std||"").trim(),
+          conx:String(meta.conx||""),
+          class:pax.class||pax.cabinClass||"",
+          sourceList:card.listName,
+          connection:{...conn,direction:isInbound?"INBOUND":"OUTBOUND",flight,airport}
+        };
+        const key=[flight,lot3PaxEtktKeys(pax)[0]||lot3PaxPnrKey(pax)||lot3PaxNameKey(pax),lot3PaxSeatKey(pax)].join("|");
+        const idx=base[dir].findIndex(r=>[
+          String(r.flight||"").toUpperCase(),
+          lot3PaxEtktKeys(r)[0]||lot3PaxPnrKey(r)||lot3PaxNameKey(r),
+          lot3PaxSeatKey(r)
+        ].join("|")===key);
+        if(idx>=0)base[dir][idx]=lot3MergePassengerInfo(base[dir][idx],row);
+        else base[dir].push(row);
+      }
+    }
+  }
+
+  // V50.28: after every generic card, refresh all list snapshots from the consolidated master.
+  // Chaque entrée (p) reste la base du merge : le MASTER ne fait que compléter
+  // les champs manquants (ETKT, code groupe...), jamais écraser cardKey/
+  // listName/ssr/note de la carte d'origine (voir commentaire plus haut).
+  //
+  // Limité à la carte QUI VIENT D'ÊTRE TRAITÉE (existingKey) plutôt qu'à
+  // TOUTES les cartes déjà accumulées : chaque liste est déjà enrichie
+  // correctement au moment de sa construction (bloc "existingKey" ci-dessus),
+  // donc reparcourir l'intégralité de common_lists à CHAQUE carte traitée
+  // (potentiellement 700+ entrées cumulées × un scan O(passagers) chacune,
+  // répété à chaque document d'un vol volumineux comme VF12) pouvait dépasser
+  // le budget CPU du Worker et laisser certaines cartes dérivées (CBAG en
+  // particulier, 177 passagers) jamais persistées en base.
+  if(!lot3IsProtectedSpecificAirline(base.airline) && existingKey && Array.isArray(base.common_lists[existingKey])){
+    base.common_lists[existingKey]=base.common_lists[existingKey].map(p=>{
+      const idx=lot3FindPassengerIndex(base.passengers||[],p,base.airline);
+      return idx>=0?lot3MergePassengerInfo(p,base.passengers[idx]):p;
+    });
+  }
+  if(!lot3IsProtectedSpecificAirline(base.airline) && (card.cardKey==="INBOUND"||card.cardKey==="OUTBOUND")){
+    for(const dir of ["inbound","outbound"]){
+      base[dir]=(base[dir]||[]).map(p=>{
+        const idx=lot3FindPassengerIndex(base.passengers||[],p,base.airline);
+        return idx>=0?lot3MergePassengerInfo(p,base.passengers[idx]):p;
+      });
+    }
+  }
+
+  base.imports=imports;
+
+  /*
+   * VF SSR List : CBAG n'y est qu'une simple mention par passager
+   * ("CBAG : CBAG- 8KG CAB"), sans carte dédiée. On en extrait une carte
+   * CBAG à la volée (même mécanisme que CONNECTIONS ci-dessus), qui passe
+   * ensuite par le "map" générique déjà en place pour WCH/MEAL/etc.
+   * FQTV reste alimenté uniquement par sa propre liste dédiée VF FQTV List :
+   * le dupliquer ici depuis SSR créerait des entrées non fusionnables
+   * (note/specific différents) dans base.common_lists.FQTV.
+   * Important : cet appel récursif doit venir APRÈS "base.imports=imports"
+   * ci-dessus, sinon il écraserait la carte CBAG qu'il vient de créer avec
+   * l'ancien "imports" local (sans CBAG) capturé en début de fonction.
+   */
+  if(card.cardKey==="SSR" && Array.isArray(card.passengerItems)){
+    /*
+     * Un passager SSR VF peut porter plusieurs codes à la fois (ex. CBAG +
+     * BDML + DSML sur une même ligne). Sans filtrage, la carte CBAG affichait
+     * aussi les codes repas du même passager et inversement : on ne garde ici
+     * que le(s) code(s)/texte(s) pertinents pour la carte dérivée en cours.
+     */
+    const keepOnlyCodes=(items,codes)=>items.map(p=>({
+      ...p,
+      ssr:(Array.isArray(p.ssr)?p.ssr:[]).filter(c=>codes.has(c)),
+      note:String(p.note||"").split(" · ").filter(seg=>{
+        const m=seg.match(/^([A-Z0-9]+)\s*:/);
+        return m && codes.has(m[1]);
+      }).join(" · ")
+    }));
+    const CBAG_CODES=new Set(["CBAG"]);
+    const cbagItems=keepOnlyCodes(
+      card.passengerItems.filter(p=>Array.isArray(p.ssr)&&p.ssr.includes("CBAG")),
+      CBAG_CODES
+    );
+    if(cbagItems.length){
+      base=lot3MergeFlightData(base,row,{
+        ...card,
+        cardKey:"CBAG",
+        label:"CBAG",
+        passengerItems:cbagItems,
+        passengers:cbagItems,
+        passengerCount:cbagItems.length,
+        connectionRows:[]
+      });
+    }
+    // Repas (BDML/CPDR/DSML/EBML...) : même principe que CBAG ci-dessus.
+    const mealItems=keepOnlyCodes(
+      card.passengerItems.filter(p=>Array.isArray(p.ssr)&&p.ssr.some(s=>VF_MEAL_SSR_CODES.has(s))),
+      VF_MEAL_SSR_CODES
+    );
+    if(mealItems.length){
+      base=lot3MergeFlightData(base,row,{
+        ...card,
+        cardKey:"MEAL",
+        label:"MEAL",
+        passengerItems:mealItems,
+        passengers:mealItems,
+        passengerCount:mealItems.length,
+        connectionRows:[]
+      });
+    }
+  }
+
+  /*
+   * TW (T'way) : voir lot2TwDeriveSecondaryCards. Le MASTER vient d'être
+   * posé juste au-dessus (base.passengers contient déjà les 187+ passagers
+   * du manifeste) ; on en dérive maintenant WCH/CHLD/INF/OUTBOUND, chacun
+   * se rattachant au bon passager déjà présent (même mécanisme que VF
+   * SSR->CBAG/MEAL ci-dessus, jamais de nouveau dossier fantôme puisque
+   * lot3UpsertPassengers ne pousse une nouvelle entrée protégée SQ/TK/TW
+   * que si le nom n'a pas déjà été vu).
+   */
+  if(card.cardKey==="MASTER" && card.listName==="TW CONTENT" && Array.isArray(card.passengerItems) && card.passengerItems.length){
+    for(const derived of lot2TwDeriveSecondaryCards(card.passengerItems)){
+      base=lot3MergeFlightData(base,row,{
+        ...card,
+        cardKey:derived.cardKey,
+        label:derived.cardKey,
+        passengerItems:derived.passengerItems,
+        passengers:derived.passengerItems,
+        passengerCount:derived.passengerItems.length,
+        classCounts:derived.classCounts||{},
+        connectionRows:[]
+      });
+    }
+  }
+
+  /*
+   * TK (priorité 7) : CHECK IN INFORMATION (config avion + booked/accepted/
+   * on sby/available séparés), VIP/UPGR (coexistants, dédupliqués entre
+   * plusieurs blocs COMMENTED PAX) et connexions ONCARRIAGE multi-segments.
+   * Toutes ces sections partagent le même mail que ALL PAX (déjà posé comme
+   * MASTER juste au-dessus) et se rattachent aux MÊMES passagers via
+   * tkTruncKey (nom tronqué identique dans toutes les sections — voir
+   * lot2TkTruncNameFromLine), jamais par le nom complet SURNAME/GIVEN que
+   * ces sections annexes ne portent pas.
+   */
+  if(card.cardKey==="MASTER" && card.listName==="TK ALL PAX"){
+    const byTrunc=new Map();
+    for(const p of base.passengers||[]){
+      if(p?.tkTruncKey && !byTrunc.has(p.tkTruncKey))byTrunc.set(p.tkTruncKey,p);
+    }
+
+    if(card.tkCheckInInfo){
+      const info=card.tkCheckInInfo;
+      if(info.type)base.aircraft=base.aircraft||info.type;
+      if(info.reg && !/^\d+$/.test(String(base.reg||"")))base.reg=base.reg||info.reg;
+      if(info.config)base.config={...(base.config||{}),...info.config};
+      base.tkCheckIn={
+        booked:info.booked||null,
+        accepted:info.accepted||null,
+        onStandby:info.onStandby||null,
+        available:info.available||null
+      };
+    }
+
+    // INBOUND/OUTBOUND CONNECTIONS : tableau récapitulatif par vol, agrégat
+    // au niveau du vol (pas d'un passager) — simple champ dédié, pas de
+    // rapprochement par tkTruncKey nécessaire.
+    if(card.tkInboundSummary)base.tkInboundSummary=card.tkInboundSummary;
+    if(card.tkOutboundSummary)base.tkOutboundSummary=card.tkOutboundSummary;
+
+    // Mutations directes des entrées base.passengers AVANT tout appel récursif
+    // à lot3MergeFlightData (VIP/UPGR/CHLD/INF/STAFF/MEAL/WCH/ETKT/EMD plus
+    // bas) : ces appels reconstruisent base.passengers avec de NOUVEAUX objets
+    // à chaque fois — une mutation faite après serait silencieusement perdue,
+    // byTrunc pointant alors vers des objets détachés.
+    if(Array.isArray(card.tkOncarriage) && card.tkOncarriage.length){
+      for(const o of card.tkOncarriage){
+        const master=byTrunc.get(o.tkTruncKey);
+        if(!master)continue;
+        // Champs dédiés (pas .specific/.note) : lot3CleanImportedPassengerStrict
+        // vide ces deux champs sur toute entrée cardKey===MASTER à chaque
+        // réinjection future — un champ propre à TK survit, lui, intact
+        // (copie superficielle, jamais nettoyé nulle part ailleurs).
+        master.oncarriageChain=o.chain;
+        master.oncarriageDestination=o.destination;
+      }
+    }
+    if(Array.isArray(card.tkInboundConnectionPax) && card.tkInboundConnectionPax.length){
+      for(const c of card.tkInboundConnectionPax){
+        const master=byTrunc.get(c.tkTruncKey);
+        if(!master)continue;
+        master.inboundConnectionFlight=c.flight;
+        master.inboundConnectionAirport=c.airport;
+      }
+    }
+
+    if(Array.isArray(card.tkCommentedPax) && card.tkCommentedPax.length){
+      const vipItems=[],upgrItems=[];
+      for(const c of card.tkCommentedPax){
+        const master=byTrunc.get(c.tkTruncKey);
+        if(!master)continue;
+        if(c.vip)vipItems.push({...master,cardKey:"VIP",listName:"TK COMMENTED PAX",ssr:["VIP"],specific:"",note:""});
+        if(c.upgr)upgrItems.push({...master,cardKey:"UPGR",listName:"TK COMMENTED PAX",ssr:["UPGR"],specific:"",note:""});
+      }
+      if(vipItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"VIP",label:"VIP",passengerItems:vipItems,passengers:vipItems,passengerCount:vipItems.length,classCounts:{},connectionRows:[]});
+      if(upgrItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"UPGR",label:"UPGR",passengerItems:upgrItems,passengers:upgrItems,passengerCount:upgrItems.length,classCounts:{},connectionRows:[]});
+    }
+
+    // TOY'S R US -> CHLD (marqueur "CHL", ou repli sur le titre MSTR/MISS déjà
+    // connu du MASTER pour les cas ambigus type "GURROBY" sans marqueur ni
+    // présence dans PASSENGERS WITH INFANTS) + INF (parents d'un bébé, listés
+    // aussi par PASSENGERS WITH INFANTS elle-même — union des deux sources,
+    // dédupliquée par tkTruncKey/identité passager).
+    if(Array.isArray(card.tkToysRUs) && card.tkToysRUs.length){
+      const chldItems=[],infItems=[];
+      for(const t of card.tkToysRUs){
+        const master=byTrunc.get(t.tkTruncKey);
+        if(!master)continue;
+        const isChld=t.chld || (!t.infParent && (master.title==="MSTR"||master.title==="MISS"));
+        if(isChld)chldItems.push({...master,cardKey:"CHLD",listName:"TK TOY'S R US",ssr:["CHLD"],specific:"",note:""});
+        else if(t.infParent)infItems.push({...master,cardKey:"INF",listName:"TK TOY'S R US",ssr:["INF"],specific:"",note:""});
+      }
+      if(chldItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"CHLD",label:"CHLD",passengerItems:chldItems,passengers:chldItems,passengerCount:chldItems.length,classCounts:{},connectionRows:[]});
+      if(infItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"INF",label:"INF",passengerItems:infItems,passengers:infItems,passengerCount:infItems.length,classCounts:{},connectionRows:[]});
+    }
+    if(Array.isArray(card.tkInfantParents) && card.tkInfantParents.length){
+      const infItems=[];
+      for(const key of card.tkInfantParents){
+        const master=byTrunc.get(key);
+        if(master)infItems.push({...master,cardKey:"INF",listName:"TK PASSENGERS WITH INFANTS",ssr:["INF"],specific:"",note:""});
+      }
+      if(infItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"INF",label:"INF",passengerItems:infItems,passengers:infItems,passengerCount:infItems.length,classCounts:{},connectionRows:[]});
+    }
+
+    // REBATE PAX -> STAFF (code conservé en specific).
+    if(Array.isArray(card.tkRebatePax) && card.tkRebatePax.length){
+      const staffItems=[];
+      for(const r of card.tkRebatePax){
+        const master=byTrunc.get(r.tkTruncKey);
+        if(master)staffItems.push({...master,cardKey:"STAFF",listName:"TK REBATE PAX",ssr:["STAFF","REBATE"],specific:r.code||"",note:""});
+      }
+      if(staffItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"STAFF",label:"STAFF",passengerItems:staffItems,passengers:staffItems,passengerCount:staffItems.length,classCounts:{},connectionRows:[]});
+    }
+
+    // PAX WITH SPECIAL MEAL -> MEAL (code repas conservé).
+    if(Array.isArray(card.tkSpecialMeal) && card.tkSpecialMeal.length){
+      const mealItems=[];
+      for(const m2 of card.tkSpecialMeal){
+        const master=byTrunc.get(m2.tkTruncKey);
+        if(master)mealItems.push({...master,cardKey:"MEAL",listName:"TK PAX WITH SPECIAL MEAL",ssr:[m2.meal||"MEAL"],specific:m2.meal||"",note:""});
+      }
+      if(mealItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"MEAL",label:"MEAL",passengerItems:mealItems,passengers:mealItems,passengerCount:mealItems.length,classCounts:{},connectionRows:[]});
+    }
+
+    // WCHR/WCHS/WCHC/WCMP (détecté par contenu) -> WCH (code conservé).
+    if(Array.isArray(card.tkWchContent) && card.tkWchContent.length){
+      const wchItems=[];
+      for(const w of card.tkWchContent){
+        const master=byTrunc.get(w.tkTruncKey);
+        if(master)wchItems.push({...master,cardKey:"WCH",listName:"TK WCH",category:w.code,ssr:[w.code],specific:w.code,note:""});
+      }
+      if(wchItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"WCH",label:"WCH",passengerItems:wchItems,passengers:wchItems,passengerCount:wchItems.length,classCounts:{},connectionRows:[]});
+    }
+
+    // E-TKT / EMD FULL PAX LIST -> ETKT/EMD (numéro de document conservé,
+    // code service EMD conservé en specific).
+    if(Array.isArray(card.tkEtktList) && card.tkEtktList.length){
+      const etktItems=[];
+      for(const e of card.tkEtktList){
+        const master=byTrunc.get(e.tkTruncKey);
+        if(master)etktItems.push({...master,cardKey:"ETKT",listName:"TK E-TKT FULL PAX LIST",etkt:e.etkt||master.etkt||"",ssr:[],specific:"",note:""});
+      }
+      if(etktItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"ETKT",label:"ETKT",passengerItems:etktItems,passengers:etktItems,passengerCount:etktItems.length,classCounts:{},connectionRows:[]});
+    }
+    if(Array.isArray(card.tkEmdList) && card.tkEmdList.length){
+      const emdItems=[];
+      for(const e of card.tkEmdList){
+        const master=byTrunc.get(e.tkTruncKey);
+        if(master)emdItems.push({...master,cardKey:"EMD",listName:"TK EMD FULL PAX LIST",emd:e.emd||"",ssr:[],specific:e.code||"",note:""});
+      }
+      if(emdItems.length)base=lot3MergeFlightData(base,row,{...card,cardKey:"EMD",label:"EMD",passengerItems:emdItems,passengers:emdItems,passengerCount:emdItems.length,classCounts:{},connectionRows:[]});
+    }
+  }
+
+  return lot3SanitizeFlightGeneric(base);
+}
+
+async function lot3UpsertFlightCard(env,identity,row,card){
+  await env.OPS_DB.prepare(`
+    INSERT INTO flight_import_cards
+      (identity,airline,flight_number,flight_date,card_key,list_name,passenger_count,class_counts_json,version_id,file_id,job_id,result_json,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(identity,card_key,list_name,version_id) DO UPDATE SET
+      passenger_count=excluded.passenger_count,
+      class_counts_json=excluded.class_counts_json,
+      file_id=excluded.file_id,
+      job_id=excluded.job_id,
+      result_json=excluded.result_json,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(
+    identity,
+    String(row.airline||"").toUpperCase(),
+    String(row.flight_number||"").toUpperCase(),
+    String(row.flight_date||""),
+    String(row.card_key||""),
+    String(row.list_name||""),
+    Number(row.passenger_count||0),
+    JSON.stringify(card.classCounts||{}),
+    String(row.version_id||""),
+    String(row.file_id||""),
+    String(row.job_id||""),
+    JSON.stringify(card)
+  ).run();
+}
+
+
+function lot3MergeOperationalInfo(existing,row){
+  /*
+   * V50.20 — injection stricte OPERATIONAL_INFO.
+   * Priorité 8 (verrouillage JFE, spec utilisateur) : un JFE SCREEN COPY
+   * n'alimente QUE STD, STA, AIRCRAFT, CONFIG, BOOKED, FLIGHT TIME — jamais
+   * Gate/Boarding/Accepted/Available/Standby/Staff/Registry/ATD/commentaires.
+   * (dep/dest servent uniquement à identifier/créer la fiche vol, pas à
+   * afficher une donnée opérationnelle JFE.)
+   */
+  const result=lot3SafeResultJson(row.result_json);
+  const info=result.operationalInfo||{};
+  const x=existing && typeof existing==="object"?{...existing}:{};
+
+  if(info.date)x.date=info.date;
+  if(info.dep)x.dep=info.dep;
+  if(info.dest)x.dest=info.dest;
+  if(info.std)x.std=info.std;
+  if(info.sta)x.sta=info.sta;
+  if(info.durationMinutes!=null)x.duration=Number(info.durationMinutes); // UI durationText attend des minutes.
+  if(info.duration)x.durationLabel=info.duration;
+  if(info.durationMinutes!=null)x.durationMinutes=info.durationMinutes;
+  if(info.aircraft)x.aircraft=info.aircraft;
+  // REG/GATE restent manuels. Nettoyage uniquement si une ancienne mauvaise injection numérique existe.
+  if(/^\d+$/.test(String(x.reg||"")))x.reg="";
+  if(info.config)x.config={...(x.config||{}),...info.config};
+  // BOOKED (2e paire C/Y de la ligne avion JFE, ex-"capacity" jamais affiché
+  // sous ce nom) : fusion par max class par class, jamais un simple écrasement
+  // — ne doit ni effacer un manifeste MASTER déjà plus complet, ni être
+  // écrasé par un JFE arrivé après coup avec un chiffre plus ancien/petit.
+  if(info.booked){
+    const merged={...(x.booked||{})};
+    for(const [k,v] of Object.entries(info.booked)){
+      const n=Number(v||0);
+      if(n>0)merged[k]=Math.max(Number(merged[k]||0),n);
+    }
+    x.booked=merged;
+  }
+
+  x.imports=x.imports||{};
+  x.imports.operationalInfo={
+    ...(x.imports.operationalInfo||{}),
+    date:info.date||x.date||"",
+    dep:info.dep||x.dep||"",
+    dest:info.dest||x.dest||"",
+    std:info.std||x.std||"",
+    sta:info.sta||x.sta||"",
+    duration:info.duration||x.duration||"",
+    durationMinutes:info.durationMinutes??x.durationMinutes??null,
+    aircraft:info.aircraft||x.aircraft||"",
+    reg:info.reg||x.reg||"",
+    config:info.config||x.config||{},
+    booked:info.booked||x.booked||{},
+    source:{jobId:row.job_id,versionId:row.version_id,fileId:row.file_id},
+    updatedAt:new Date().toISOString(),
+    rules:"OPERATIONAL_INFO strict : STD, STA, AIRCRAFT, CONFIG, BOOKED, FLIGHT TIME uniquement."
+  };
+  x.imports.status="INJECTED";
+  x.imports.lastInjectionAt=new Date().toISOString();
+  x.imports.lastInjectionLot="LOT3_OPERATIONAL_INFO_V50_20";
+  return x;
+}
+
+async function lot3InjectOperationalInfo(env,row,options={}){
+  const identity=lot3IdentityFromRow(row);
+  const existing=await getFlightByIdentity(env,identity);
+  const before=existing?JSON.stringify(existing):null;
+  if(!existing && !options.createMissingFlights){
+    await env.OPS_DB.prepare(`UPDATE import_job_results SET status='WAITING_FLIGHT',updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(String(row.job_id||"")).run();
+    await recordImportChange(env,{scope:"FLIGHT",airline:row.airline,flightNumber:row.flight_number,flightDate:row.flight_date,fileId:row.file_id,versionId:row.version_id,changeType:"OPERATIONAL_INFO_WAITING_FLIGHT",before:null,after:{identity,row}});
+    return {ok:true,identity,airline:row.airline,flightNumber:row.flight_number,flightDate:row.flight_date,cardKey:"OPERATIONAL_INFO",listName:"JFE SCREEN COPY",passengerCount:0,status:"WAITING_FLIGHT"};
+  }
+
+  const afterFlight=lot3MergeOperationalInfo(existing,row);
+  afterFlight.airline=afterFlight.airline||String(row.airline||"").toUpperCase();
+  afterFlight.flight=afterFlight.flight||String(row.flight_number||"").toUpperCase();
+  afterFlight.date=afterFlight.date||String(row.flight_date||"");
+  await upsertFlight(env,afterFlight);
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO flight_import_injections
+      (result_job_id,identity,status,before_json,after_json,created_at,updated_at)
+    VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(result_job_id) DO UPDATE SET
+      identity=excluded.identity,status=excluded.status,before_json=excluded.before_json,after_json=excluded.after_json,updated_at=CURRENT_TIMESTAMP
+  `).bind(String(row.job_id||""),identity,"INJECTED",before,JSON.stringify(afterFlight)).run();
+
+  await env.OPS_DB.prepare(`UPDATE import_job_results SET status='INJECTED',updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(String(row.job_id||"")).run();
+
+  await recordImportChange(env,{scope:"FLIGHT",airline:row.airline,flightNumber:row.flight_number,flightDate:row.flight_date,fileId:row.file_id,versionId:row.version_id,changeType:"OPERATIONAL_INFO_INJECTED",before:before?safeJsonParse(before,{}):null,after:{identity,operationalInfo:lot3SafeResultJson(row.result_json).operationalInfo||{}}});
+
+  return {ok:true,identity,airline:row.airline,flightNumber:row.flight_number,flightDate:row.flight_date,cardKey:"OPERATIONAL_INFO",listName:"JFE SCREEN COPY",passengerCount:0,status:"INJECTED"};
+}
+
+async function lot3InjectOneResult(env,row,options={}){
+  if(String(row.card_key||"")==="OPERATIONAL_INFO" || String(row.document_type||"")==="OPERATIONAL_INFO"){
+    return await lot3InjectOperationalInfo(env,row,options);
+  }
+  const identity=lot3IdentityFromRow(row);
+  let existing=await getFlightByIdentity(env,identity);
+  const before=existing?JSON.stringify(existing):null;
+  const card=lot3BuildImportCard(row);
+
+  /*
+   * Un Generic Report complet porte une identité, une date, une route et un
+   * STD vérifiables. Il peut donc initialiser la fiche réelle avant d'y
+   * injecter sa carte. Un document partiel sans route reste WAITING_FLIGHT.
+   */
+  if(!existing){
+    const info=lot3SafeResultJson(row.result_json).operationalInfo||{};
+    if(info.date && info.dep && info.dest && info.std){
+      existing=lot3MergeOperationalInfo(null,row);
+      existing.airline=String(row.airline||"").toUpperCase();
+      existing.flight=String(row.flight_number||"").toUpperCase();
+      existing.date=String(row.flight_date||info.date||"");
+      await upsertFlight(env,existing);
+    }
+  }
+
+  /*
+   * V50.16 — No stub flight fix.
+   * Ne jamais créer une fiche vol vide depuis un import partiel.
+   * Si le vol n'existe pas encore dans la table flights, on stocke seulement
+   * les cartes importées dans flight_import_cards et on marque WAITING_FLIGHT.
+   * La fiche vol sera enrichie quand le vol réel sera présent.
+   */
+  if(!existing && !options.createMissingFlights){
+    await lot3UpsertFlightCard(env,identity,row,card);
+
+    await env.OPS_DB.prepare(`
+      INSERT INTO flight_import_injections
+        (result_job_id,identity,status,before_json,after_json,created_at,updated_at)
+      VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      ON CONFLICT(result_job_id) DO UPDATE SET
+        identity=excluded.identity,
+        status=excluded.status,
+        before_json=excluded.before_json,
+        after_json=excluded.after_json,
+        updated_at=CURRENT_TIMESTAMP
+    `).bind(String(row.job_id||""),identity,"WAITING_FLIGHT",null,JSON.stringify({identity,card})).run();
+
+    await env.OPS_DB.prepare(`
+      UPDATE import_job_results
+      SET status='WAITING_FLIGHT',
+          updated_at=CURRENT_TIMESTAMP
+      WHERE job_id=?
+    `).bind(String(row.job_id||"")).run();
+
+    await recordImportChange(env,{
+      scope:"FLIGHT",
+      airline:row.airline,
+      flightNumber:row.flight_number,
+      flightDate:row.flight_date,
+      fileId:row.file_id,
+      versionId:row.version_id,
+      changeType:"FLIGHT_CARD_WAITING_FLIGHT",
+      before:null,
+      after:{identity,card}
+    });
+
+    return {
+      ok:true,
+      identity,
+      airline:row.airline,
+      flightNumber:row.flight_number,
+      flightDate:row.flight_date,
+      cardKey:row.card_key,
+      listName:row.list_name,
+      passengerCount:Number(row.passenger_count||0),
+      status:"WAITING_FLIGHT"
+    };
+  }
+
+  const afterFlight=lot3MergeFlightData(existing,row,card);
+
+  await upsertFlight(env,afterFlight);
+  await lot3UpsertFlightCard(env,identity,row,card);
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO flight_import_injections
+      (result_job_id,identity,status,before_json,after_json,created_at,updated_at)
+    VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    ON CONFLICT(result_job_id) DO UPDATE SET
+      identity=excluded.identity,
+      status=excluded.status,
+      before_json=excluded.before_json,
+      after_json=excluded.after_json,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(String(row.job_id||""),identity,"INJECTED",before,JSON.stringify(afterFlight)).run();
+
+  await env.OPS_DB.prepare(`
+    UPDATE import_job_results
+    SET status='INJECTED',
+        updated_at=CURRENT_TIMESTAMP
+    WHERE job_id=?
+  `).bind(String(row.job_id||"")).run();
+
+  await recordImportChange(env,{
+    scope:"FLIGHT",
+    airline:row.airline,
+    flightNumber:row.flight_number,
+    flightDate:row.flight_date,
+    fileId:row.file_id,
+    versionId:row.version_id,
+    changeType:"FLIGHT_CARD_INJECTED",
+    before:before?safeJsonParse(before,{}):null,
+    after:{identity,card}
+  });
+
+  return {
+    ok:true,
+    identity,
+    airline:row.airline,
+    flightNumber:row.flight_number,
+    flightDate:row.flight_date,
+    cardKey:row.card_key,
+    listName:row.list_name,
+    passengerCount:Number(row.passenger_count||0),
+    status:"INJECTED"
+  };
+}
+
+async function lot3InjectNext(env,body){
+  await ensureLot3Tables(env);
+  const limit=Math.max(1,Math.min(50,Number(body?.limit||10)));
+  const airline=String(body?.airline||"").toUpperCase();
+  const flight=String(body?.flight||body?.flightNumber||"").toUpperCase();
+  const date=String(body?.date||body?.flightDate||"");
+
+  const wh=[
+    "status IN ('GENERIC_CARD_READY','GENERIC_MASTER_READY','GENERIC_CARD_OTHER','OPERATIONAL_INFO_READY')",
+    "parser_mode='GENERIC'",
+    "card_key IS NOT NULL",
+    "card_key<>''",
+    "card_key<>'NO_LIST'"
+  ];
+  const binds=[];
+  if(airline){wh.push("airline=?");binds.push(airline)}
+  if(flight){wh.push("flight_number=?");binds.push(flight)}
+  if(date){wh.push("flight_date=?");binds.push(date)}
+  binds.push(limit);
+
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT *
+    FROM import_job_results
+    WHERE ${wh.join(" AND ")}
+    ORDER BY flight_date DESC, updated_at DESC
+    LIMIT ?
+  `).bind(...binds).all();
+
+  const injected=[];
+  const options={createMissingFlights:body?.createMissingFlights===true};
+  for(const row of results){
+    injected.push(await lot3InjectOneResult(env,row,options));
+  }
+
+  return {ok:true,requested:limit,found:results.length,injected};
+}
+
+async function lot3FlightCards(env,url){
+  await ensureLot3Tables(env);
+  const identity=String(url.searchParams.get("identity")||"").trim();
+  const airline=String(url.searchParams.get("airline")||"").toUpperCase();
+  const flight=String(url.searchParams.get("flight")||"").toUpperCase();
+  const date=String(url.searchParams.get("date")||"");
+
+  const wh=[]; const binds=[];
+  if(identity){wh.push("identity=?");binds.push(identity)}
+  if(airline){wh.push("airline=?");binds.push(airline)}
+  if(flight){wh.push("flight_number=?");binds.push(flight)}
+  if(date){wh.push("flight_date=?");binds.push(date)}
+
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT identity,airline,flight_number,flight_date,card_key,list_name,passenger_count,class_counts_json,version_id,file_id,job_id,result_json,updated_at
+    FROM flight_import_cards
+    ${wh.length?`WHERE ${wh.join(" AND ")}`:""}
+    ORDER BY identity,card_key,list_name,updated_at DESC
+    LIMIT 200
+  `).bind(...binds).all();
+
+  return {
+    ok:true,
+    count:results.length,
+    cards:results.map(r=>({
+      ...r,
+      class_counts:safeJsonParse(r.class_counts_json,{}),
+      result:safeJsonParse(r.result_json,{})
+    }))
+  };
+}
+
+
+/* =========================================================
+ * ALYZIA OPS V50.29 — LOT 5 AUTO PILOT
+ * ---------------------------------------------------------
+ * But :
+ * - synchroniser Gmail automatiquement
+ * - traiter les jobs Lot 2
+ * - créer la fiche vol depuis OPERATIONAL_INFO quand disponible
+ * - injecter les cartes génériques Lot 3
+ * - archiver les fichiers sources dans Google Drive
+ * - alimenter PREPA / IMPORT GMAIL sans intervention manuelle
+ *
+ * VERROUILLAGE :
+ * - SQ / TK / BJ / TW restent protégés par les Lots 2/3 existants.
+ * - aucune règle parser spécifique n'est modifiée ici.
+ * - le Cron appelle les mêmes fonctions validées que les routes manuelles.
+ * ========================================================= */
+
+// LOT 5.2 FULL MAILBOX CONTINUOUS — whole Gmail mailbox + newest-first + resumable pagination + non-blocking errors.
+const LOT5_VERSION="V50.30_R3_13_SQ_CONTROLLED_BRIDGE";
+// 5.3.5 scope: pipeline recovery + Gmail body + historical replay + Drive archive + fast summary.
+// Specific parsers remain byte-for-byte untouched.
+// Gmail -> identity -> R2/D1 -> Drive -> existing parser -> flight injection -> exclusive Gmail state.
+// Parsers TK/BJ/SQ/TW are intentionally untouched. VF sortie du groupe verrouillé
+// (voir LOT2_SPECIFIC_AIRLINES) : elle est injectée par ce Worker comme les
+// compagnies GENERIC, plus jamais en attente d'une confirmation BUILD143 qui
+// n'arrive jamais pour ce format.
+const LOT5_PROTECTED_AIRLINES=new Set([]);
+
+async function ensureLot5Tables(env){
+  await ensureLot3Tables(env);
+  await ensurePrepaControlTables(env);
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS lot5_autopilot_runs (
+        run_id TEXT PRIMARY KEY,
+        trigger_type TEXT NOT NULL DEFAULT 'CRON',
+        status TEXT NOT NULL DEFAULT 'RUNNING',
+        gmail_processed INTEGER NOT NULL DEFAULT 0,
+        jobs_processed INTEGER NOT NULL DEFAULT 0,
+        results_injected INTEGER NOT NULL DEFAULT 0,
+        drive_files_uploaded INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        details_json TEXT NOT NULL DEFAULT '{}',
+        started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        finished_at TEXT
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS lot5_drive_folders (
+        identity TEXT PRIMARY KEY,
+        airline TEXT NOT NULL,
+        flight_number TEXT NOT NULL,
+        flight_date TEXT NOT NULL,
+        airline_folder_id TEXT,
+        date_folder_id TEXT,
+        flight_folder_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS lot5_drive_files (
+        version_id TEXT PRIMARY KEY,
+        identity TEXT NOT NULL,
+        drive_file_id TEXT NOT NULL,
+        drive_folder_id TEXT NOT NULL,
+        filename TEXT,
+        uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_lot5_drive_files_identity ON lot5_drive_files(identity,uploaded_at)`)
+  ]);
+}
+
+function lot5Bool(v,def=true){
+  if(v===undefined||v===null||v==='')return def;
+  const x=String(v).trim().toLowerCase();
+  if(["0","false","no","off"].includes(x))return false;
+  if(["1","true","yes","on"].includes(x))return true;
+  return def;
+}
+
+function lot5Config(env){
+  return {
+    enabled:lot5Bool(env.ALYZIA_AUTOPILOT_ENABLED,true),
+
+    // LOT 5.2 FULL MAILBOX :
+    // - aucune fenêtre newer_than
+    // - toute la boîte Gmail, y compris archives / spam / corbeille via in:anywhere
+    // - corps mail + JFE SCREEN COPY + PDF + TXT + EML sont tous collectés
+    gmailQuery:String(env.ALYZIA_AUTOPILOT_GMAIL_QUERY||'in:anywhere').trim()||'in:anywhere',
+    gmailMax:Math.max(1,Math.min(100,Number(env.ALYZIA_AUTOPILOT_GMAIL_MAX||20))),
+    gmailPagesPerRun:Math.max(1,Math.min(3,Number(env.ALYZIA_AUTOPILOT_GMAIL_PAGES_PER_RUN||2))),
+
+    processBatch:Math.max(1,Math.min(50,Number(env.ALYZIA_AUTOPILOT_PROCESS_BATCH||50))),
+    processLoops:Math.max(1,Math.min(4,Number(env.ALYZIA_AUTOPILOT_PROCESS_LOOPS||4))),
+    injectBatch:Math.max(1,Math.min(100,Number(env.ALYZIA_AUTOPILOT_INJECT_BATCH||100))),
+    driveEnabled:lot5Bool(env.ALYZIA_AUTOPILOT_DRIVE_ENABLED,true),
+    // Si ALYZIA_DRIVE_ROOT_FOLDER_ID est fourni, il est considéré comme le dossier PRÉPA cible.
+    // Sinon AUTO PILOT cherche/réutilise automatiquement "PRÉPA" (ou "PREPA") dans Mon Drive.
+    driveRootFolderId:String(env.ALYZIA_DRIVE_ROOT_FOLDER_ID||'root').trim()||'root'
+  };
+}
+
+function lot5DriveEscapeQuery(v){
+  return String(v||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+async function lot5DriveJson(env,path,opts={}){
+  const token=await getGoogleDriveAccessToken(env);
+  const resp=await fetch(`https://www.googleapis.com/drive/v3${path}`,{
+    ...opts,
+    headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(opts.headers||{})}
+  });
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok)throw new Error(data?.error?.message||`GOOGLE DRIVE HTTP ${resp.status}`);
+  return data;
+}
+
+async function lot5FindChildFolder(env,parentId,name){
+  const q=[
+    `'${lot5DriveEscapeQuery(parentId)}' in parents`,
+    `name='${lot5DriveEscapeQuery(name)}'`,
+    `mimeType='application/vnd.google-apps.folder'`,
+    `trashed=false`
+  ].join(' and ');
+  const p=new URLSearchParams({q,fields:'files(id,name)',pageSize:'10',spaces:'drive'});
+  const data=await lot5DriveJson(env,`/files?${p.toString()}`);
+  return data?.files?.[0]||null;
+}
+
+async function lot5EnsureDriveFolder(env,parentId,name){
+  const existing=await lot5FindChildFolder(env,parentId,name);
+  if(existing?.id)return String(existing.id);
+  const data=await lot5DriveJson(env,'/files?fields=id,name',{method:'POST',body:JSON.stringify({
+    name,
+    mimeType:'application/vnd.google-apps.folder',
+    parents:[parentId]
+  })});
+  if(!data?.id)throw new Error(`DRIVE DOSSIER NON CRÉÉ: ${name}`);
+  return String(data.id);
+}
+
+
+function lot5CanonicalFlightDate(value,contextIso=''){
+  const raw=String(value||'').trim().toUpperCase();
+  if(!raw)return '';
+  if(/^20\d{2}-\d{2}-\d{2}$/.test(raw))return raw;
+  const compact=raw.replace(/[\s/_-]+/g,'');
+  if(/^20\d{6}$/.test(compact))return `${compact.slice(0,4)}-${compact.slice(4,6)}-${compact.slice(6,8)}`;
+  const months={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  const withYear=compact.match(/^(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2}|20\d{2})$/);
+  if(withYear){
+    const yy=String(withYear[3]);
+    const yyyy=yy.length===2?`20${yy}`:yy;
+    return `${yyyy}-${months[withYear[2]]}-${String(Number(withYear[1])).padStart(2,'0')}`;
+  }
+  if(/^\d{1,2}(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$/.test(compact)){
+    try{
+      const iso=lot2DateRawToIso(compact,String(contextIso||'').slice(0,10));
+      if(iso)return iso;
+    }catch(e){}
+    const m=compact.match(/^(\d{1,2})([A-Z]{3})$/);
+    if(m){
+      const year=Number(String(contextIso||'').slice(0,4))||new Date().getUTCFullYear();
+      return `${year}-${months[m[2]]}-${String(Number(m[1])).padStart(2,'0')}`;
+    }
+  }
+  return raw;
+}
+
+async function lot5ResolvePrepaRootFolder(env){
+  const cfg=lot5Config(env);
+  // Un ID explicite reste prioritaire : il doit pointer directement vers le dossier PRÉPA voulu.
+  if(cfg.driveRootFolderId && cfg.driveRootFolderId!=='root')return cfg.driveRootFolderId;
+  const root='root';
+  const accented=await lot5FindChildFolder(env,root,'PRÉPA');
+  if(accented?.id)return String(accented.id);
+  const plain=await lot5FindChildFolder(env,root,'PREPA');
+  if(plain?.id)return String(plain.id);
+  return lot5EnsureDriveFolder(env,root,'PRÉPA');
+}
+
+function lot5ConcatBytes(parts){
+  let total=0;
+  for(const p of parts)total+=p.byteLength;
+  const out=new Uint8Array(total);
+  let o=0;
+  for(const p of parts){out.set(p,o);o+=p.byteLength;}
+  return out;
+}
+
+async function lot5UploadR2VersionToDrive(env,row,folderId){
+  const object=await env.OPS_FILES.get(String(row.r2_key||''));
+  if(!object)throw new Error(`R2 INTROUVABLE: ${row.r2_key||row.version_id}`);
+  const ab=await new Response(object.body).arrayBuffer();
+  const bytes=new Uint8Array(ab);
+  const mime=String(row.mime_type||object.httpMetadata?.contentType||'application/octet-stream');
+  const filename=String(row.filename_original||row.filename_normalized||'document').replace(/[\\/:*?"<>|]+/g,'_').trim()||'document';
+  const boundary=`alyzia_${crypto.randomUUID().replace(/-/g,'')}`;
+  const enc=new TextEncoder();
+  const meta=JSON.stringify({name:filename,parents:[folderId]});
+  const pre=enc.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`);
+  const post=enc.encode(`\r\n--${boundary}--`);
+  const body=lot5ConcatBytes([pre,bytes,post]);
+  const token=await getGoogleDriveAccessToken(env);
+  const resp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',headers:{
+    Authorization:`Bearer ${token}`,
+    'Content-Type':`multipart/related; boundary=${boundary}`
+  },body});
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok||!data?.id)throw new Error(data?.error?.message||`DRIVE UPLOAD HTTP ${resp.status}`);
+  return {id:String(data.id),name:String(data.name||filename)};
+}
+
+async function lot5FlightRoute(env,identity){
+  try{
+    const f=await getFlightByIdentity(env,identity);
+    return {dep:String(f?.dep||f?.origin||'').toUpperCase(),dest:String(f?.dest||f?.destination||'').toUpperCase()};
+  }catch(e){return {dep:'',dest:''}}
+}
+
+async function lot5EnsureFlightDriveFolder(env,{airline,flightNumber,flightDate,contextIso=''}){
+  airline=String(airline||'').toUpperCase().trim();
+  flightNumber=String(flightNumber||'').toUpperCase().replace(/\s+/g,'').trim();
+  if(!isValidAirlineCodeV53(airline))throw new Error(`DRIVE CODE COMPAGNIE INVALIDE: ${airline||'VIDE'}`);
+  if(!flightNumber.startsWith(airline) || !/^\d{1,4}[A-Z]?$/.test(flightNumber.slice(airline.length)))throw new Error(`DRIVE NUMÉRO VOL INVALIDE: ${flightNumber||'VIDE'}`);
+  const canonicalDate=lot5CanonicalFlightDate(flightDate,contextIso);
+  if(!canonicalDate||!/^20\d{2}-\d{2}-\d{2}$/.test(canonicalDate))throw new Error('DRIVE DATE VOL MANQUANTE/INVALIDE');
+  const identity=[canonicalDate,airline,flightNumber].join('|');
+  const cached=await env.OPS_DB.prepare(`SELECT * FROM lot5_drive_folders WHERE identity=? LIMIT 1`).bind(identity).first();
+  if(cached?.flight_folder_id)return {identity,flightDate:canonicalDate,airlineFolderId:cached.airline_folder_id,dateFolderId:cached.date_folder_id,flightFolderId:cached.flight_folder_id};
+
+  const prepaRootFolderId=await lot5ResolvePrepaRootFolder(env);
+  const airlineFolderId=await lot5EnsureDriveFolder(env,prepaRootFolderId,airline);
+  const dateFolderId=await lot5EnsureDriveFolder(env,airlineFolderId,canonicalDate);
+  const route=await lot5FlightRoute(env,identity);
+  const flightName=route.dep&&route.dest?`${flightNumber} ${route.dep}-${route.dest}`:flightNumber;
+  const flightFolderId=await lot5EnsureDriveFolder(env,dateFolderId,flightName);
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO lot5_drive_folders(identity,airline,flight_number,flight_date,airline_folder_id,date_folder_id,flight_folder_id,updated_at)
+    VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(identity) DO UPDATE SET airline_folder_id=excluded.airline_folder_id,date_folder_id=excluded.date_folder_id,flight_folder_id=excluded.flight_folder_id,updated_at=CURRENT_TIMESTAMP
+  `).bind(identity,airline,flightNumber,canonicalDate,airlineFolderId,dateFolderId,flightFolderId).run();
+  return {identity,flightDate:canonicalDate,airlineFolderId,dateFolderId,flightFolderId};
+}
+
+function lot5UiStatusFromGmailStateV53(state){
+  const s=String(state||"").toUpperCase();
+  if(s==="VALIDATED")return "VALIDATED";
+  if(s==="INJECTED")return "INJECTED";
+  if(s==="ERROR_IMPORT")return "ERROR_IMPORT";
+  if(s==="ERROR_INJECT")return "ERROR_INJECT";
+  if(s==="ERROR")return "ERROR";
+  if(s==="REVIEW")return "REVIEW";
+  if(s==="DUPLICATE")return "DUPLICATE";
+  if(s==="IMPORTED")return "IMPORTED";
+  if(s==="RECEIVED")return "RECEIVED";
+  return s||"RECEIVED";
+}
+
+async function lot5RepairMessageIdentityV533(env,messageId){
+  const gm=await env.OPS_DB.prepare(`SELECT gmail_message_id,subject,snippet,received_at,internal_date,airline,flight_number,flight_date FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  if(!gm)return null;
+  // Sujet d'abord, puis snippet Gmail. Aucun nom de fichier horodaté ne peut écraser cette identité.
+  const detected=detectMailFlight(String(gm.subject||''),'',String(gm.snippet||''));
+  const airline=String(detected.airline||gm.airline||'').toUpperCase();
+  const flightNumber=String(detected.flightNumber||gm.flight_number||'').toUpperCase().replace(/\s+/g,'');
+  const flightDate=lot5CanonicalFlightDate(detected.flightDate||gm.flight_date||'',gm.received_at||gm.internal_date||'');
+  if(!isValidAirlineCodeV53(airline) || !flightNumber.startsWith(airline) || !/^20\d{2}-\d{2}-\d{2}$/.test(flightDate))return {...gm,airline,flight_number:flightNumber,flight_date:flightDate,identityValid:false};
+
+  // Toujours réparer les 3 tables techniques (jobs/résultats/fichiers), même
+  // quand gmail_messages n'a "rien à changer" : les 4 UPDATE ne sont pas
+  // atomiques, et un Worker interrompu en cours de route (ex. limite de
+  // ressources) peut avoir mis à jour gmail_messages sans jamais atteindre
+  // import_job_results — la comparaison ci-dessus, basée uniquement sur
+  // gmail_messages, ne peut alors plus jamais détecter cet écart résiduel.
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`UPDATE gmail_messages SET airline=?,flight_number=?,flight_date=?,updated_at=CURRENT_TIMESTAMP WHERE gmail_message_id=?`).bind(airline,flightNumber,flightDate,messageId),
+    env.OPS_DB.prepare(`UPDATE import_files SET airline=?,flight_number=?,flight_date=?,updated_at=CURRENT_TIMESTAMP WHERE file_id IN (SELECT DISTINCT file_id FROM import_file_versions WHERE gmail_message_id=?)`).bind(airline,flightNumber,flightDate,messageId),
+    env.OPS_DB.prepare(`UPDATE import_jobs SET airline=?,flight_number=?,flight_date=?,updated_at=CURRENT_TIMESTAMP WHERE gmail_message_id=?`).bind(airline,flightNumber,flightDate,messageId),
+    env.OPS_DB.prepare(`UPDATE import_job_results SET airline=?,flight_number=?,flight_date=?,updated_at=CURRENT_TIMESTAMP WHERE job_id IN (SELECT job_id FROM import_jobs WHERE gmail_message_id=?)`).bind(airline,flightNumber,flightDate,messageId)
+  ]).catch(()=>{});
+  return {...gm,airline,flight_number:flightNumber,flight_date:flightDate,identityValid:true};
+}
+
+async function lot5DriveCoverageForMessageV533(env,messageId){
+  const row=await env.OPS_DB.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(CASE WHEN d.version_id IS NOT NULL THEN 1 ELSE 0 END) AS archived
+    FROM import_file_versions v
+    LEFT JOIN lot5_drive_files d ON d.version_id=v.version_id
+    WHERE v.gmail_message_id=?
+  `).bind(messageId).first();
+  const total=Number(row?.total||0), archived=Number(row?.archived||0);
+  return {total,archived,complete:total>0 && archived>=total};
+}
+
+// Compagnies "verrouillées" : l'extraction tourne encore dans le navigateur
+// (BUILD143), jamais sur le serveur. Sans confirmation navigateur, un mail
+// pouvait rester bloqué en MAIL TRAITÉ/RECEIVED indéfiniment même quand la
+// fiche vol correspondante avait déjà été construite (ex. mail en double,
+// ou navigateur fermé avant la confirmation) — alors qu'une compagnie
+// générique passe en FICHE VOL OK dès que le serveur a réellement injecté.
+// Pour donner la même logique à toutes les compagnies : avant de reboucler
+// sur RECEIVED/REVIEW, on vérifie si la fiche vol existe déjà avec de vrais
+// passagers ; si oui, le mail est considéré VALIDÉ au lieu de rester en
+// attente d'une confirmation qui n'arrivera peut-être jamais pour CE mail
+// précis (un autre mail identique a pu déjà tout construire).
+const LOT5_LOCKED_AIRLINES_V53=new Set([]);
+async function lot5SpecificFlightAlreadyBuilt(env,airline,flightNumber,flightDate){
+  if(!airline||!flightNumber||!flightDate)return false;
+  try{
+    const identity=[String(flightDate).trim(),String(airline).trim().toUpperCase(),String(flightNumber).trim().toUpperCase()].join("|");
+    const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(identity).first();
+    if(!row)return false;
+    const x=JSON.parse(row.data_json||'{}');
+    return Array.isArray(x.passengers)&&x.passengers.length>0;
+  }catch(e){return false}
+}
+
+// Un document déjà réellement injecté (import_job_results.status='INJECTED') ne doit
+// plus être bloqué en RECEIVED par un archivage Drive encore en cours : Drive est une
+// sauvegarde, pas une condition d'existence de la fiche vol.
+async function lot5MessageHasInjectedResultV53(env,messageId){
+  const row=await env.OPS_DB.prepare(`
+    SELECT COUNT(*) AS n FROM import_job_results r
+    JOIN import_jobs j ON j.job_id=r.job_id
+    WHERE j.gmail_message_id=? AND UPPER(r.status)='INJECTED'
+  `).bind(messageId).first().catch(()=>null);
+  return Number(row?.n||0)>0;
+}
+
+async function lot5ReconcileOneGmailStateV53(env,messageId){
+  let gm=await env.OPS_DB.prepare(`SELECT status,airline,flight_number,flight_date,subject,snippet,received_at,internal_date FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  if(!gm)return {messageId,state:"MISSING"};
+  if(String(gm.status||"")==="IGNORED_NON_OPERATIONAL")return {messageId,state:"IGNORED_NON_OPERATIONAL"};
+  gm=await lot5RepairMessageIdentityV533(env,messageId)||gm;
+  const currentState=String(gm.status||"").toUpperCase();
+  const transition=async(state)=>{if(currentState!==state)await setGmailPipelineState(env,messageId,state,{archive:state!=="RECEIVED"}).catch(()=>{})};
+  if(!gm.identityValid && (!gm.airline||!gm.flight_number||!gm.flight_date||!isValidAirlineCodeV53(gm.airline))){
+    if(LOT5_LOCKED_AIRLINES_V53.has(String(gm.airline||'').toUpperCase()) || /\bSQ\s*\d{1,4}\b/i.test(String(gm.subject||''))){
+      await transition("RECEIVED");
+      return {messageId,state:"RECEIVED",pendingIdentity:true};
+    }
+    await transition("REVIEW");
+    return {messageId,state:"REVIEW"};
+  }
+
+  // 5.3.3 : un mail ne peut pas être déclaré IMPORTÉ tant que ses versions distinctes
+  // ne sont pas réellement archivées dans Drive (si Drive est actif et connecté).
+  // Mais si le document a déjà été réellement injecté dans une fiche vol, ce n'est
+  // qu'une sauvegarde en retard, pas une raison de garder le mail en MAIL TRAITÉ :
+  // même logique que pour les compagnies verrouillées (le label doit refléter la
+  // fiche vol réelle, pas un archivage Drive encore en cours).
+  const cfg=lot5Config(env);
+  if(cfg.driveEnabled){
+    const ds=await googleDriveStatus(env).catch(()=>({configured:false}));
+    if(ds?.configured){
+      const cov=await lot5DriveCoverageForMessageV533(env,messageId);
+      if(cov.total>0 && !cov.complete && !(await lot5MessageHasInjectedResultV53(env,messageId))){
+        await transition("RECEIVED");
+        return {messageId,state:"RECEIVED",drivePending:true,driveCoverage:cov};
+      }
+    }
+  }
+  const jobs=(await env.OPS_DB.prepare(`SELECT status,error_message,job_id FROM import_jobs WHERE gmail_message_id=?`).bind(messageId).all()).results||[];
+  if(!jobs.length){
+    const f=await env.OPS_DB.prepare(`SELECT COUNT(*) AS n FROM import_file_versions WHERE gmail_message_id=?`).bind(messageId).first();
+    const state=Number(f?.n||0)>0?"IMPORTED":"REVIEW";
+    await transition(state);
+    return {messageId,state};
+  }
+  if(jobs.some(j=>String(j.status||"").toUpperCase()==="ERROR")){
+    if(LOT5_LOCKED_AIRLINES_V53.has(String(gm.airline||'').toUpperCase())){
+      if(await lot5SpecificFlightAlreadyBuilt(env,gm.airline,gm.flight_number,gm.flight_date)){
+        await transition("VALIDATED");
+        return {messageId,state:"VALIDATED",specificAlreadyBuilt:true};
+      }
+      await transition("RECEIVED");
+      return {messageId,state:"RECEIVED",retryTechnical:true};
+    }
+    await transition("ERROR_IMPORT");
+    return {messageId,state:"ERROR_IMPORT"};
+  }
+  const results=(await env.OPS_DB.prepare(`
+    SELECT r.status,r.parser_mode,r.job_id
+    FROM import_job_results r
+    JOIN import_jobs j ON j.job_id=r.job_id
+    WHERE j.gmail_message_id=?
+  `).bind(messageId).all()).results||[];
+  const jobStatuses=jobs.map(j=>String(j.status||"").toUpperCase());
+  if(jobStatuses.some(x=>x==="QUEUED"||x==="PROCESSING")){
+    await transition("RECEIVED");
+    return {messageId,state:"RECEIVED",parsePending:true};
+  }
+  if(!results.length){
+    if(LOT5_LOCKED_AIRLINES_V53.has(String(gm.airline||'').toUpperCase())){
+      if(await lot5SpecificFlightAlreadyBuilt(env,gm.airline,gm.flight_number,gm.flight_date)){
+        await transition("VALIDATED");
+        return {messageId,state:"VALIDATED",specificAlreadyBuilt:true};
+      }
+      await transition("RECEIVED");
+      return {messageId,state:"RECEIVED",reason:"SQ_RETRY_PARSER_RESULT"};
+    }
+    await transition("REVIEW");
+    return {messageId,state:"REVIEW",reason:"PARSER_DONE_WITHOUT_RESULT"};
+  }
+  const statuses=results.map(r=>String(r.status||"").toUpperCase());
+  const generic=results.filter(r=>String(r.parser_mode||"").toUpperCase()==="GENERIC");
+  const specific=results.filter(r=>String(r.parser_mode||"").toUpperCase()==="SPECIFIC_LOCKED");
+
+  // LOT 5.3.2 — un parser spécifique verrouillé (SQ/TK/BJ/VF/TW) ne doit pas
+  // envoyer le mail en À_REVOIR uniquement parce que la fiche vol n'existe pas encore.
+  // Le document a bien été identifié/importé ; l'injection spécifique reste volontairement
+  // hors de cette correction. À_REVOIR est réservé aux résultats GENERIC réellement bloqués.
+  if(generic.some(r=>String(r.status||"").toUpperCase()==="WAITING_FLIGHT")){
+    // Identité valide + document archivé : WAITING_FLIGHT signifie seulement que la fiche
+    // n'existe pas encore. Ce n'est pas une ambiguïté et ne doit pas produire À_REVOIR.
+    await transition("IMPORTED");
+    return {messageId,state:"IMPORTED",waitingFlight:true};
+  }
+  // R4 — VALIDATION CANONIQUE : un mail est VALIDÉ lorsque tous ses résultats techniques
+  // (GENERIC et/ou SPECIFIC_LOCKED) sont réellement INJECTED. Le Worker ne parse pas les
+  // formats protégés lui-même : specific-browser-complete ne passe un résultat à INJECTED
+  // qu'après confirmation de la persistance de la fiche vol par BUILD143+.
+  const allInjected=results.length>0 && results.every(r=>String(r.status||"").toUpperCase()==="INJECTED");
+  if(allInjected){
+    await transition("VALIDATED");
+    return {messageId,state:"VALIDATED",genericResults:generic.length,specificResults:specific.length};
+  }
+  if(results.some(r=>String(r.status||"").toUpperCase()==="INJECTED")){
+    await transition("INJECTED");
+    return {messageId,state:"INJECTED",partial:true,genericResults:generic.length,specificResults:specific.length};
+  }
+  // Un résultat spécifique non confirmé par le navigateur (specific-browser-complete)
+  // reste IMPORTÉ par défaut — mais si la fiche vol a par ailleurs déjà été construite
+  // avec de vrais passagers (ex. un mail en double déjà traité par un autre message),
+  // ce n'est pas une validation artificielle : c'est le même signal que la confirmation
+  // navigateur aurait produit, juste constaté a posteriori.
+  if(specific.length>0 && LOT5_LOCKED_AIRLINES_V53.has(String(gm.airline||'').toUpperCase())){
+    if(await lot5SpecificFlightAlreadyBuilt(env,gm.airline,gm.flight_number,gm.flight_date)){
+      await transition("VALIDATED");
+      return {messageId,state:"VALIDATED",specificAlreadyBuilt:true};
+    }
+  }
+  await transition("IMPORTED");
+  return {messageId,state:"IMPORTED",specificPending:specific.length>0};
+}
+
+async function lot5ReconcileGmailStatesV53(env,limit=200){
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id FROM gmail_messages
+    WHERE status<>'IGNORED_NON_OPERATIONAL'
+    ORDER BY updated_at ASC LIMIT ?
+  `).bind(Math.max(1,Math.min(2000,Number(limit||500)))).all()).results||[];
+  const counts={}; const errors=[];
+  for(const r of rows){
+    const id=String(r.gmail_message_id||""); if(!id)continue;
+    try{const x=await lot5ReconcileOneGmailStateV53(env,id);counts[x.state]=(counts[x.state]||0)+1}
+    catch(e){errors.push({messageId:id,error:String(e?.message||e)})}
+    // Faire tourner le backlog : les lignes déjà stables ne doivent pas
+    // monopoliser les mêmes places à chaque cycle borné.
+    await env.OPS_DB.prepare(`UPDATE gmail_messages SET updated_at=CURRENT_TIMESTAMP WHERE gmail_message_id=?`).bind(id).run().catch(()=>{});
+  }
+  return {ok:errors.length===0,checked:rows.length,counts,errors};
+}
+
+async function lot5PrepaStatusForMessage(env,messageId){
+  const gm=await env.OPS_DB.prepare(`SELECT status FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  const state=lot5UiStatusFromGmailStateV53(gm?.status||"");
+  if(state==="ERROR_IMPORT"){
+    const er=await env.OPS_DB.prepare(`SELECT error_message FROM import_jobs WHERE gmail_message_id=? AND status='ERROR' ORDER BY updated_at DESC LIMIT 1`).bind(messageId).first();
+    return {status:"ERROR_IMPORT",error:String(er?.error_message||"ERREUR IMPORT")};
+  }
+  if(state==="ERROR_INJECT")return {status:"ERROR_INJECT",error:"ERREUR INJECTION"};
+  if(state==="REVIEW")return {status:"REVIEW",error:"IDENTITÉ OU INJECTION À REVOIR"};
+  return {status:state||"RECEIVED",error:""};
+}
+
+async function lot5SyncPrepaInboxForMessage(env,messageId,driveFolderId=''){
+  const gm=await env.OPS_DB.prepare(`SELECT * FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  if(!gm||!gm.airline||!gm.flight_number||!gm.flight_date)return;
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT v.version_id,v.filename_original,v.mime_type,v.file_size,d.drive_file_id
+    FROM import_file_versions v
+    LEFT JOIN lot5_drive_files d ON d.version_id=v.version_id
+    WHERE v.gmail_message_id=?
+    ORDER BY v.created_at DESC
+  `).bind(messageId).all();
+  const attachments=results.map(r=>({
+    name:String(r.filename_original||''),
+    mimeType:String(r.mime_type||''),
+    size:Number(r.file_size||0),
+    driveId:String(r.drive_file_id||'')
+  }));
+  await savePrepaInbox(env,{
+    gmailMessageId:String(gm.gmail_message_id||''),
+    gmailThreadId:String(gm.gmail_thread_id||''),
+    source:'GMAIL_AUTOPILOT',
+    detectionStatus:'IDENTIFIED',
+    airline:String(gm.airline||'').toUpperCase(),
+    flightNumber:String(gm.flight_number||'').toUpperCase(),
+    flightDate:lot5CanonicalFlightDate(gm.flight_date,gm.received_at||gm.internal_date||''),
+    subject:String(gm.subject||''),
+    sender:String(gm.sender||''),
+    receivedAt:String(gm.received_at||''),
+    bodyText:String(gm.body_text||''),
+    driveFolderId:String(driveFolderId||''),
+    driveEmailPdfId:'',
+    attachments
+  });
+
+  // LOT 5.1 — le backend AUTO PILOT est désormais le propriétaire du traitement.
+  // Ne jamais laisser une ligne GMAIL_AUTOPILOT en PENDING : l'ancien moteur
+  // navigateur V50.04 essaierait de la retraiter sans payload et générerait
+  // "SOURCES PREPA DU GROUPE VIDES". On garde la ligne visible dans IMPORT GMAIL
+  // avec le statut réel du pipeline backend.
+  const ps=await lot5PrepaStatusForMessage(env,messageId);
+  await env.OPS_DB.prepare(`
+    UPDATE prepa_inbox
+    SET status=?,
+        error_message=?,
+        processed_at=CASE WHEN ? IN ('IMPORTED','INJECTED','VALIDATED','DUPLICATE','ERROR_IMPORT','ERROR_INJECT','REVIEW') THEN COALESCE(processed_at,CURRENT_TIMESTAMP) ELSE processed_at END,
+        updated_at=CURRENT_TIMESTAMP
+    WHERE gmail_message_id=? AND source='GMAIL_AUTOPILOT'
+  `).bind(ps.status,ps.error,ps.status,messageId).run();
+}
+
+
+async function lot5RepairIdentityBacklogV534(env,limit=1000){
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id FROM gmail_messages
+    WHERE status<>'IGNORED_NON_OPERATIONAL'
+    ORDER BY updated_at ASC
+    LIMIT ?
+  `).bind(Math.max(1,Math.min(2000,Number(limit||1000)))).all()).results||[];
+  let checked=0,repaired=0,valid=0,invalid=0; const errors=[];
+  for(const row of rows){
+    const id=String(row.gmail_message_id||''); if(!id)continue;
+    checked++;
+    try{
+      const before=await env.OPS_DB.prepare(`SELECT airline,flight_number,flight_date FROM gmail_messages WHERE gmail_message_id=?`).bind(id).first();
+      const after=await lot5RepairMessageIdentityV533(env,id);
+      if(after?.identityValid)valid++; else invalid++;
+      if(after && (String(before?.airline||'')!==String(after.airline||'') || String(before?.flight_number||'')!==String(after.flight_number||'') || String(before?.flight_date||'')!==String(after.flight_date||''))) repaired++;
+    }catch(e){errors.push({messageId:id,error:String(e?.message||e)})}
+  }
+  return {ok:errors.length===0,checked,repaired,valid,invalid,errors};
+}
+
+async function lot5StopRequestedV534(env){
+  const row=await getIntegrationJson(env,'lot5_autopilot_stop_requested').catch(()=>null);
+  return !!row?.requested;
+}
+async function lot5CheckpointV534(env,stage){
+  if(await lot5StopRequestedV534(env)){
+    const e=new Error(`AUTO PILOT ARRÊT DEMANDÉ @ ${stage}`); e.code='STOP_REQUESTED'; throw e;
+  }
+}
+
+async function lot5AuditMessageV534(env,messageId){
+  const gm=await env.OPS_DB.prepare(`SELECT * FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  if(!gm)return {messageId,found:false};
+  const versions=(await env.OPS_DB.prepare(`
+    SELECT v.version_id,v.filename_original,v.mime_type,v.file_size,v.sha256,v.r2_key,
+           d.drive_file_id,d.drive_folder_id,d.filename AS drive_filename
+    FROM import_file_versions v
+    LEFT JOIN lot5_drive_files d ON d.version_id=v.version_id
+    WHERE v.gmail_message_id=? ORDER BY v.created_at ASC
+  `).bind(messageId).all()).results||[];
+  const jobs=(await env.OPS_DB.prepare(`SELECT job_id,status,job_type,file_id,version_id,error_message FROM import_jobs WHERE gmail_message_id=? ORDER BY created_at ASC`).bind(messageId).all()).results||[];
+  const results=(await env.OPS_DB.prepare(`
+    SELECT r.job_id,r.status,r.parser_mode,r.card_key,r.list_name,r.airline,r.flight_number,r.flight_date
+    FROM import_job_results r JOIN import_jobs j ON j.job_id=r.job_id
+    WHERE j.gmail_message_id=? ORDER BY r.updated_at ASC
+  `).bind(messageId).all()).results||[];
+  const prepa=await env.OPS_DB.prepare(`SELECT status,error_message,airline,flight_number,flight_date,drive_folder_id FROM prepa_inbox WHERE gmail_message_id=? ORDER BY updated_at DESC LIMIT 1`).bind(messageId).first().catch(()=>null);
+  const identityValid=isValidAirlineCodeV53(gm.airline) && String(gm.flight_number||'').toUpperCase().startsWith(String(gm.airline||'').toUpperCase()) && /^20\d{2}-\d{2}-\d{2}$/.test(lot5CanonicalFlightDate(gm.flight_date,gm.received_at||gm.internal_date||''));
+  let flight=null;
+  if(identityValid){
+    const identity=[lot5CanonicalFlightDate(gm.flight_date,gm.received_at||gm.internal_date||''),String(gm.airline||'').toUpperCase(),String(gm.flight_number||'').toUpperCase()].join('|');
+    flight=await getFlightByIdentity(env,identity).catch(()=>null);
+  }
+  const driveArchived=versions.filter(v=>v.drive_file_id).length;
+  return {
+    messageId,found:true,subject:String(gm.subject||''),status:String(gm.status||''),
+    identity:{airline:String(gm.airline||''),flightNumber:String(gm.flight_number||''),flightDate:String(gm.flight_date||''),valid:identityValid},
+    acquisition:{versions:versions.length,r2Stored:versions.filter(v=>v.r2_key).length},
+    drive:{archived:driveArchived,total:versions.length,complete:versions.length>0&&driveArchived===versions.length,folderId:String(prepa?.drive_folder_id||'')},
+    parser:{jobsTotal:jobs.length,jobsDone:jobs.filter(j=>String(j.status||'').toUpperCase()==='DONE').length,jobsError:jobs.filter(j=>String(j.status||'').toUpperCase()==='ERROR').length,resultsTotal:results.length,modes:[...new Set(results.map(r=>String(r.parser_mode||'')))].filter(Boolean)},
+    injection:{resultsInjected:results.filter(r=>String(r.status||'').toUpperCase()==='INJECTED').length,waitingFlight:results.filter(r=>String(r.status||'').toUpperCase()==='WAITING_FLIGHT').length,flightExists:!!flight},
+    prepa:prepa||null,
+    versions,jobs,results
+  };
+}
+
+// Diagnostic en lecture seule : rejoue le moteur GENERIC (déjà utilisé par
+// MS/OZ/WB/...) sur un document déjà stocké d'une compagnie verrouillée
+// (SQ/TK/BJ/TW), sans jamais écrire ni changer le statut réel du mail.
+// Objectif : vérifier si le format est compatible avant toute migration.
+async function lot5SpecificGenericPreviewV1(env,messageId,airlineHint=''){
+  const gm=await env.OPS_DB.prepare(`SELECT airline FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  const airline=String(airlineHint||gm?.airline||'').trim().toUpperCase();
+  if(!airline)return {ok:false,error:'MESSAGE INTROUVABLE OU COMPAGNIE INCONNUE'};
+  let versions=(await env.OPS_DB.prepare(`
+    SELECT version_id,filename_original,filename_normalized,mime_type,r2_key
+    FROM import_file_versions WHERE gmail_message_id=? ORDER BY created_at ASC
+  `).bind(messageId).all()).results||[];
+  // Les mails identiques (ex. 5 renvois du même PDF) ne gardent le lien direct
+  // que sur le premier ; les suivants ne référencent le fichier réel que via
+  // gmail_message_documents (dédoublonnage par SHA).
+  if(!versions.length){
+    versions=(await env.OPS_DB.prepare(`
+      SELECT v.version_id,v.filename_original,v.filename_normalized,v.mime_type,v.r2_key
+      FROM gmail_message_documents d
+      JOIN import_file_versions v ON v.version_id=d.version_id
+      WHERE d.gmail_message_id=? ORDER BY d.created_at ASC
+    `).bind(messageId).all()).results||[];
+  }
+  if(!versions.length)return {ok:false,error:'AUCUN DOCUMENT POUR CE MESSAGE (ni direct ni via gmail_message_documents)'};
+  const docs=[];
+  for(const v of versions){
+    const filename=v.filename_original||v.filename_normalized||'file';
+    try{
+      if(!env.OPS_FILES){docs.push({filename,error:'BINDING R2 OPS_FILES ABSENT'});continue}
+      const object=await env.OPS_FILES.get(v.r2_key);
+      if(!object){docs.push({filename,error:'FICHIER R2 INTROUVABLE'});continue}
+      const mime=v.mime_type||'application/octet-stream';
+      const extracted=await lot2ExtractTextFromR2Object(object,filename,mime);
+      if(!extracted?.readable){docs.push({filename,readable:false});continue}
+      // Reproduit la chaîne de détection réelle de lot2ProcessOneJob (iPort/VF/TW
+      // avant repli sur le moteur GENERIC Altea), pour que ce diagnostic teste
+      // exactement ce que le pipeline ferait vraiment une fois la compagnie
+      // sortie du verrouillage.
+      const twKind=TW_CONTENT_AIRLINES.has(airline)?lot2TwContentDetect(extracted.text):"";
+      const tkKind=(!twKind && TK_ALLPAX_AIRLINES.has(airline))?lot2TkContentDetect(extracted.text):"";
+      const iportKind=(!twKind && !tkKind && IPORT_AIRLINES.has(airline))?lot2IportListKindFromBody(extracted.text):"";
+      const vfKind=(!twKind && !tkKind && !iportKind && (airline==="VF"||airline==="BJ"))?lot2VfListKindFromText(extracted.text):"";
+      const juKind=(!twKind && !tkKind && !iportKind && !vfKind && JU_AIRLINES.has(airline))?lot2JuListKindFromText(extracted.text):"";
+      let listName,cardKey,mappingScope,items,count,classCounts;
+      if(twKind){
+        listName="TW CONTENT";cardKey="MASTER";mappingScope="TW_CONTENT";
+        items=lot2TwExtractPassengerItems(extracted.text);
+        count=items.length;classCounts=lot2TwClassCounts(items);
+      }else if(tkKind){
+        listName="TK ALL PAX";cardKey="MASTER";mappingScope="TK_ALLPAX";
+        items=lot2TkExtractPassengerItems(extracted.text);
+        count=items.length;classCounts=lot2TkClassCounts(items);
+      }else if(iportKind){
+        listName=IPORT_LIST_LABELS[iportKind]||iportKind;cardKey=IPORT_LIST_CARD_KEYS[iportKind]||"OTHER";mappingScope="IPORT";
+        items=lot2IportExtractPassengerItems(extracted.text,iportKind);
+        count=items.length;classCounts=lot2IportClassCounts(items);
+      }else if(vfKind){
+        listName=VF_LIST_LABELS[vfKind]||vfKind;
+        cardKey=VF_LIST_CARD_KEYS[vfKind]||"OTHER";
+        mappingScope="VF";
+        items=lot2VfExtractPassengerItems(extracted.text,vfKind);
+        count=items.length;classCounts=lot2VfClassCounts(items);
+      }else if(juKind){
+        listName=JU_LIST_LABELS[juKind]||juKind;cardKey="JU_MIXED";mappingScope="JU";
+        items=lot2JuExtractPassengerItems(extracted.text);
+        count=items.length;classCounts={};
+      }else{
+        listName=lot2DetectListName(extracted.text,filename);
+        const mapping=lot2LookupListMapping(airline,listName,extracted.text);
+        cardKey=mapping.cardKey;mappingScope=mapping.mappingScope;
+        items=lot2ExtractPassengerItemsFromGenericList(extracted.text,listName,cardKey,airline);
+        count=lot2ExtractPassengerCount(extracted.text,listName,cardKey);
+        classCounts=lot2ExtractClassCountsForDocument(extracted.text,listName,cardKey);
+      }
+      docs.push({
+        filename,readable:true,listName,cardKey,mappingScope,
+        passengerCountDetected:count,itemsExtracted:items.length,classCounts,
+        sampleItems:items.slice(0,3),
+        textPreview:String(extracted.text||'').slice(0,3000)
+      });
+    }catch(e){docs.push({filename,error:String(e?.message||e)})}
+  }
+  return {ok:true,messageId,airline,documents:docs};
+}
+
+// Diagnostic en lecture seule : simule la fusion lot3MergeFlightData de TOUS
+// les documents d'un même mail (souvent plusieurs listes pour un même vol)
+// comme le ferait le pipeline GENERIC réel, sans jamais écrire en base.
+// Objectif : vérifier qu'une liste secondaire (ex. CC-Y filtrée) ne duplique
+// ni n'écrase les passagers déjà posés par la liste MASTER (PDF-VBCPLIST).
+async function lot5SpecificMergePreviewV1(env,messageId,airlineHint=''){
+  const gm=await env.OPS_DB.prepare(`SELECT airline FROM gmail_messages WHERE gmail_message_id=? LIMIT 1`).bind(messageId).first();
+  const airline=String(airlineHint||gm?.airline||'').trim().toUpperCase();
+  if(!airline)return {ok:false,error:'MESSAGE INTROUVABLE OU COMPAGNIE INCONNUE'};
+  let versions=(await env.OPS_DB.prepare(`
+    SELECT version_id,filename_original,filename_normalized,mime_type,r2_key
+    FROM import_file_versions WHERE gmail_message_id=? ORDER BY created_at ASC
+  `).bind(messageId).all()).results||[];
+  if(!versions.length){
+    versions=(await env.OPS_DB.prepare(`
+      SELECT v.version_id,v.filename_original,v.filename_normalized,v.mime_type,v.r2_key
+      FROM gmail_message_documents d
+      JOIN import_file_versions v ON v.version_id=d.version_id
+      WHERE d.gmail_message_id=? ORDER BY d.created_at ASC
+    `).bind(messageId).all()).results||[];
+  }
+  if(!versions.length)return {ok:false,error:'AUCUN DOCUMENT POUR CE MESSAGE'};
+
+  const parsed=[];
+  for(const v of versions){
+    const filename=v.filename_original||v.filename_normalized||'file';
+    try{
+      if(!env.OPS_FILES)continue;
+      const object=await env.OPS_FILES.get(v.r2_key);
+      if(!object)continue;
+      const mime=v.mime_type||'application/octet-stream';
+      const extracted=await lot2ExtractTextFromR2Object(object,filename,mime);
+      if(!extracted?.readable)continue;
+      const listName=lot2DetectListName(extracted.text,filename);
+      const mapping=lot2LookupListMapping(airline,listName,extracted.text);
+      const items=lot2ExtractPassengerItemsFromGenericList(extracted.text,listName,mapping.cardKey,airline);
+      const count=lot2ExtractPassengerCount(extracted.text,listName,mapping.cardKey);
+      const classCounts=lot2ExtractClassCountsForDocument(extracted.text,listName,mapping.cardKey);
+      parsed.push({filename,listName,cardKey:mapping.cardKey,items,passengerCount:count,classCounts});
+    }catch(e){/* document ignoré pour ce test, non bloquant */}
+  }
+
+  const row={airline,flight_number:'',flight_date:''};
+  let base={};
+  const steps=[];
+  // MASTER en premier, pour reproduire l'ordre le plus favorable (la liste
+  // complète pose les passagers avant que les cartes secondaires ne les complètent).
+  const ordered=[...parsed].sort((a,b)=>(a.cardKey==='MASTER'?-1:0)-(b.cardKey==='MASTER'?-1:0));
+  for(const doc of ordered){
+    base=lot3MergeFlightData(base,row,{
+      cardKey:doc.cardKey,label:doc.listName,passengerItems:doc.items,passengers:doc.items,
+      passengerCount:doc.passengerCount,listName:doc.listName,connectionRows:[],classCounts:doc.classCounts
+    });
+    steps.push({listName:doc.listName,cardKey:doc.cardKey,itemsExtracted:doc.items.length,passengersAfter:Array.isArray(base.passengers)?base.passengers.length:0});
+  }
+  return {ok:true,messageId,airline,steps,finalPassengerCount:Array.isArray(base.passengers)?base.passengers.length:0,common:base.common||{},booked:base.booked||{},samplePassengers:(base.passengers||[]).slice(0,3)};
+}
+
+// Résumé léger d'une fiche vol réelle (jamais le dump complet des passagers,
+// qui contient des données personnelles) : juste de quoi vérifier après coup
+// qu'une migration (ex. sortie du verrouillage) a bien peuplé la fiche.
+async function lot5FlightSummaryV1(env,identity){
+  const flight=await getFlightByIdentity(env,identity);
+  if(!flight)return {ok:false,error:'VOL INTROUVABLE',identity};
+  const passengers=Array.isArray(flight.passengers)?flight.passengers:[];
+  const cards=flight.imports?.cards&&typeof flight.imports.cards==='object'?flight.imports.cards:{};
+  const cardsSummary={};
+  for(const [k,v] of Object.entries(cards))cardsSummary[k]={passengerCount:Number(v?.passengerCount||0),listName:v?.label||v?.listName||'',updatedAt:v?.serverUpdatedAt||''};
+  return {
+    ok:true,identity,airline:flight.airline,flight:flight.flight,date:flight.date,
+    passengerCount:passengers.length,common:flight.common||{},booked:flight.booked||{},
+    cards:cardsSummary,samplePassengers:passengers.slice(0,3).map(p=>({name:p?.name,seat:p?.seat,class:p?.class}))
+  };
+}
+
+// Survol en lecture seule : scanne plusieurs mails d'une compagnie verrouillée
+// et regroupe par type de liste détecté (listName), pour construire le futur
+// mapping GENERIC (comme OZ/WB) sans avoir à cliquer message par message.
+// Plafonné : lot2ExtractPdfTextFromBytes est coûteux en CPU sur beaucoup de PDF.
+/*
+ * Relevé en LECTURE SEULE directement dans la boîte Gmail (aucun appel à
+ * storeGmailMessage/cleanStoreDocumentV3, donc aucune écriture D1/R2, aucune
+ * modification de libellé) : liste les messages correspondant à la requête,
+ * résout leur identité (même cascade que le pipeline réel : sujet/corps,
+ * puis sonde SQ, puis sonde BJ/VF), extrait chaque pièce jointe et classe
+ * chaque document (même cascade que lot5SpecificGenericPreviewV1 : TW/TK/
+ * IPORT/VF/JU puis repli générique), et regroupe le tout par compagnie puis
+ * par nom de liste. Demande explicite : vérifier par compagnie les cartes
+ * produites par les parsers, sans lancer la moindre resynchronisation.
+ */
+async function lot5DryRawMessageDumpV1(env,{query='in:anywhere',maxMessages=20}={}){
+  const q=String(query||'in:anywhere').trim()||'in:anywhere';
+  const n=Math.max(1,Math.min(50,Number(maxMessages||20)));
+  const list=await gmailFetch(env,`/messages?${new URLSearchParams({q,maxResults:String(n)}).toString()}`);
+  const messages=list.messages||[];
+  const out=[];
+  for(const m of messages){
+    const messageId=String(m?.id||'');
+    if(!messageId)continue;
+    try{
+      const message=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}?format=full`);
+      const subject=extractHeader(message,"Subject");
+      const from=extractHeader(message,"From");
+      const date=extractHeader(message,"Date");
+      const bodyText=await extractPlainBodyFullV1(env,message);
+      const parts=walkParts(message.payload,[]);
+      const attachmentNames=(parts||[]).filter(p=>p?.body?.attachmentId).map(p=>String(p.filename||'(sans nom)'));
+      const detected=detectMailFlight(subject,"",bodyText);
+      out.push({
+        messageId,subject,from,date,
+        bodyTextLength:bodyText.length,
+        bodyTextPreview:bodyText.slice(0,1500),
+        attachmentNames,
+        detected
+      });
+    }catch(e){
+      out.push({messageId,error:String(e?.message||e)});
+    }
+  }
+  return {messagesFound:messages.length,results:out};
+}
+
+async function lot5DryGmailListSurveyV1(env,{query='in:anywhere',maxMessages=40,airlineFilter=''}={}){
+  const q=String(query||'in:anywhere').trim()||'in:anywhere';
+  const n=Math.max(1,Math.min(100,Number(maxMessages||40)));
+  const filterAirline=String(airlineFilter||'').trim().toUpperCase();
+
+  const list=await gmailFetch(env,`/messages?${new URLSearchParams({q,maxResults:String(n)}).toString()}`);
+  const messages=list.messages||[];
+  const byAirline={};
+  const errors=[];
+  let messagesChecked=0,documentsSeen=0;
+
+  for(const m of messages){
+    const messageId=String(m?.id||'');
+    if(!messageId)continue;
+    try{
+      const message=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}?format=full`);
+      const subject=extractHeader(message,"Subject");
+      const bodyText=await extractPlainBodyFullV1(env,message);
+      const parts=walkParts(message.payload,[]);
+      const attachmentCache=new Map();
+
+      let flightBase=detectMailFlight(subject,"",bodyText);
+      if(!(flightBase.airline&&flightBase.flightNumber&&flightBase.flightDate)){
+        const probed=await cleanProbeAttachmentIdentitySQV3(env,messageId,subject,bodyText,parts,attachmentCache);
+        if(probed?.airline==='SQ')flightBase=probed;
+      }
+      const r224PdfCandidate=r224IsPdfPrefixCandidate(subject,parts);
+      if(r224PdfCandidate && !(flightBase.airline&&flightBase.flightNumber&&flightBase.flightDate)){
+        const r224Probe=await r224ProbeBjVfIdentityFromAttachments(env,messageId,subject,parts,attachmentCache);
+        if(r224Probe?.identity){
+          flightBase={...flightBase,airline:r224Probe.identity.airline,flightNumber:r224Probe.identity.flightNumber,flightDate:r224Probe.identity.flightDate};
+        }
+      }
+      messagesChecked++;
+      const airline=String(flightBase.airline||'').toUpperCase();
+      if(!airline)continue;
+      if(filterAirline && airline!==filterAirline)continue;
+
+      for(const part of parts){
+        const attachmentId=String(part.body?.attachmentId||"");
+        if(!attachmentId)continue;
+        try{
+          const filename=String(part.filename||"attachment");
+          const mime=String(part.mimeType||"application/octet-stream").toLowerCase();
+          let bytes=attachmentCache.get(attachmentId);
+          if(!bytes){
+            const att=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
+            bytes=b64urlToBytes(att.data||"");attachmentCache.set(attachmentId,bytes);
+          }
+          let text='';
+          if(/\.pdf$/i.test(filename)||mime.includes('pdf')){
+            const ex=await lot2ExtractPdfTextFromBytes(bytes).catch(()=>({text:''}));
+            text=String(ex?.text||'');
+          }else if(/\.eml$/i.test(filename)||mime==='message/rfc822'){
+            const raw=new TextDecoder().decode(bytes);
+            const parsed=cleanParseEmlRecursiveV3(raw);
+            text=raw.slice(0,20000)+'\n'+(parsed.textBodies||[]).join('\n');
+          }else if(mime.startsWith('text/')||/\.(txt|csv|html?)$/i.test(filename)){
+            text=new TextDecoder().decode(bytes);
+          }else{
+            continue;
+          }
+          if(!text.trim())continue;
+          documentsSeen++;
+
+          const twKind=TW_CONTENT_AIRLINES.has(airline)?lot2TwContentDetect(text):"";
+          const tkKind=(!twKind && TK_ALLPAX_AIRLINES.has(airline))?lot2TkContentDetect(text):"";
+          const iportKind=(!twKind && !tkKind && IPORT_AIRLINES.has(airline))?lot2IportListKindFromBody(text):"";
+          const vfKind=(!twKind && !tkKind && !iportKind && (airline==="VF"||airline==="BJ"))?lot2VfListKindFromText(text):"";
+          const juKind=(!twKind && !tkKind && !iportKind && !vfKind && JU_AIRLINES.has(airline))?lot2JuListKindFromText(text):"";
+          let listName,cardKey,mappingScope,count;
+          if(twKind){listName="TW CONTENT";cardKey="MASTER";mappingScope="TW_CONTENT";count=lot2TwExtractPassengerItems(text).length;}
+          else if(tkKind){listName="TK ALL PAX";cardKey="MASTER";mappingScope="TK_ALLPAX";count=lot2TkExtractPassengerItems(text).length;}
+          else if(iportKind){listName=IPORT_LIST_LABELS[iportKind]||iportKind;cardKey=IPORT_LIST_CARD_KEYS[iportKind]||"OTHER";mappingScope="IPORT";count=lot2IportExtractPassengerItems(text,iportKind).length;}
+          else if(vfKind){listName=VF_LIST_LABELS[vfKind]||vfKind;cardKey=VF_LIST_CARD_KEYS[vfKind]||"OTHER";mappingScope="VF";count=lot2VfExtractPassengerItems(text,vfKind).length;}
+          else if(juKind){listName=JU_LIST_LABELS[juKind]||juKind;cardKey="JU_MIXED";mappingScope="JU";count=lot2JuExtractPassengerItems(text).items.length;}
+          else{
+            listName=lot2DetectListName(text,filename);
+            const mapping=lot2LookupListMapping(airline,listName,text);
+            cardKey=mapping.cardKey;mappingScope=mapping.mappingScope;
+            count=lot2ExtractPassengerCount(text,listName,cardKey);
+          }
+
+          byAirline[airline]=byAirline[airline]||{};
+          const key=String(listName||'(SANS EN-TÊTE)');
+          // Avec un filtre compagnie explicite, le volume est déjà borné par
+          // construction : on capture alors l'aperçu texte pour TOUTE carte
+          // (pas seulement OTHER/NO_LIST/FQTV), utile pour vérifier un format
+          // réel précis (ex. passager "through" multi-tronçon) sans devoir
+          // redéployer un aperçu dédié à chaque nouvelle investigation.
+          const wantPreview=filterAirline?true:(cardKey==='OTHER'||cardKey==='NO_LIST'||cardKey==='FQTV');
+          const bucket=byAirline[airline][key]||(byAirline[airline][key]={listName:key,cardKey,mappingScope,occurrences:0,sampleSubject:subject,samplePassengerCount:count,textPreview:wantPreview?text.slice(0,8000):undefined});
+          bucket.occurrences++;
+        }catch(e){errors.push({messageId,filename:part?.filename||'',error:String(e?.message||e)})}
+      }
+    }catch(e){errors.push({messageId,error:String(e?.message||e)})}
+  }
+
+  const companies=Object.entries(byAirline).map(([airline,lists])=>({
+    airline,
+    lists:Object.values(lists).sort((a,b)=>b.occurrences-a.occurrences)
+  })).sort((a,b)=>a.airline.localeCompare(b.airline));
+
+  return {ok:true,query:q,messagesFound:messages.length,messagesChecked,documentsSeen,companies,errors};
+}
+
+async function lot5SpecificListSurveyV1(env,airline,limit=30){
+  const a=String(airline||'').trim().toUpperCase();
+  if(!a)return {ok:false,error:'AIRLINE REQUISE'};
+  const n=Math.max(1,Math.min(60,Number(limit||30)));
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id FROM gmail_messages
+    WHERE UPPER(airline)=? AND status<>'IGNORED_NON_OPERATIONAL'
+    ORDER BY updated_at DESC LIMIT ?
+  `).bind(a,n).all()).results||[];
+  const byList={};
+  const errors=[];
+  let checked=0,documentsSeen=0;
+  for(const row of rows){
+    const messageId=String(row.gmail_message_id||'');
+    try{
+      const r=await lot5SpecificGenericPreviewV1(env,messageId,a);
+      checked++;
+      if(!r.ok)continue;
+      for(const doc of r.documents||[]){
+        documentsSeen++;
+        if(!doc.readable)continue;
+        const key=String(doc.listName||'(SANS EN-TÊTE)');
+        if(!byList[key]){
+          byList[key]={listName:key,cardKey:doc.cardKey,mappingScope:doc.mappingScope,occurrences:0,sampleMessageId:messageId,samplePassengerCount:doc.passengerCountDetected,sampleClassCounts:doc.classCounts};
+        }
+        byList[key].occurrences++;
+      }
+    }catch(e){errors.push({messageId,error:String(e?.message||e)})}
+  }
+  return {ok:true,airline:a,messagesChecked:checked,documentsSeen,distinctListNames:Object.keys(byList).length,lists:Object.values(byList).sort((x,y)=>y.occurrences-x.occurrences),errors};
+}
+
+async function lot5AuditBacklogV534(env,limit=100,airline='',status=''){
+  const a=String(airline||'').trim().toUpperCase();
+  const s=String(status||'').trim().toUpperCase();
+  // Sans filtre compagnie, les mails vides retraités à chaque cycle (updated_at
+  // toujours rafraîchi) monopolisent le tri "plus récent d'abord" et masquent
+  // les autres compagnies. Le filtre permet de cibler une compagnie précise
+  // sans augmenter limit (donc sans risquer l'erreur Cloudflare 1102).
+  // Le filtre status permet de cibler par ex. REVIEW pour diagnostiquer un
+  // backlog précis sans devoir parcourir tous les statuts au hasard.
+  const wh=["status<>'IGNORED_NON_OPERATIONAL'"];
+  const binds=[];
+  if(a){wh.push('UPPER(airline)=?');binds.push(a)}
+  if(s){wh.push('UPPER(status)=?');binds.push(s)}
+  binds.push(Math.max(1,Math.min(500,Number(limit||100))));
+  const rows=(await env.OPS_DB.prepare(`SELECT gmail_message_id FROM gmail_messages WHERE ${wh.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`).bind(...binds).all()).results||[];
+  const summary={checked:0,received:0,imported:0,injected:0,validated:0,review:0,error:0,driveComplete:0,drivePending:0,flightMissing:0};
+  const items=[];
+  for(const r of rows){
+    const a=await lot5AuditMessageV534(env,String(r.gmail_message_id||'')); if(!a?.found)continue;
+    summary.checked++; const st=String(a.status||'').toUpperCase();
+    if(st==='RECEIVED')summary.received++; else if(st==='IMPORTED')summary.imported++; else if(st==='INJECTED')summary.injected++; else if(st==='VALIDATED')summary.validated++; else if(st==='REVIEW')summary.review++; else if(st.startsWith('ERROR'))summary.error++;
+    if(a.drive.complete)summary.driveComplete++; else if(a.acquisition.versions>0)summary.drivePending++;
+    if(a.identity.valid && !a.injection.flightExists)summary.flightMissing++;
+    items.push({messageId:a.messageId,subject:a.subject,status:a.status,identity:a.identity,drive:a.drive,parser:a.parser,injection:a.injection});
+  }
+  return {ok:true,summary,items};
+}
+
+async function lot5ArchiveDrive(env){
+  const cfg=lot5Config(env);
+  if(!cfg.driveEnabled)return {ok:true,skipped:true,reason:'DRIVE_DISABLED',uploaded:0,folders:0};
+  const st=await googleDriveStatus(env);
+  if(!st.configured)return {ok:true,skipped:true,reason:'DRIVE_NOT_CONFIGURED',uploaded:0,folders:0};
+
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT v.version_id,v.gmail_message_id,v.filename_original,v.filename_normalized,v.mime_type,v.file_size,v.r2_key,v.received_at,
+           COALESCE(NULLIF(g.airline,''),f.airline) AS airline,
+           COALESCE(NULLIF(g.flight_number,''),f.flight_number) AS flight_number,
+           COALESCE(NULLIF(g.flight_date,''),f.flight_date) AS flight_date
+    FROM import_file_versions v
+    JOIN import_files f ON f.file_id=v.file_id
+    LEFT JOIN gmail_messages g ON g.gmail_message_id=v.gmail_message_id
+    LEFT JOIN lot5_drive_files d ON d.version_id=v.version_id
+    WHERE d.version_id IS NULL
+      AND COALESCE(NULLIF(g.airline,''),f.airline) IS NOT NULL
+      AND COALESCE(NULLIF(g.flight_number,''),f.flight_number) IS NOT NULL
+      AND COALESCE(NULLIF(g.flight_date,''),f.flight_date) IS NOT NULL
+    ORDER BY v.created_at ASC
+    LIMIT 100
+  `).all();
+
+  let uploaded=0;
+  const folders=new Set();
+  const messages=new Map();
+  const errors=[];
+  for(const row of results){
+    try{
+      const airline=String(row.airline||'').toUpperCase();
+      const flightNumber=String(row.flight_number||'').toUpperCase();
+      const flightDate=lot5CanonicalFlightDate(row.flight_date,row.received_at||'');
+      const folder=await lot5EnsureFlightDriveFolder(env,{airline,flightNumber,flightDate,contextIso:row.received_at||''});
+      folders.add(folder.identity);
+      const file=await lot5UploadR2VersionToDrive(env,row,folder.flightFolderId);
+      await env.OPS_DB.prepare(`
+        INSERT INTO lot5_drive_files(version_id,identity,drive_file_id,drive_folder_id,filename,uploaded_at)
+        VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(version_id) DO NOTHING
+      `).bind(String(row.version_id),folder.identity,file.id,folder.flightFolderId,file.name).run();
+      uploaded++;
+      if(row.gmail_message_id)messages.set(String(row.gmail_message_id),folder.flightFolderId);
+      await recordImportChange(env,{scope:'DRIVE',airline,flightNumber,flightDate,gmailMessageId:row.gmail_message_id,fileId:'',versionId:row.version_id,changeType:'LOT5_DRIVE_UPLOADED',after:{driveFileId:file.id,driveFolderId:folder.flightFolderId,filename:file.name}}).catch(()=>{});
+    }catch(e){
+      errors.push({versionId:String(row.version_id||''),error:String(e?.message||e)});
+    }
+  }
+  for(const [messageId,folderId] of messages){
+    await lot5SyncPrepaInboxForMessage(env,messageId,folderId).catch(()=>{});
+  }
+  return {ok:errors.length===0,uploaded,folders:folders.size,errors};
+}
+
+async function lot5SyncPrepaInboxRecent(env){
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,airline,flight_number,flight_date,received_at,internal_date FROM gmail_messages
+    WHERE airline IS NOT NULL AND airline<>''
+      AND flight_number IS NOT NULL AND flight_number<>''
+      AND flight_date IS NOT NULL AND flight_date<>''
+    ORDER BY updated_at DESC
+    LIMIT 100
+  `).all();
+  let synced=0;
+  for(const r of results){
+    const id=String(r.gmail_message_id||'');
+    if(!id)continue;
+    let folderId='';
+    const canonicalDate=lot5CanonicalFlightDate(r.flight_date,r.received_at||r.internal_date||'');
+    const pf=await env.OPS_DB.prepare(`
+      SELECT flight_folder_id
+      FROM lot5_drive_folders
+      WHERE airline=? AND flight_number=? AND flight_date=?
+      ORDER BY updated_at DESC LIMIT 1
+    `).bind(String(r.airline||'').toUpperCase(),String(r.flight_number||'').toUpperCase(),canonicalDate).first().catch(()=>null);
+    folderId=String(pf?.flight_folder_id||'');
+    await lot5SyncPrepaInboxForMessage(env,id,folderId).catch(()=>{});
+    synced++;
+  }
+  return synced;
+}
+
+async function lot5InjectAvailable(env,cfg){
+  let injected=0,waiting=0,errors=[];
+
+  // 1) OPERATIONAL_INFO crée le vol réel lorsqu'il n'existe pas encore.
+  // flight_date DESC avant updated_at DESC : lors d'une resynchronisation en
+  // masse, les vols anciens sont écrits APRÈS les récents (pagination Gmail
+  // du plus récent au plus ancien), donc trier sur updated_at seul inverserait
+  // l'ordre voulu. Demande explicite : traiter du plus récent au plus ancien.
+  const op=(await env.OPS_DB.prepare(`
+    SELECT * FROM import_job_results
+    WHERE parser_mode='GENERIC'
+      AND card_key='OPERATIONAL_INFO'
+      AND status IN ('OPERATIONAL_INFO_READY','WAITING_FLIGHT')
+    ORDER BY flight_date DESC, updated_at DESC
+    LIMIT ?
+  `).bind(cfg.injectBatch).all()).results||[];
+  for(const row of op){
+    try{
+      const r=await lot3InjectOneResult(env,row,{createMissingFlights:true});
+      if(r?.status==='INJECTED')injected++; else waiting++;
+    }catch(e){errors.push({jobId:row.job_id,error:String(e?.message||e)})}
+  }
+
+  // 2) Les cartes sont injectées uniquement sur une fiche vol existante.
+  const cards=(await env.OPS_DB.prepare(`
+    SELECT r.* FROM import_job_results r
+    LEFT JOIN flights f
+      ON f.identity=(r.flight_date || '|' || UPPER(r.airline) || '|' || UPPER(r.flight_number))
+    WHERE r.parser_mode='GENERIC'
+      AND r.card_key IS NOT NULL AND r.card_key<>''
+      AND r.card_key NOT IN ('NO_LIST','OPERATIONAL_INFO','OTHER')
+      AND r.status IN ('GENERIC_CARD_READY','GENERIC_MASTER_READY','WAITING_FLIGHT')
+    -- Une carte dont la fiche existe doit toujours passer avant un ancien
+    -- WAITING_FLIGHT sans fiche. Sinon les mêmes lignes bloquent le backlog.
+    -- flight_date DESC avant r.updated_at DESC : même raison que ci-dessus,
+    -- traiter du plus récent au plus ancien plutôt que dans l'ordre d'écriture.
+    ORDER BY CASE WHEN f.identity IS NOT NULL THEN 0 ELSE 1 END,
+             CASE WHEN r.status='WAITING_FLIGHT' THEN 1 ELSE 0 END,
+             r.flight_date DESC,
+             r.updated_at DESC
+    LIMIT ?
+  `).bind(cfg.injectBatch).all()).results||[];
+  for(const row of cards){
+    try{
+      const r=await lot3InjectOneResult(env,row,{createMissingFlights:false});
+      if(r?.status==='INJECTED')injected++; else waiting++;
+    }catch(e){errors.push({jobId:row.job_id,error:String(e?.message||e)})}
+  }
+  return {ok:errors.length===0,injected,waiting,errors};
+}
+
+async function lot5RequeueNewGenericMappings(env,limit=500){
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT r.job_id,r.airline,r.list_name,r.card_key,r.status
+    FROM import_job_results r
+    WHERE r.parser_mode='GENERIC'
+      AND r.card_key='OTHER'
+      AND r.status IN ('GENERIC_CARD_OTHER','WAITING_FLIGHT','INJECTED')
+    ORDER BY r.updated_at DESC
+    LIMIT ?
+  `).bind(Math.max(1,Math.min(1000,Number(limit||500)))).all()).results||[];
+
+  let requeued=0;
+  const mappings=[];
+  for(const row of rows){
+    const airline=String(row.airline||"").trim().toUpperCase();
+    const storedListName=String(row.list_name||"").trim();
+    // Les résultats produits avant V50.30 pouvaient garder le compteur M
+    // dans le nom DE (ex. "ETKT M208"). On normalise ici l'ancien nom afin
+    // de décider s'il mérite un reparse avec le parseur corrigé.
+    const normalizedListName=storedListName
+      .replace(/\b(?:TOTAL|TTL)\b.*$/i,"")
+      .replace(/(^|\s)[FJCWSYM]\s*\d+(?=\s|$)/gi,"$1")
+      .replace(/\s+/g," ")
+      .trim();
+    const mapping=lot2LookupListMapping(airline,normalizedListName);
+    // Avant la correction des compteurs autonomes, OZ "PDF-S1" avait été
+    // tronqué en "PDF-". Le contenu source permet de retrouver le vrai code.
+    const reparsedOzoneStaff=airline==="OZ" && /^PDF-?$/i.test(storedListName);
+    if((!mapping.cardKey || ["OTHER","NO_LIST"].includes(mapping.cardKey)) && !reparsedOzoneStaff)continue;
+    await env.OPS_DB.prepare(`
+      UPDATE import_jobs
+      SET status='QUEUED',error_message=NULL,updated_at=CURRENT_TIMESTAMP
+      WHERE job_id=?
+    `).bind(String(row.job_id||"")).run();
+    requeued++;
+    mappings.push({jobId:String(row.job_id||""),airline,listName:storedListName,normalizedListName,cardKey:reparsedOzoneStaff?"REPARSE_PDF_S1":mapping.cardKey});
+  }
+  return {ok:true,checked:rows.length,requeued,mappings};
+}
+
+/*
+ * V54 — Rejeu ciblé pour une compagnie qui vient de sortir du groupe verrouillé
+ * (ex. VF). Ses import_jobs historiques portent encore un résultat
+ * parser_mode='SPECIFIC_LOCKED'/status='READY_SPECIFIC_PARSER' d'avant le
+ * changement : lot5RequeueNewGenericMappings ne les touche jamais (elle exige
+ * déjà parser_mode='GENERIC'). On les repasse donc explicitement en QUEUED,
+ * quel que soit leur statut précédent ; le prochain cycle AUTO PILOT
+ * (lot2ProcessNext) les reclassera avec le nouveau parser, et lot5InjectAvailable
+ * injectera les cartes obtenues dans la fiche vol.
+ *
+ * Refusé pour toute compagnie encore verrouillée (LOT2_SPECIFIC_AIRLINES) :
+ * ce point d'entrée sert uniquement à rattraper un déverrouillage, jamais à
+ * forcer un retraitement générique d'un parser spécifique toujours actif.
+ */
+async function lot5RequeueAirlineJobsV54(env,airline){
+  await ensureImportProcessorTables(env);
+  const a=String(airline||"").trim().toUpperCase();
+  if(!a)return {ok:false,error:"COMPAGNIE MANQUANTE"};
+  if(LOT2_SPECIFIC_AIRLINES.has(a)){
+    return {ok:false,error:`${a} EST TOUJOURS VERROUILLÉE (SPECIFIC_LOCKED) : REQUEUE REFUSÉ`};
+  }
+  const r=await env.OPS_DB.prepare(`
+    UPDATE import_jobs
+    SET status='QUEUED',error_message=NULL,updated_at=CURRENT_TIMESTAMP
+    WHERE UPPER(airline)=?
+  `).bind(a).run();
+  // Reset visible du statut Gmail : les mails de cette compagnie repassent en
+  // RECEIVED (MAIL TRAITÉ) tout de suite, plutôt que d'afficher encore leur
+  // ancien statut jusqu'au prochain passage complet de reconcile-labels.
+  await env.OPS_DB.prepare(`
+    UPDATE gmail_messages SET status='RECEIVED',updated_at=CURRENT_TIMESTAMP
+    WHERE UPPER(airline)=? AND status<>'IGNORED_NON_OPERATIONAL'
+  `).bind(a).run().catch(()=>{});
+  await recordImportChange(env,{scope:"AIRLINE",airline:a,changeType:"REQUEUE_AFTER_UNLOCK",after:{requeued:r.meta?.changes||0}}).catch(()=>{});
+  return {ok:true,airline:a,requeued:r.meta?.changes||0};
+}
+
+/*
+ * Reset "à zéro" du traitement, TOUTES compagnies confondues (génériques +
+ * verrouillées), en un seul appel — sans toucher au code des parseurs.
+ *
+ * - Compagnies génériques (VF, 3O...) : import_jobs repart en QUEUED (comme
+ *   lot5RequeueAirlineJobsV54 individuellement) + statut Gmail à RECEIVED.
+ * - Compagnies verrouillées (SQ/TK/BJ/TW) : le Worker ne les parse jamais
+ *   lui-même, il n'y a donc pas de import_jobs serveur à requeue pour elles ;
+ *   seul le statut Gmail repart à RECEIVED, pour qu'elles soient réévaluées
+ *   au prochain reconcile — celles déjà réellement injectées retombent tout
+ *   de suite en VALIDÉ (voir lot5SpecificFlightAlreadyBuilt), les autres
+ *   restent en attente comme avant (comportement SQ inchangé, juste un vrai
+ *   redémarrage à zéro de l'étiquette).
+ *
+ * Ne touche pas aux fiches de vol déjà construites (x.common/x.passengers).
+ */
+async function lot5RequeueAllGenericAirlinesV54(env){
+  await ensureImportProcessorTables(env);
+  const rows=(await env.OPS_DB.prepare(`SELECT DISTINCT UPPER(airline) AS a FROM import_jobs WHERE airline IS NOT NULL AND airline<>''`).all()).results||[];
+  const airlines=rows.map(r=>String(r.a||'')).filter(a=>a && !LOT2_SPECIFIC_AIRLINES.has(a));
+  const perAirline=[];
+  let totalRequeued=0;
+  for(const a of airlines){
+    const r=await lot5RequeueAirlineJobsV54(env,a);
+    perAirline.push(r);
+    if(r.ok)totalRequeued+=Number(r.requeued||0);
+  }
+  const skipped=[...new Set(rows.map(r=>String(r.a||'')))].filter(a=>a && LOT2_SPECIFIC_AIRLINES.has(a));
+
+  const lockedReset=[];
+  for(const a of LOT2_SPECIFIC_AIRLINES){
+    const r=await env.OPS_DB.prepare(`
+      UPDATE gmail_messages SET status='RECEIVED',updated_at=CURRENT_TIMESTAMP
+      WHERE UPPER(airline)=? AND status<>'IGNORED_NON_OPERATIONAL'
+    `).bind(a).run().catch(()=>null);
+    lockedReset.push({airline:a,gmailStatusReset:Number(r?.meta?.changes||0)});
+  }
+
+  return {ok:true,airlinesRequeued:airlines,totalRequeued,perAirline,lockedAirlinesGmailStatusReset:lockedReset};
+}
+
+/*
+ * Inventaire des noms de liste NON mappés reçus par compagnie GENERIC
+ * (hors SQ/TK/TW/BJ, verrouillées sur leur parseur spécifique). Sert de
+ * base pour ajouter les compagnies une à une à LOT2_GENERIC_AIRLINE_LIST_MAPPINGS
+ * à partir de ce qui est réellement reçu, plutôt que de deviner.
+ */
+async function lot5UnmappedGenericListsReport(env,{airline='',limit=200}={}){
+  const a=String(airline||'').trim().toUpperCase();
+  const wh=[
+    "parser_mode='GENERIC'",
+    "UPPER(airline) NOT IN ('SQ','TK','TW','BJ')",
+    "card_key IN ('OTHER','NO_LIST')"
+  ];
+  const binds=[];
+  if(a){wh.push("UPPER(airline)=?");binds.push(a)}
+  binds.push(Math.max(1,Math.min(1000,Number(limit||200))));
+
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT airline,list_name,card_key,COUNT(*) AS n,MAX(updated_at) AS lastSeen,
+           MIN(job_id) AS sampleJobId
+    FROM import_job_results
+    WHERE ${wh.join(" AND ")}
+    GROUP BY airline,list_name,card_key
+    ORDER BY airline ASC, n DESC
+    LIMIT ?
+  `).bind(...binds).all()).results||[];
+
+  return {
+    ok:true,
+    checked:rows.length,
+    items:rows.map(r=>({
+      airline:String(r.airline||''),
+      listName:String(r.list_name||''),
+      cardKey:String(r.card_key||''),
+      count:Number(r.n||0),
+      lastSeen:String(r.lastSeen||''),
+      sampleJobId:String(r.sampleJobId||'')
+    }))
+  };
+}
+
+// Complète lot5UnmappedGenericListsReport (qui ne donne que le nom de liste
+// et un sampleJobId) : ici on renvoie le vrai texte extrait (aperçu déjà
+// stocké à l'analyse) de quelques documents réels, pour mapper listName→cardKey
+// sans jamais deviner. airline+listName ciblent un couple précis du rapport
+// ci-dessus ("" pour listName = les documents NO_LIST de cette compagnie).
+async function lot5UnmappedListPreviewV1(env,airline,listName,limit=3){
+  const a=String(airline||'').trim().toUpperCase();
+  if(!a)return {ok:false,error:'COMPAGNIE MANQUANTE'};
+  const ln=String(listName||'');
+  const wh=[
+    "parser_mode='GENERIC'",
+    "UPPER(airline)=?",
+    ln?"card_key='OTHER'":"card_key='NO_LIST'",
+    ln?"list_name=?":"(list_name IS NULL OR list_name='')"
+  ];
+  const binds=[a];
+  if(ln)binds.push(ln);
+  binds.push(Math.max(1,Math.min(10,Number(limit||3))));
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT job_id,flight_number,flight_date,passenger_count,extracted_text_preview,updated_at
+    FROM import_job_results
+    WHERE ${wh.join(" AND ")}
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).bind(...binds).all()).results||[];
+  return {
+    ok:true,airline:a,listName:ln,checked:rows.length,
+    items:rows.map(r=>({
+      jobId:String(r.job_id||''),
+      flightNumber:String(r.flight_number||''),
+      flightDate:String(r.flight_date||''),
+      passengerCount:Number(r.passenger_count||0),
+      updatedAt:String(r.updated_at||''),
+      textPreview:String(r.extracted_text_preview||'')
+    }))
+  };
+}
+
+/* =========================================================
+ * LOT 5.2 — FULL MAILBOX CONTINUOUS GMAIL SWEEP
+ * ---------------------------------------------------------
+ * Objectifs :
+ * - parcourir toute la boîte Gmail sans filtre de date ;
+ * - toujours lire d'abord la page la plus récente ;
+ * - reprendre ensuite le backfill à partir du pageToken D1 ;
+ * - limiter le nombre de pages par Cron pour ne pas bloquer le Worker ;
+ * - une erreur sur un mail n'arrête jamais la page ni le cycle ;
+ * - lorsque la fin de boîte est atteinte, le prochain Cron repart du début
+ *   et détecte immédiatement les nouveaux mails.
+ * ========================================================= */
+async function lot5GmailContinuousSweep(env,cfg,{query='',maxMessages=0}={}){
+  await ensureGmailPipelineTables(env);
+  const q=String(query||cfg.gmailQuery||'in:anywhere').trim()||'in:anywhere';
+  const pageSize=Math.max(1,Math.min(100,Number(maxMessages||cfg.gmailMax||100)));
+  const pagesMax=Math.max(1,Math.min(10,Number(cfg.gmailPagesPerRun||5)));
+
+  const state=await env.OPS_DB.prepare(`
+    SELECT backfill_query,backfill_page_token,backfill_status
+    FROM gmail_sync_state
+    WHERE mailbox='me'
+    LIMIT 1
+  `).first().catch(()=>null);
+
+  const sameQuery=String(state?.backfill_query||'')===q;
+  const savedToken=sameQuery?String(state?.backfill_page_token||''):'';
+
+  let processed=0,attempted=0,failed=0,pages=0;
+  let newestNext='';
+  let backfillNext=savedToken;
+  const errors=[];
+
+  // 1) Toujours la page la plus récente : les nouveaux mails ne doivent jamais
+  // attendre la fin d'un backfill historique.
+  try{
+    const newest=await gmailSyncNow(env,{query:q,maxMessages:pageSize,pageToken:''});
+    pages++;
+    processed+=Number(newest.processed||0);
+    attempted+=Number(newest.attempted||newest.processed||0);
+    failed+=Number(newest.failed||0);
+    newestNext=String(newest.nextPageToken||'');
+    if(Array.isArray(newest.errors))errors.push(...newest.errors);
+
+    // Si aucun backfill n'était en cours, la suite commence après la page récente.
+    if(!backfillNext)backfillNext=newestNext;
+  }catch(e){
+    errors.push({scope:'NEWEST_PAGE',error:String(e?.message||e)});
+  }
+
+  // 2) Continuer l'historique sans jamais monopoliser un Cron entier.
+  // La première page récente compte déjà dans pagesMax.
+  while(backfillNext && pages<pagesMax){
+    const token=backfillNext;
+    try{
+      const page=await gmailSyncNow(env,{query:q,maxMessages:pageSize,pageToken:token});
+      pages++;
+      processed+=Number(page.processed||0);
+      attempted+=Number(page.attempted||page.processed||0);
+      failed+=Number(page.failed||0);
+      if(Array.isArray(page.errors))errors.push(...page.errors);
+      backfillNext=String(page.nextPageToken||'');
+    }catch(e){
+      // Un problème de page est journalisé. On ne fait pas tomber tout AUTO PILOT.
+      errors.push({scope:'BACKFILL_PAGE',pageToken:token,error:String(e?.message||e)});
+      // On garde le token actuel pour retenter ce segment au prochain Cron.
+      backfillNext=token;
+      break;
+    }
+  }
+
+  // gmailSyncNow met lui-même à jour gmail_sync_state à chaque page.
+  // On force ici le curseur réellement retenu pour le prochain Cron.
+  await env.OPS_DB.prepare(`
+    INSERT INTO gmail_sync_state
+      (mailbox,last_full_sync_at,backfill_query,backfill_page_token,backfill_status,updated_at)
+    VALUES ('me',CURRENT_TIMESTAMP,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(mailbox) DO UPDATE SET
+      last_full_sync_at=CURRENT_TIMESTAMP,
+      backfill_query=excluded.backfill_query,
+      backfill_page_token=excluded.backfill_page_token,
+      backfill_status=excluded.backfill_status,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(q,backfillNext,backfillNext?'RUNNING':'DONE').run();
+
+  return {
+    ok:true, // les erreurs unitaires sont non bloquantes par conception
+    query:q,
+    pageSize,
+    pagesProcessed:pages,
+    processed,
+    attempted,
+    failed,
+    backfillDone:!backfillNext,
+    nextPageToken:backfillNext,
+    errors
+  };
+}
+
+async function lot5AutoPilotRun(env,{triggerType='MANUAL',gmailQuery='',gmailMax=0}={}){
+  await ensureLot5Tables(env);
+  const cfg=lot5Config(env);
+  // Un seul AUTO PILOT à la fois. Les anciens RUNNING de plus de 10 min sont considérés abandonnés.
+  await env.OPS_DB.prepare(`UPDATE lot5_autopilot_runs SET status='ERROR',error_message='STALE_RUN_RECOVERED',finished_at=CURRENT_TIMESTAMP WHERE status='RUNNING' AND started_at < datetime('now','-10 minutes')`).run().catch(()=>{});
+  const activeRun=await env.OPS_DB.prepare(`SELECT run_id,trigger_type,started_at FROM lot5_autopilot_runs WHERE status='RUNNING' ORDER BY started_at DESC LIMIT 1`).first();
+  if(activeRun)return {ok:false,alreadyRunning:true,error:'AUTO PILOT DÉJÀ EN COURS',activeRun,version:LOT5_VERSION};
+  const runId=crypto.randomUUID();
+  await env.OPS_DB.prepare(`INSERT INTO lot5_autopilot_runs(run_id,trigger_type,status,started_at) VALUES (?,?,'RUNNING',CURRENT_TIMESTAMP)`).bind(runId,triggerType).run();
+
+  const details={version:LOT5_VERSION,config:{...cfg,driveRootFolderId:cfg.driveRootFolderId==='root'?'root':'CUSTOM'}};
+  let gmailProcessed=0,jobsProcessed=0,resultsInjected=0,driveUploaded=0;
+  try{
+    if(!cfg.enabled)throw new Error('AUTO PILOT DÉSACTIVÉ');
+
+    await setIntegrationJson(env,'lot5_autopilot_stop_requested',{requested:false,runId,updatedAt:new Date().toISOString()}).catch(()=>{});
+    const gmail=await lot5GmailContinuousSweep(env,cfg,{
+      query:gmailQuery||cfg.gmailQuery,
+      maxMessages:gmailMax||cfg.gmailMax
+    });
+    details.gmail=gmail;
+    gmailProcessed=Number(gmail.processed||0);
+    await lot5CheckpointV534(env,'GMAIL');
+
+    // 5.3.4 : réparer l'identité AVANT Drive et AVANT toute décision de statut.
+    // Borné pour laisser du temps CPU au parsing dans chaque cycle.
+    details.identityRepair=await lot5RepairIdentityBacklogV534(env,100);
+    await lot5CheckpointV534(env,'IDENTITY');
+
+    // Rejouer automatiquement les listes techniques qui viennent d'obtenir
+    // un mapping fonctionnel (ex. OZ PDF-M2/PDF-S1/PDF-Z8/PDF-Z93/ONC* INC).
+    details.genericMappingReplay=await lot5RequeueNewGenericMappings(env,500);
+    await lot5CheckpointV534(env,'GENERIC_MAPPING_REPLAY');
+
+    // Auto-guérison : un mail classé IGNORED_NON_OPERATIONAL par une ancienne
+    // version du code ne serait sinon jamais réévalué automatiquement.
+    // Lot volontairement petit pour ne jamais peser sur le cycle de 5 minutes.
+    details.reclassifyIgnored=await lot5ReclassifyIgnoredV1(env,{limit:10}).catch(e=>({ok:false,error:String(e?.message||e)}));
+    await lot5CheckpointV534(env,'RECLASSIFY_IGNORED');
+
+    // Priorité opérationnelle : une rafale d'uploads Drive ne doit jamais
+    // empêcher le même cycle d'atteindre parsing puis injection D1.
+    const driveBefore={ok:true,skipped:true,reason:'DEFERRED_UNTIL_AFTER_INJECTION',uploaded:0,errors:[]};
+    details.driveBeforeParse=driveBefore;
+
+    const processRuns=[];
+    for(let i=0;i<cfg.processLoops;i++){
+      const r=await lot2ProcessNext(env,{limit:cfg.processBatch});
+      processRuns.push({found:r.found,processed:r.processed?.length||0});
+      jobsProcessed+=Number(r.processed?.length||0);
+      await lot5CheckpointV534(env,`PROCESS_${i+1}`);
+      if(!r.found)break;
+    }
+    details.process=processRuns;
+
+    const inj=await lot5InjectAvailable(env,cfg);
+    details.inject=inj;
+    resultsInjected=Number(inj.injected||0);
+    await lot5CheckpointV534(env,'INJECT');
+
+    // Archivage après injection : les fiches restent disponibles même lorsque
+    // le backlog Google Drive est volumineux ou temporairement lent.
+    const driveAfter=await lot5ArchiveDrive(env);
+    details.driveAfterParse=driveAfter;
+    details.drive={ok:!!(driveBefore.ok&&driveAfter.ok),uploaded:Number(driveBefore.uploaded||0)+Number(driveAfter.uploaded||0),errors:[...(driveBefore.errors||[]),...(driveAfter.errors||[])]};
+    driveUploaded+=Number(driveAfter.uploaded||0);
+
+    // Lot borné : 1500 appels Gmail séquentiels maintenaient le Worker en
+    // RUNNING pendant plus de 10 minutes. La rotation ci-dessus couvre tout
+    // le backlog au fil des cycles de 5 minutes sans bloquer les injections.
+    // Réduit de 100 à 40 après la migration SQ : le même reconcile (Gmail
+    // modify + vérif couverture Drive par mail) a produit une Erreur 1102 à
+    // 40 sur l'endpoint manuel une fois combiné à lot5SyncPrepaInboxRecent
+    // juste en dessous — un cycle CRON qui plante ainsi reste RUNNING jusqu'à
+    // la récupération à 10 min, bloquant tout le pipeline entre-temps.
+    const labels=await lot5ReconcileGmailStatesV53(env,40);
+    details.gmailStates=labels;
+
+    details.prepaSynced=await lot5SyncPrepaInboxRecent(env);
+    details.audit=await lot5AuditBacklogV534(env,100);
+
+    await env.OPS_DB.prepare(`
+      UPDATE lot5_autopilot_runs
+      SET status='DONE',gmail_processed=?,jobs_processed=?,results_injected=?,drive_files_uploaded=?,details_json=?,finished_at=CURRENT_TIMESTAMP
+      WHERE run_id=?
+    `).bind(gmailProcessed,jobsProcessed,resultsInjected,driveUploaded,JSON.stringify(details),runId).run();
+    await setIntegrationJson(env,'lot5_autopilot_last_run',{runId,status:'DONE',finishedAt:new Date().toISOString(),details});
+    return {ok:true,runId,...details,gmailProcessed,jobsProcessed,resultsInjected,driveUploaded};
+  }catch(e){
+    const error=String(e?.message||e);
+    const stopped=String(e?.code||'')==='STOP_REQUESTED';
+    const finalRunStatus=stopped?'STOPPED':'ERROR';
+    details.error=error;
+    await env.OPS_DB.prepare(`
+      UPDATE lot5_autopilot_runs SET status=?,gmail_processed=?,jobs_processed=?,results_injected=?,drive_files_uploaded=?,error_message=?,details_json=?,finished_at=CURRENT_TIMESTAMP WHERE run_id=?
+    `).bind(finalRunStatus,gmailProcessed,jobsProcessed,resultsInjected,driveUploaded,error,JSON.stringify(details),runId).run().catch(()=>{});
+    await setIntegrationJson(env,'lot5_autopilot_last_run',{runId,status:finalRunStatus,finishedAt:new Date().toISOString(),details}).catch(()=>{});
+    return {ok:false,stopped,runId,error,...details,gmailProcessed,jobsProcessed,resultsInjected,driveUploaded};
+  }
+}
+
+async function lot5Status(env){
+  await ensureLot5Tables(env);
+  const cfg=lot5Config(env);
+  const last=await env.OPS_DB.prepare(`SELECT * FROM lot5_autopilot_runs ORDER BY started_at DESC LIMIT 1`).first();
+  const counters=await env.OPS_DB.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM import_jobs WHERE status='QUEUED') AS queuedJobs,
+      (SELECT COUNT(*) FROM import_job_results WHERE status='WAITING_FLIGHT') AS waitingFlight,
+      (SELECT COUNT(*) FROM lot5_drive_folders) AS driveFolders,
+      (SELECT COUNT(*) FROM lot5_drive_files) AS driveFiles,
+      (SELECT COUNT(*) FROM gmail_messages WHERE status='RECEIVED') AS gmailReceived,
+      (SELECT COUNT(*) FROM gmail_messages WHERE status='IMPORTED') AS gmailImported,
+      (SELECT COUNT(*) FROM gmail_messages WHERE status='REVIEW') AS gmailReview,
+      (SELECT COUNT(*) FROM gmail_messages WHERE status='DUPLICATE') AS gmailDuplicate
+  `).first();
+  // Le compteur REVIEW seul ne dit pas si le blocage vient des compagnies
+  // verrouillées (SQ/TK/BJ/TW, traitement navigateur uniquement, normal)
+  // ou d'un vrai souci sur une compagnie GENERIC (anormal, à corriger).
+  const reviewByAirline=(await env.OPS_DB.prepare(`
+    SELECT UPPER(airline) AS airline, COUNT(*) AS n
+    FROM gmail_messages WHERE status='REVIEW'
+    GROUP BY UPPER(airline) ORDER BY n DESC LIMIT 20
+  `).all().catch(()=>({results:[]}))).results||[];
+  return {ok:true,version:LOT5_VERSION,config:{...cfg,driveRootFolderId:cfg.driveRootFolderId==='root'?'root':'CUSTOM'},lastRun:last?{...last,details:safeJsonParse(last.details_json,{})}:null,counters:{...(counters||{}),reviewByAirline},googleDrive:await googleDriveStatus(env)};
+}
+
+
+// R3 SPECIFIC BRIDGE: le Worker prépare/trace les sources READY_SPECIFIC_PARSER ;
+// l'exécution du parser spécifique reste dans BUILD143, qui possède les parsers verrouillés inchangés.
+async function lot5SpecificBrowserCompleteV535(env,body){
+  const airline=String(body?.airline||'').trim().toUpperCase();
+  const flightNumber=String(body?.flightNumber||body?.flight||'').trim().toUpperCase();
+  const flightDate=lot5CanonicalFlightDate(body?.flightDate||body?.date||'');
+  const messageIds=Array.isArray(body?.messageIds)?body.messageIds.map(x=>String(x||'')).filter(Boolean):[];
+  if(!LOT5_PROTECTED_AIRLINES.has(airline)||!flightNumber||!flightDate)return {ok:false,error:'IDENTITÉ SPECIFIC INVALIDE'};
+  // Le parser est exécuté dans BUILD143 avec le code existant inchangé ; ici on confirme uniquement
+  // que son résultat a bien été persisté dans la fiche vol D1.
+  const identity=[flightDate,airline,flightNumber].join('|');
+  const flight=await getFlightByIdentity(env,identity).catch(()=>null);
+  if(!flight)return {ok:false,error:'FICHE VOL D1 NON CONFIRMÉE'};
+  // R5 : ne plus dépendre d'une égalité SQL fragile sur flight_date. Les anciens
+  // résultats peuvent encore porter 03SEP/02SEP26 alors que l'identité canonique est ISO.
+  // On charge les résultats SPECIFIC_LOCKED du vol/message puis on compare la date canonique en JS.
+  const wh=["r.parser_mode='SPECIFIC_LOCKED'","UPPER(r.airline)=?","UPPER(r.flight_number)=?"];
+  const binds=[airline,flightNumber];
+  if(messageIds.length){wh.push(`j.gmail_message_id IN (${messageIds.map(()=>'?').join(',')})`);binds.push(...messageIds)}
+  const candidates=(await env.OPS_DB.prepare(`
+    SELECT r.job_id,r.status,r.flight_date,j.gmail_message_id
+    FROM import_job_results r JOIN import_jobs j ON j.job_id=r.job_id
+    WHERE ${wh.join(' AND ')}
+  `).bind(...binds).all()).results||[];
+  const matched=candidates.filter(r=>lot5CanonicalFlightDate(r.flight_date||'', '')===flightDate);
+  const rows=matched.filter(r=>String(r.status||'').toUpperCase()==='READY_SPECIFIC_PARSER');
+  const already=matched.filter(r=>String(r.status||'').toUpperCase()==='INJECTED');
+  for(const r of rows){
+    await env.OPS_DB.prepare(`UPDATE import_job_results SET status='INJECTED',flight_date=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(flightDate,String(r.job_id||'')).run();
+  }
+  // Canonicaliser également les résultats déjà injectés afin que les résumés ne se scindent plus.
+  for(const r of already){
+    if(String(r.flight_date||'')!==flightDate)await env.OPS_DB.prepare(`UPDATE import_job_results SET flight_date=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?`).bind(flightDate,String(r.job_id||'')).run();
+  }
+  const touched=[...new Set(matched.map(r=>String(r.gmail_message_id||'')).filter(Boolean))];
+  for(const id of touched){await lot5ReconcileOneGmailStateV53(env,id).catch(()=>{});await lot5SyncPrepaInboxForMessage(env,id).catch(()=>{})}
+  // R4 : recalcul canonique de tous les mails actuellement rattachés à cette identité.
+  const sameFlight=(await env.OPS_DB.prepare(`SELECT gmail_message_id FROM gmail_messages WHERE UPPER(airline)=? AND UPPER(flight_number)=?`).bind(airline,flightNumber).all()).results||[];
+  let reconciledIdentity=0;
+  for(const m of sameFlight){
+    const id=String(m.gmail_message_id||''); if(!id)continue;
+    const gm=await env.OPS_DB.prepare(`SELECT flight_date,received_at,internal_date FROM gmail_messages WHERE gmail_message_id=?`).bind(id).first().catch(()=>null);
+    if(lot5CanonicalFlightDate(gm?.flight_date,gm?.received_at||gm?.internal_date||'')!==flightDate)continue;
+    await lot5ReconcileOneGmailStateV53(env,id).catch(()=>{});
+    await lot5SyncPrepaInboxForMessage(env,id).catch(()=>{});
+    reconciledIdentity++;
+  }
+  if(!rows.length&&!already.length)return {ok:false,r5:true,error:'AUCUN RESULTAT SPECIFIC A CONFIRMER',identity,candidates:candidates.length,matched:matched.length};
+  return {ok:true,r5:true,identity,confirmed:rows.length,alreadyInjected:already.length,messages:touched.length,reconciledIdentity};
+}
+
+
+async function lot5ArchiveDriveForMessagesV535(env,messageIds){
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))].slice(0,20);
+  const cfg=lot5Config(env);
+  if(!cfg.driveEnabled)return {ok:true,skipped:true,reason:'DRIVE_DISABLED',uploaded:0,folders:0};
+  const st=await googleDriveStatus(env);
+  if(!st.configured)return {ok:true,skipped:true,reason:'DRIVE_NOT_CONFIGURED',uploaded:0,folders:0};
+  if(!ids.length)return {ok:true,uploaded:0,folders:0,errors:[]};
+  const qs=ids.map(()=>'?').join(',');
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT v.version_id,v.gmail_message_id,v.filename_original,v.filename_normalized,v.mime_type,v.file_size,v.r2_key,v.received_at,
+           COALESCE(NULLIF(g.airline,''),f.airline) AS airline,
+           COALESCE(NULLIF(g.flight_number,''),f.flight_number) AS flight_number,
+           COALESCE(NULLIF(g.flight_date,''),f.flight_date) AS flight_date
+    FROM import_file_versions v
+    JOIN import_files f ON f.file_id=v.file_id
+    LEFT JOIN gmail_messages g ON g.gmail_message_id=v.gmail_message_id
+    LEFT JOIN lot5_drive_files d ON d.version_id=v.version_id
+    WHERE d.version_id IS NULL AND v.gmail_message_id IN (${qs})
+    ORDER BY v.created_at ASC
+  `).bind(...ids).all();
+  let uploaded=0; const folders=new Set(); const errors=[];
+  for(const row of results){
+    try{
+      const airline=String(row.airline||'').toUpperCase();
+      const flightNumber=String(row.flight_number||'').toUpperCase();
+      const flightDate=lot5CanonicalFlightDate(row.flight_date,row.received_at||'');
+      const folder=await lot5EnsureFlightDriveFolder(env,{airline,flightNumber,flightDate,contextIso:row.received_at||''});
+      folders.add(folder.identity);
+      const file=await lot5UploadR2VersionToDrive(env,row,folder.flightFolderId);
+      await env.OPS_DB.prepare(`INSERT INTO lot5_drive_files(version_id,identity,drive_file_id,drive_folder_id,filename,uploaded_at) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(version_id) DO NOTHING`).bind(String(row.version_id),folder.identity,file.id,folder.flightFolderId,file.name).run();
+      uploaded++;
+      if(row.gmail_message_id)await lot5SyncPrepaInboxForMessage(env,String(row.gmail_message_id),folder.flightFolderId).catch(()=>{});
+    }catch(e){errors.push({versionId:String(row.version_id||''),error:String(e?.message||e)})}
+  }
+  return {ok:errors.length===0,uploaded,folders:folders.size,errors};
+}
+
+// R3: reconstruction ciblée d'un message déjà connu dont les versions techniques manquent.
+// Le message est relu depuis Gmail ; le SHA-256 reste le seul critère de doublon contenu.
+async function lot5ReplayMissingVersionsR3(env,messageId){
+  const countRow=await env.OPS_DB.prepare(`SELECT COUNT(*) AS n FROM import_file_versions WHERE gmail_message_id=?`).bind(messageId).first().catch(()=>({n:0}));
+  const before=Number(countRow?.n||0);
+  if(before>0)return {messageId,replayed:false,before,after:before};
+  const stored=await storeGmailMessage(env,messageId);
+  await lot5RepairMessageIdentityV533(env,messageId).catch(()=>{});
+  const afterRow=await env.OPS_DB.prepare(`SELECT COUNT(*) AS n FROM import_file_versions WHERE gmail_message_id=?`).bind(messageId).first().catch(()=>({n:0}));
+  return {messageId,replayed:true,before,after:Number(afterRow?.n||0),stored};
+}
+
+
+/* =========================================================
+   V50.30 R22.6 — BJ/VF SHA DEDUPE + CANONICAL RELINK
+   Infrastructure only. SQ/TK/BJ/VF/TW parsers untouched.
+
+   Goal:
+   - same Gmail message + same SHA256 must expose ONE canonical document
+   - prefer resolved BJ/VF identity over legacy UNK/UNIDENTIFIED copy
+   - relink provenance to canonical version
+   - remove stale technical duplicate from D1/R2/Drive safely
+   - keep audit history via recordImportChange()
+   ========================================================= */
+
+function r226IsResolvedCanonicalRow(row,gm){
+  const a=String(row?.airline||"").trim().toUpperCase();
+  const f=String(row?.flight_number||"").trim().toUpperCase();
+  const d=String(row?.flight_date||"").trim();
+  const ga=String(gm?.airline||"").trim().toUpperCase();
+  const gf=String(gm?.flight_number||"").trim().toUpperCase();
+  const gd=String(gm?.flight_date||"").trim();
+  return !!ga && !!gf && !!gd && a===ga && f===gf && d===gd;
+}
+
+async function r226RelinkProvenance(env,messageId,fromRow,toRow){
+  const links=(await env.OPS_DB.prepare(`
+    SELECT source_kind,source_ref,parent_version_id,is_duplicate
+    FROM gmail_message_documents
+    WHERE gmail_message_id=? AND version_id=?
+    ORDER BY created_at ASC
+  `).bind(messageId,String(fromRow.version_id)).all().catch(()=>({results:[]}))).results||[];
+
+  for(const l of links){
+    await cleanLinkMessageDocumentV3(env,{
+      gmailMessageId:messageId,
+      versionId:String(toRow.version_id),
+      fileId:String(toRow.file_id),
+      sourceKind:String(l.source_kind||"ATTACHMENT"),
+      sourceRef:String(l.source_ref||""),
+      parentVersionId:String(l.parent_version_id||""),
+      isDuplicate:true
+    }).catch(()=>{});
+  }
+
+  await env.OPS_DB.prepare(`
+    DELETE FROM gmail_message_documents
+    WHERE gmail_message_id=? AND version_id=?
+  `).bind(messageId,String(fromRow.version_id)).run().catch(()=>{});
+
+  return links.length;
+}
+
+async function r226RemoveStaleDuplicate(env,messageId,stale,canonical,gm){
+  const staleVersionId=String(stale.version_id||"");
+  const staleFileId=String(stale.file_id||"");
+  const staleR2Key=String(stale.r2_key||"");
+  const canonicalR2Key=String(canonical.r2_key||"");
+  const staleDriveId=String(stale.drive_file_id||"");
+  const canonicalDriveId=String(canonical.drive_file_id||"");
+
+  const relinked=await r226RelinkProvenance(
+    env,messageId,stale,canonical
+  );
+
+  // Remove generic result/injection artifacts belonging only to the stale
+  // unresolved technical version. The canonical specific job is preserved.
+  const staleJobs=(await env.OPS_DB.prepare(`
+    SELECT job_id
+    FROM import_jobs
+    WHERE version_id=?
+  `).bind(staleVersionId).all().catch(()=>({results:[]}))).results||[];
+
+  for(const j of staleJobs){
+    const jobId=String(j.job_id||"");
+    if(!jobId)continue;
+    await env.OPS_DB.prepare(`
+      DELETE FROM flight_import_injections WHERE result_job_id=?
+    `).bind(jobId).run().catch(()=>{});
+    await env.OPS_DB.prepare(`
+      DELETE FROM flight_import_cards WHERE job_id=? OR version_id=?
+    `).bind(jobId,staleVersionId).run().catch(()=>{});
+    await env.OPS_DB.prepare(`
+      DELETE FROM import_job_results WHERE job_id=?
+    `).bind(jobId).run().catch(()=>{});
+  }
+
+  await env.OPS_DB.prepare(`
+    DELETE FROM import_jobs WHERE version_id=?
+  `).bind(staleVersionId).run().catch(()=>{});
+
+  // Trash only the duplicate Drive FILE, never the canonical one/folder.
+  let driveTrashed=false;
+  let driveTrashError="";
+  if(staleDriveId && staleDriveId!==canonicalDriveId){
+    try{
+      const ds=await googleDriveStatus(env).catch(()=>({configured:false}));
+      if(ds?.configured){
+        const dr=await trashDriveFoldersDirect(env,[staleDriveId]);
+        driveTrashed=(dr?.trashed||[]).includes(staleDriveId)
+          || (dr?.missing||[]).includes(staleDriveId);
+        if((dr?.errors||[]).length){
+          driveTrashError=JSON.stringify(dr.errors);
+        }
+      }
+    }catch(e){
+      driveTrashError=String(e?.message||e);
+    }
+  }
+
+  await env.OPS_DB.prepare(`
+    DELETE FROM lot5_drive_files WHERE version_id=?
+  `).bind(staleVersionId).run().catch(()=>{});
+
+  // Remove stale R2 bytes only when the canonical version points elsewhere.
+  let r2Deleted=false;
+  if(
+    env.OPS_FILES &&
+    staleR2Key &&
+    staleR2Key!==canonicalR2Key
+  ){
+    try{
+      await env.OPS_FILES.delete(staleR2Key);
+      r2Deleted=true;
+    }catch(e){}
+  }
+
+  await env.OPS_DB.prepare(`
+    DELETE FROM import_file_versions WHERE version_id=?
+  `).bind(staleVersionId).run();
+
+  // Remove the now-orphan import_files shell only when no version remains.
+  const remaining=await env.OPS_DB.prepare(`
+    SELECT COUNT(*) AS n
+    FROM import_file_versions
+    WHERE file_id=?
+  `).bind(staleFileId).first().catch(()=>({n:0}));
+
+  if(Number(remaining?.n||0)===0){
+    await env.OPS_DB.prepare(`
+      DELETE FROM import_files WHERE file_id=?
+    `).bind(staleFileId).run().catch(()=>{});
+  }
+
+  await recordImportChange(env,{
+    scope:"FILE",
+    airline:String(gm.airline||""),
+    flightNumber:String(gm.flight_number||""),
+    flightDate:String(gm.flight_date||""),
+    gmailMessageId:messageId,
+    fileId:String(canonical.file_id||""),
+    versionId:String(canonical.version_id||""),
+    changeType:"R226_SHA_DUPLICATE_RELINKED",
+    before:{
+      staleVersionId,
+      staleFileId,
+      staleDriveId,
+      staleR2Key
+    },
+    after:{
+      canonicalVersionId:String(canonical.version_id||""),
+      canonicalFileId:String(canonical.file_id||""),
+      sha256:String(canonical.sha256||""),
+      relinked,
+      driveTrashed,
+      driveTrashError,
+      r2Deleted
+    }
+  }).catch(()=>{});
+
+  return {
+    staleVersionId,
+    canonicalVersionId:String(canonical.version_id||""),
+    sha256:String(canonical.sha256||""),
+    relinked,
+    driveTrashed,
+    driveTrashError,
+    r2Deleted
+  };
+}
+
+async function r226ConsolidateMessageSha(env,messageId){
+  const gm=await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,airline,flight_number,flight_date,received_at,internal_date
+    FROM gmail_messages
+    WHERE gmail_message_id=?
+    LIMIT 1
+  `).bind(messageId).first().catch(()=>null);
+
+  if(!gm)return {messageId,applied:false,reason:"MESSAGE_NOT_FOUND"};
+
+  const airline=String(gm.airline||"").trim().toUpperCase();
+  const flightNumber=String(gm.flight_number||"").trim().toUpperCase();
+  const flightDate=lot5CanonicalFlightDate(
+    gm.flight_date||"",
+    gm.received_at||gm.internal_date||""
+  )||String(gm.flight_date||"");
+
+  if(!/^(BJ|VF)$/.test(airline) || !flightNumber || !flightDate){
+    return {messageId,applied:false,reason:"NOT_RESOLVED_BJ_VF"};
+  }
+
+  gm.airline=airline;
+  gm.flight_number=flightNumber;
+  gm.flight_date=flightDate;
+
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT
+      v.version_id,
+      v.file_id,
+      v.gmail_message_id,
+      v.filename_original,
+      v.mime_type,
+      v.sha256,
+      v.r2_key,
+      v.created_at,
+      f.airline,
+      f.flight_number,
+      f.flight_date,
+      f.document_type,
+      d.drive_file_id,
+      d.drive_folder_id
+    FROM import_file_versions v
+    LEFT JOIN import_files f ON f.file_id=v.file_id
+    LEFT JOIN lot5_drive_files d ON d.version_id=v.version_id
+    WHERE v.gmail_message_id=?
+      AND COALESCE(v.sha256,'')<>''
+    ORDER BY v.created_at ASC
+  `).bind(messageId).all().catch(()=>({results:[]}))).results||[];
+
+  const groups=new Map();
+  for(const r of rows){
+    const sha=String(r.sha256||"").trim().toLowerCase();
+    if(!sha)continue;
+    if(!groups.has(sha))groups.set(sha,[]);
+    groups.get(sha).push(r);
+  }
+
+  const removed=[];
+  for(const [sha,list] of groups.entries()){
+    if(list.length<2)continue;
+
+    const canonical=list.find(r=>r226IsResolvedCanonicalRow(r,gm));
+    if(!canonical)continue;
+
+    for(const stale of list){
+      if(String(stale.version_id)===String(canonical.version_id))continue;
+
+      // Safety gate: only clean legacy unresolved/wrong-identity copies for
+      // EXACT same Gmail message + exact SHA. Never merge two different
+      // canonical BJ/VF flights.
+      const staleA=String(stale.airline||"").trim().toUpperCase();
+      const staleF=String(stale.flight_number||"").trim().toUpperCase();
+      const staleD=String(stale.flight_date||"").trim();
+
+      const clearlyLegacy=
+        !staleA ||
+        staleA==="UNK" ||
+        !staleF ||
+        staleF==="UNIDENTIFIED" ||
+        !staleD ||
+        staleD==="UNKNOWN_DATE" ||
+        staleA!==airline ||
+        staleF!==flightNumber ||
+        staleD!==flightDate;
+
+      if(!clearlyLegacy)continue;
+
+      removed.push(
+        await r226RemoveStaleDuplicate(
+          env,messageId,stale,canonical,gm
+        )
+      );
+    }
+  }
+
+  // Rebuild PREPA after consolidation so one SHA appears only once.
+  await lot5SyncPrepaInboxForMessage(env,messageId,"").catch(()=>{});
+
+  const after=await env.OPS_DB.prepare(`
+    SELECT COUNT(*) AS n
+    FROM import_file_versions
+    WHERE gmail_message_id=?
+  `).bind(messageId).first().catch(()=>({n:0}));
+
+  return {
+    messageId,
+    applied:removed.length>0,
+    airline,
+    flightNumber,
+    flightDate,
+    removedCount:removed.length,
+    remainingVersions:Number(after?.n||0),
+    removed
+  };
+}
+
+
+async function lot5SpecificReadyForMessagesR3(env,messageIds){
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return [];
+  const qs=ids.map(()=>'?').join(',');
+  return (await env.OPS_DB.prepare(`
+    SELECT r.job_id,r.airline,r.flight_number,r.flight_date,r.status,r.parser_mode,r.card_key,r.list_name,
+           j.gmail_message_id,j.version_id,v.r2_key,v.filename_original,v.mime_type
+    FROM import_job_results r
+    JOIN import_jobs j ON j.job_id=r.job_id
+    LEFT JOIN import_file_versions v ON v.version_id=j.version_id
+    WHERE j.gmail_message_id IN (${qs}) AND r.parser_mode='SPECIFIC_LOCKED' AND r.status='READY_SPECIFIC_PARSER'
+    ORDER BY r.updated_at ASC
+  `).bind(...ids).all()).results||[];
+}
+
+async function lot5TestBatchV535(env,body){
+  await ensureLot5Tables(env);
+  const ids=[...new Set((body?.messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  if(ids.length>20)return {ok:false,error:'Maximum 20 messages'};
+  const stored=[]; const replay=[];
+  const r226=[];
+  for(const id of ids){
+    try{stored.push(await storeGmailMessage(env,id));}
+    catch(e){stored.push({messageId:id,status:'ERROR_IMPORT',error:String(e?.message||e)})}
+    await lot5RepairMessageIdentityV533(env,id).catch(()=>{});
+    try{replay.push(await lot5ReplayMissingVersionsR3(env,id));}catch(e){replay.push({messageId:id,error:String(e?.message||e)})}
+
+    // R22.6 — clean legacy UNK copy BEFORE Drive archiving / parser processing.
+    try{r226.push(await r226ConsolidateMessageSha(env,id));}
+    catch(e){r226.push({messageId:id,applied:false,error:String(e?.message||e)})}
+  }
+  const driveBefore=await lot5ArchiveDriveForMessagesV535(env,ids);
+  const qs=ids.map(()=>'?').join(',');
+  const jobs=(await env.OPS_DB.prepare(`SELECT * FROM import_jobs WHERE status='QUEUED' AND gmail_message_id IN (${qs}) ORDER BY priority ASC,created_at ASC`).bind(...ids).all()).results||[];
+  const processed=[];
+  for(const job of jobs){
+    try{processed.push(await lot2ProcessOneJob(env,job));}
+    catch(e){processed.push({job_id:job.job_id,error:String(e?.message||e)})}
+  }
+  const driveAfter=await lot5ArchiveDriveForMessagesV535(env,ids);
+  const resultRows=(await env.OPS_DB.prepare(`SELECT r.* FROM import_job_results r JOIN import_jobs j ON j.job_id=r.job_id WHERE j.gmail_message_id IN (${qs}) ORDER BY r.updated_at ASC`).bind(...ids).all()).results||[];
+  let injected=0,waiting=0; const injectionErrors=[];
+  for(const row of resultRows){
+    if(String(row.parser_mode||'')!=='GENERIC')continue;
+    try{const r=await lot3InjectOneResult(env,row,{createMissingFlights:true}); if(r?.status==='INJECTED')injected++; else waiting++;}
+    catch(e){injectionErrors.push({jobId:row.job_id,error:String(e?.message||e)})}
+  }
+  const audits=[];
+  for(const id of ids){
+    await lot5ReconcileOneGmailStateV53(env,id).catch(()=>{});
+    await lot5SyncPrepaInboxForMessage(env,id).catch(()=>{});
+    audits.push(await lot5AuditMessageV534(env,id).catch(e=>({messageId:id,error:String(e?.message||e)})));
+  }
+  const specificReady=await lot5SpecificReadyForMessagesR3(env,ids);
+  return {ok:true,testMode:true,r3:true,messageCount:ids.length,stored,replay,r226,processedJobs:processed.length,driveUploaded:Number(driveBefore.uploaded||0)+Number(driveAfter.uploaded||0),injected,waiting,specificReadyCount:specificReady.length,specificReady,injectionErrors,audits};
+}
+
+async function lot5ReconcileCanonicalStatusesR4(env,limit=2000){
+  const result=await lot5ReconcileGmailStatesV53(env,Math.max(1,Math.min(2000,Number(limit||2000))));
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id FROM gmail_messages
+    WHERE status<>'IGNORED_NON_OPERATIONAL'
+    ORDER BY updated_at DESC LIMIT ?
+  `).bind(Math.max(1,Math.min(2000,Number(limit||2000)))).all()).results||[];
+  let synced=0;
+  for(const r of rows){
+    const id=String(r.gmail_message_id||''); if(!id)continue;
+    try{await lot5SyncPrepaInboxForMessage(env,id);synced++}catch(e){}
+  }
+  return {ok:true,r4:true,reconciled:result.checked||0,counts:result.counts||{},syncCount:synced,errors:result.errors||[]};
+}
+
+
+
+function cleanChunkV310(values,size=60){
+  const out=[];
+  const a=Array.isArray(values)?values:[];
+  for(let i=0;i<a.length;i+=size)out.push(a.slice(i,i+size));
+  return out;
+}
+
+async function cleanSelectByInV310(env,sqlPrefix,column,values,sqlSuffix=''){
+  const out=[];
+  for(const chunk of cleanChunkV310(values)){
+    if(!chunk.length)continue;
+    const ph=chunk.map(()=>'?').join(',');
+    const q=`${sqlPrefix} ${column} IN (${ph}) ${sqlSuffix}`;
+    const rows=(await env.OPS_DB.prepare(q).bind(...chunk).all()).results||[];
+    out.push(...rows);
+  }
+  return out;
+}
+
+async function cleanCountByInV310(env,table,column,values,extraWhere=''){
+  let n=0;
+  for(const chunk of cleanChunkV310(values)){
+    if(!chunk.length)continue;
+    const ph=chunk.map(()=>'?').join(',');
+    const row=await env.OPS_DB.prepare(
+      `SELECT COUNT(*) AS n FROM ${table} WHERE ${column} IN (${ph}) ${extraWhere}`
+    ).bind(...chunk).first();
+    n+=Number(row?.n||0);
+  }
+  return n;
+}
+
+async function cleanDeleteByInV310(env,table,column,values,extraWhere=''){
+  let changes=0;
+  for(const chunk of cleanChunkV310(values)){
+    if(!chunk.length)continue;
+    const ph=chunk.map(()=>'?').join(',');
+    const r=await env.OPS_DB.prepare(
+      `DELETE FROM ${table} WHERE ${column} IN (${ph}) ${extraWhere}`
+    ).bind(...chunk).run();
+    changes+=Number(r?.meta?.changes||0);
+  }
+  return changes;
+}
+
+async function gmailCleanHistoricalSqPurgeR310(env,{dryRun=true,confirm='' }={}){
+  await ensureLot5Tables(env);
+  await ensureGmailPipelineTables(env);
+  await ensureImportProcessorTables(env);
+  await ensureLot3Tables(env);
+
+  const HIST_SENDER_LIKE='%prepasq%';
+
+  const messages=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,subject,sender,flight_number,flight_date,status
+    FROM gmail_messages
+    WHERE UPPER(airline)='SQ'
+      AND LOWER(COALESCE(sender,'')) LIKE ?
+    ORDER BY flight_date,flight_number,first_seen_at
+  `).bind(HIST_SENDER_LIKE).all()).results||[];
+
+  const messageIds=messages.map(r=>String(r.gmail_message_id||'')).filter(Boolean);
+
+  if(!messageIds.length){
+    return {
+      ok:true,
+      version:LOT5_VERSION,
+      mode:dryRun?'DRY_RUN':'APPLY',
+      scope:'SQ historical only / sender contains prepasq',
+      messages:0,
+      note:'Aucune donnée historique SQ PREPASQ trouvée dans gmail_messages.'
+    };
+  }
+
+  const versions=await cleanSelectByInV310(
+    env,
+    `SELECT version_id,file_id,gmail_message_id,r2_key,sha256,filename_original FROM import_file_versions WHERE`,
+    'gmail_message_id',
+    messageIds
+  );
+
+  const versionIds=[...new Set(versions.map(r=>String(r.version_id||'')).filter(Boolean))];
+  const fileIds=[...new Set(versions.map(r=>String(r.file_id||'')).filter(Boolean))];
+
+  const jobs=await cleanSelectByInV310(
+    env,
+    `SELECT job_id,gmail_message_id,file_id,version_id,flight_number,flight_date,status FROM import_jobs WHERE`,
+    'gmail_message_id',
+    messageIds
+  );
+  const jobIds=[...new Set(jobs.map(r=>String(r.job_id||'')).filter(Boolean))];
+
+  let driveRows=[];
+  if(versionIds.length){
+    driveRows=await cleanSelectByInV310(
+      env,
+      `SELECT version_id,identity,drive_file_id,drive_folder_id,filename FROM lot5_drive_files WHERE`,
+      'version_id',
+      versionIds
+    );
+  }
+
+  const identityMap=new Map();
+  for(const r of messages){
+    const fn=String(r.flight_number||'').replace(/\s+/g,'').toUpperCase();
+    const fd=String(r.flight_date||'');
+    if(fn&&fd){
+      identityMap.set(`${fd}|SQ|${fn}`,{airline:'SQ',flightNumber:fn,flightDate:fd});
+    }
+  }
+  for(const r of jobs){
+    const fn=String(r.flight_number||'').replace(/\s+/g,'').toUpperCase();
+    const fd=String(r.flight_date||'');
+    if(fn&&fd){
+      identityMap.set(`${fd}|SQ|${fn}`,{airline:'SQ',flightNumber:fn,flightDate:fd});
+    }
+  }
+  const identities=[...identityMap.entries()].map(([identity,v])=>({identity,...v}));
+
+  const historicalOnly=[];
+  const shared=[];
+  for(const id of identities){
+    const other=await env.OPS_DB.prepare(`
+      SELECT COUNT(*) AS n
+      FROM gmail_messages
+      WHERE UPPER(airline)='SQ'
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+        AND LOWER(COALESCE(sender,'')) NOT LIKE ?
+    `).bind(id.flightNumber,id.flightDate,HIST_SENDER_LIKE).first();
+    const n=Number(other?.n||0);
+    (n>0?shared:historicalOnly).push({...id,nonHistoricalMessageCount:n});
+  }
+
+  let cardsCount=0, injectionsCount=0, resultsCount=0, linksCount=0, changesCount=0, prepaCount=0;
+  if(versionIds.length)cardsCount+=await cleanCountByInV310(env,'flight_import_cards','version_id',versionIds);
+  if(jobIds.length)cardsCount+=await cleanCountByInV310(env,'flight_import_cards','job_id',jobIds);
+  if(fileIds.length)cardsCount+=await cleanCountByInV310(env,'flight_import_cards','file_id',fileIds);
+  if(jobIds.length){
+    resultsCount=await cleanCountByInV310(env,'import_job_results','job_id',jobIds);
+    injectionsCount=await cleanCountByInV310(env,'flight_import_injections','result_job_id',jobIds);
+  }
+  linksCount=await cleanCountByInV310(env,'gmail_message_documents','gmail_message_id',messageIds);
+  changesCount=await cleanCountByInV310(env,'import_changes','gmail_message_id',messageIds);
+  try{prepaCount=await cleanCountByInV310(env,'prepa_inbox','gmail_message_id',messageIds);}catch(_){prepaCount=0;}
+
+  const audit={
+    ok:true,
+    version:LOT5_VERSION,
+    mode:dryRun?'DRY_RUN':'APPLY',
+    scope:'SQ historical only / sender contains prepasq',
+    counts:{
+      messages:messageIds.length,
+      versions:versionIds.length,
+      files:fileIds.length,
+      jobs:jobIds.length,
+      jobResults:resultsCount,
+      messageDocumentLinks:linksCount,
+      flightImportCards:cardsCount,
+      flightImportInjections:injectionsCount,
+      importChanges:changesCount,
+      prepaInbox:prepaCount,
+      driveFiles:driveRows.length,
+      identities:identities.length,
+      historicalOnlyIdentities:historicalOnly.length,
+      sharedIdentities:shared.length
+    },
+    historicalOnlyIdentities:historicalOnly,
+    sharedIdentities:shared,
+    sampleMessages:messages.slice(0,30).map(r=>({
+      messageId:r.gmail_message_id,
+      subject:r.subject,
+      sender:r.sender,
+      flightNumber:r.flight_number,
+      flightDate:r.flight_date,
+      status:r.status
+    })),
+    destructive:false
+  };
+
+  if(dryRun){
+    return audit;
+  }
+
+  if(String(confirm||'')!=='PURGE_PREPASQ_HISTORICAL_SQ'){
+    return {
+      ...audit,
+      ok:false,
+      error:'CONFIRMATION REQUISE',
+      requiredConfirm:'PURGE_PREPASQ_HISTORICAL_SQ',
+      destructive:false
+    };
+  }
+
+  const errors=[];
+  const driveFileIds=[...new Set(driveRows.map(r=>String(r.drive_file_id||'')).filter(Boolean))];
+  const r2Keys=[...new Set(versions.map(r=>String(r.r2_key||'')).filter(Boolean))];
+
+  let driveFilesTrashed=0;
+  if(driveFileIds.length){
+    try{
+      const dr=await trashDriveFoldersDirect(env,driveFileIds);
+      driveFilesTrashed=Number((dr.trashed||[]).length);
+      if((dr.errors||[]).length)errors.push(...dr.errors.map(e=>`DRIVE_FILE:${JSON.stringify(e)}`));
+    }catch(e){errors.push(`DRIVE_FILES:${String(e)}`);}
+  }
+
+  // Trash whole flight folders ONLY when the identity has no non-historical Gmail source.
+  const folderIds=[];
+  for(const id of historicalOnly){
+    const row=await env.OPS_DB.prepare(`
+      SELECT flight_folder_id FROM lot5_drive_folders
+      WHERE identity=? LIMIT 1
+    `).bind(id.identity).first().catch(()=>null);
+    const fid=String(row?.flight_folder_id||'').trim();
+    if(fid)folderIds.push(fid);
+  }
+  let driveFoldersTrashed=0;
+  if(folderIds.length){
+    try{
+      const dr=await trashDriveFoldersDirect(env,folderIds);
+      driveFoldersTrashed=Number((dr.trashed||[]).length);
+      if((dr.errors||[]).length)errors.push(...dr.errors.map(e=>`DRIVE_FOLDER:${JSON.stringify(e)}`));
+    }catch(e){errors.push(`DRIVE_FOLDERS:${String(e)}`);}
+  }
+
+  let r2Deleted=0;
+  if(env.OPS_FILES){
+    for(const key of r2Keys){
+      try{await env.OPS_FILES.delete(key);r2Deleted++;}catch(e){errors.push(`R2:${key}:${String(e)}`);}
+    }
+  }
+
+  // Delete derived/import rows first, always in small D1-safe batches.
+  try{if(versionIds.length)await cleanDeleteByInV310(env,'flight_import_cards','version_id',versionIds);}catch(e){errors.push(`flight_import_cards/version:${String(e)}`);}
+  try{if(jobIds.length)await cleanDeleteByInV310(env,'flight_import_cards','job_id',jobIds);}catch(e){errors.push(`flight_import_cards/job:${String(e)}`);}
+  try{if(fileIds.length)await cleanDeleteByInV310(env,'flight_import_cards','file_id',fileIds);}catch(e){errors.push(`flight_import_cards/file:${String(e)}`);}
+
+  if(jobIds.length){
+    try{await cleanDeleteByInV310(env,'flight_import_injections','result_job_id',jobIds);}catch(e){errors.push(`flight_import_injections:${String(e)}`);}
+    try{await cleanDeleteByInV310(env,'import_job_results','job_id',jobIds);}catch(e){errors.push(`import_job_results:${String(e)}`);}
+    try{await cleanDeleteByInV310(env,'import_jobs','job_id',jobIds);}catch(e){errors.push(`import_jobs:${String(e)}`);}
+  }
+
+  try{await cleanDeleteByInV310(env,'import_changes','gmail_message_id',messageIds);}catch(e){errors.push(`import_changes:${String(e)}`);}
+  try{await cleanDeleteByInV310(env,'gmail_message_documents','gmail_message_id',messageIds);}catch(e){errors.push(`gmail_message_documents:${String(e)}`);}
+  try{await cleanDeleteByInV310(env,'prepa_inbox','gmail_message_id',messageIds);}catch(e){errors.push(`prepa_inbox:${String(e)}`);}
+
+  if(versionIds.length){
+    try{await cleanDeleteByInV310(env,'lot5_drive_files','version_id',versionIds);}catch(e){errors.push(`lot5_drive_files:${String(e)}`);}
+    try{await cleanDeleteByInV310(env,'import_file_versions','version_id',versionIds);}catch(e){errors.push(`import_file_versions:${String(e)}`);}
+  }
+
+  // Remove empty import_files after historical versions are removed.
+  for(const fileId of fileIds){
+    const left=await env.OPS_DB.prepare(`SELECT COUNT(*) AS n FROM import_file_versions WHERE file_id=?`).bind(fileId).first().catch(()=>({n:1}));
+    if(Number(left?.n||0)===0){
+      await env.OPS_DB.prepare(`DELETE FROM import_files WHERE file_id=?`).bind(fileId).run().catch(e=>errors.push(`import_files:${fileId}:${String(e)}`));
+    }
+  }
+
+  // Delete whole flight/prepa/notes/attachments/folder metadata only when no non-historical source exists.
+  let flightsDeleted=0, flightAttachmentsDeleted=0, flightNotesDeleted=0, folderRowsDeleted=0;
+  for(const id of historicalOnly){
+    const flightRows=(await env.OPS_DB.prepare(`
+      SELECT identity FROM flights
+      WHERE UPPER(airline)='SQ'
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(id.flightNumber,id.flightDate).all().catch(()=>({results:[]}))).results||[];
+
+    for(const fr of flightRows){
+      const ident=String(fr.identity||'').trim();
+      if(!ident)continue;
+
+      // remove any legacy R2 attachments belonging to this historical-only flight
+      const atts=(await env.OPS_DB.prepare(`SELECT r2_key FROM flight_attachments WHERE flight_identity=?`).bind(ident).all().catch(()=>({results:[]}))).results||[];
+      if(env.OPS_FILES){
+        for(const a of atts){
+          const key=String(a.r2_key||'').trim();
+          if(key){
+            try{await env.OPS_FILES.delete(key);r2Deleted++;}catch(e){errors.push(`R2_LEGACY:${key}:${String(e)}`);}
+          }
+        }
+      }
+      const ares=await env.OPS_DB.prepare(`DELETE FROM flight_attachments WHERE flight_identity=?`).bind(ident).run().catch(()=>null);
+      flightAttachmentsDeleted+=Number(ares?.meta?.changes||0);
+      const nres=await env.OPS_DB.prepare(`DELETE FROM flight_notes WHERE flight_identity=?`).bind(ident).run().catch(()=>null);
+      flightNotesDeleted+=Number(nres?.meta?.changes||0);
+    }
+
+    const fres=await env.OPS_DB.prepare(`
+      DELETE FROM flights
+      WHERE UPPER(airline)='SQ'
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(id.flightNumber,id.flightDate).run().catch(()=>null);
+    flightsDeleted+=Number(fres?.meta?.changes||0);
+    if(fres?.meta?.changes)await bumpFlightsEpoch(env);
+
+    // remove any remaining prepa rows for this historical-only identity
+    await env.OPS_DB.prepare(`
+      DELETE FROM prepa_inbox
+      WHERE UPPER(airline)='SQ'
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(id.flightNumber,id.flightDate).run().catch(()=>{});
+
+    const dres=await env.OPS_DB.prepare(`DELETE FROM lot5_drive_folders WHERE identity=?`).bind(id.identity).run().catch(()=>null);
+    folderRowsDeleted+=Number(dres?.meta?.changes||0);
+  }
+
+  try{await cleanDeleteByInV310(env,'gmail_messages','gmail_message_id',messageIds);}catch(e){errors.push(`gmail_messages:${String(e)}`);}
+
+  return {
+    ...audit,
+    mode:'APPLY',
+    destructive:true,
+    applied:true,
+    deleted:{
+      driveFilesTrashed,
+      driveFoldersTrashed,
+      r2Deleted,
+      flightsDeleted,
+      flightAttachmentsDeleted,
+      flightNotesDeleted,
+      driveFolderRowsDeleted:folderRowsDeleted
+    },
+    errors
+  };
+}
+
+
+const SQ_R2_ORPHAN_KEYS_R311=[
+  "prepa/2026-08-30/SQ/SQ335/1a0607eac2d327c6/1fc47ee335842f0ffdb8b0ac89c50610316e9054aec5d38d4c78d174dffa80d3_altea_report.pdf",
+  "prepa/2026-08-30/SQ/SQ335/1a05b8fdd82d4c76/076031d38d055b1a07d62b29d209634c42cc4a3e299e46a7e5b7c072d6a9c6ca_altea_report.pdf",
+  "prepa/2026-09-04/SQ/SQ335/1a0609b18f704185/572fb37e25a952f5b3a396c337cf7cd50acd78769177f74c093988316de9687e_altea_report.pdf",
+  "prepa/UNKNOWN_DATE/SQ/SQ337/1a05b8f84c743d17/7ed732c7d3816303eed1be7b2bf56876f056e573307b6e309d45a99cf14bd1e1_altea_report.pdf",
+  "prepa/UNKNOWN_DATE/SQ/SQ337/1a05b8f84c743d17/7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6_mail_body_operational.txt",
+  "prepa/2026-09-05/SQ/SQ335/1a06425e055e64ac/87e3d112da5ccffd50abf36d5abc7d8432f0e6ebb64ddfe5b7c132ba340a033e_altea_report.pdf",
+  "prepa/2026-09-04/SQ/SQ337/1a0607f08f19fa78/89e5ead6528e539f78d3c90692206ab4f150878c1fca83c199195eadf8c64414_altea_report.pdf"
+];
+
+async function gmailCleanSqR2OrphanCleanupR311(env,{dryRun=true,confirm=''}={}){
+  const keys=SQ_R2_ORPHAN_KEYS_R311.slice();
+
+  if(!env.OPS_FILES){
+    return {
+      ok:false,
+      version:LOT5_VERSION,
+      error:"R2_BINDING_MISSING",
+      binding:"OPS_FILES"
+    };
+  }
+
+  const report=[];
+  for(const key of keys){
+    let exists=false;
+    let size=null;
+    let etag=null;
+    try{
+      const head=await env.OPS_FILES.head(key);
+      if(head){
+        exists=true;
+        size=Number(head.size||0);
+        etag=String(head.etag||head.httpEtag||"");
+      }
+    }catch(e){
+      report.push({key,exists:null,error:`HEAD:${String(e)}`});
+      continue;
+    }
+
+    report.push({key,exists,size,etag});
+  }
+
+  if(dryRun){
+    return {
+      ok:true,
+      version:LOT5_VERSION,
+      mode:"DRY_RUN",
+      destructive:false,
+      total:keys.length,
+      existing:report.filter(x=>x.exists===true).length,
+      missing:report.filter(x=>x.exists===false).length,
+      items:report
+    };
+  }
+
+  if(String(confirm||"")!=="DELETE_SQ_R2_ORPHANS_7"){
+    return {
+      ok:false,
+      version:LOT5_VERSION,
+      mode:"APPLY",
+      destructive:false,
+      error:"CONFIRMATION REQUISE",
+      requiredConfirm:"DELETE_SQ_R2_ORPHANS_7",
+      items:report
+    };
+  }
+
+  const deleted=[];
+  const alreadyMissing=[];
+  const errors=[];
+
+  for(const item of report){
+    const key=item.key;
+
+    if(item.exists===false){
+      alreadyMissing.push(key);
+      continue;
+    }
+
+    if(item.exists!==true){
+      errors.push({key,error:item.error||"UNKNOWN_STATE"});
+      continue;
+    }
+
+    try{
+      await env.OPS_FILES.delete(key);
+
+      let stillExists=false;
+      try{
+        const head2=await env.OPS_FILES.head(key);
+        stillExists=!!head2;
+      }catch(_){}
+
+      if(stillExists){
+        errors.push({key,error:"DELETE_NOT_CONFIRMED"});
+      }else{
+        deleted.push(key);
+      }
+    }catch(e){
+      errors.push({key,error:String(e)});
+    }
+  }
+
+  return {
+    ok:errors.length===0,
+    version:LOT5_VERSION,
+    mode:"APPLY",
+    destructive:true,
+    total:keys.length,
+    deletedCount:deleted.length,
+    alreadyMissingCount:alreadyMissing.length,
+    errorCount:errors.length,
+    deleted,
+    alreadyMissing,
+    errors
+  };
+}
+
+
+async function lot5TestOneMessageR312(env,body){
+  const gmailMessageId=String(body?.gmailMessageId||'').trim();
+  if(!gmailMessageId){
+    return {ok:false,version:LOT5_VERSION,error:'gmailMessageId requis'};
+  }
+
+  // Test strictement ciblé : un seul message Gmail.
+  const gmailMessage=await gmailFetch(
+    env,
+    `/messages/${encodeURIComponent(gmailMessageId)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`
+  ).catch(()=>null);
+
+  if(!gmailMessage){
+    return {
+      ok:false,
+      version:LOT5_VERSION,
+      gmailMessageId,
+      error:'MESSAGE GMAIL INTROUVABLE'
+    };
+  }
+
+  const subject=extractHeader(gmailMessage,'Subject');
+  const sender=extractHeader(gmailMessage,'From');
+  const receivedAt=extractHeader(gmailMessage,'Date');
+
+  const result=await lot5TestBatchV535(env,{messageIds:[gmailMessageId]});
+
+  const gm=await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,subject,sender,airline,flight_number,flight_date,status
+    FROM gmail_messages
+    WHERE gmail_message_id=?
+    LIMIT 1
+  `).bind(gmailMessageId).first().catch(()=>null);
+
+  const versions=(await env.OPS_DB.prepare(`
+    SELECT version_id,filename_original,mime_type,file_size,sha256,r2_key
+    FROM import_file_versions
+    WHERE gmail_message_id=?
+    ORDER BY created_at ASC
+  `).bind(gmailMessageId).all().catch(()=>({results:[]}))).results||[];
+
+  const drive=(await env.OPS_DB.prepare(`
+    SELECT d.version_id,d.identity,d.drive_file_id,d.drive_folder_id,d.filename
+    FROM lot5_drive_files d
+    JOIN import_file_versions v ON v.version_id=d.version_id
+    WHERE v.gmail_message_id=?
+    ORDER BY d.uploaded_at ASC
+  `).bind(gmailMessageId).all().catch(()=>({results:[]}))).results||[];
+
+  const jobs=(await env.OPS_DB.prepare(`
+    SELECT j.job_id,j.status AS job_status,j.job_type,j.version_id,
+           r.status AS result_status,r.parser_mode,r.flight_number,r.flight_date
+    FROM import_jobs j
+    LEFT JOIN import_job_results r ON r.job_id=j.job_id
+    WHERE j.gmail_message_id=?
+    ORDER BY j.created_at ASC
+  `).bind(gmailMessageId).all().catch(()=>({results:[]}))).results||[];
+
+  return {
+    ...result,
+    version:LOT5_VERSION,
+    oneMessageOnly:true,
+    gmail:{
+      gmailMessageId,
+      subject,
+      sender,
+      receivedAt
+    },
+    resolved:gm?{
+      airline:String(gm.airline||''),
+      flightNumber:String(gm.flight_number||''),
+      flightDate:String(gm.flight_date||''),
+      status:String(gm.status||'')
+    }:null,
+    documentCount:versions.length,
+    documents:versions.map(v=>({
+      versionId:v.version_id,
+      filename:v.filename_original,
+      mimeType:v.mime_type,
+      size:Number(v.file_size||0),
+      sha256:v.sha256,
+      r2Key:v.r2_key
+    })),
+    driveCount:drive.length,
+    drive,
+    jobs
+  };
+}
+
+
+
+/* =========================================================
+   V50.30 R22.3 — BJ / VF PDF_ GMAIL IDENTITY BOOTSTRAP
+   Infrastructure only.
+   SQ/TK/BJ/VF/TW parsers remain untouched.
+
+   Problem fixed:
+   - Gmail clean intake stored BJ/VF pdf_ documents in R2/D1
+   - but gmail_messages had no airline/flight/date
+   - therefore lot5SyncPrepaInboxForMessage() did not create PREPA rows
+
+   Identity source:
+     03/Sep/2026 BJ511 CDG - TUN
+     03/Sep/2026 VF12  CDG - SAW
+   ========================================================= */
+
+const R223_MONTHS={
+  JAN:"01",FEB:"02",MAR:"03",APR:"04",MAY:"05",JUN:"06",
+  JUL:"07",AUG:"08",SEP:"09",OCT:"10",NOV:"11",DEC:"12"
+};
+
+function r223IsoDate(day,mon,year){
+  const mm=R223_MONTHS[String(mon||"").toUpperCase()];
+  const dd=String(Number(day||0)).padStart(2,"0");
+  const yyyy=String(year||"");
+  if(!mm || !/^20\d{2}$/.test(yyyy) || !/^\d{2}$/.test(dd))return "";
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function r223DetectBjIdentityFromPdfText(text){
+  // Header observé pour BJ (Nouvelair) : "03/Sep/2026 BJ511 CDG - TUN".
+  // Fonction et regex indépendantes de VF : une évolution du format BJ ne
+  // touche jamais r223DetectVfIdentityFromPdfText, et inversement.
+  // On n'utilise volontairement jamais l'horodatage du nom de fichier pdf_* :
+  // la date du vol vient uniquement de l'en-tête du document.
+  const raw=String(text||"")
+    .replace(/\u00a0/g," ")
+    .replace(/\r/g,"\n");
+
+  const m=raw.match(
+    /\b(\d{1,2})\/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\/(20\d{2})\s+(BJ)\s*(\d{1,4})\s+([A-Z]{3})\s*[-\u2013]\s*([A-Z]{3})\b/i
+  );
+  if(!m)return null;
+
+  const airline=String(m[4]||"").toUpperCase();
+  const flightNumber=`${airline}${String(m[5]||"").replace(/\D/g,"")}`;
+  const flightDate=r223IsoDate(m[1],m[2],m[3]);
+  const origin=String(m[6]||"").toUpperCase();
+  const destination=String(m[7]||"").toUpperCase();
+
+  if(!/^BJ\d{1,4}$/.test(flightNumber))return null;
+  if(!/^20\d{2}-\d{2}-\d{2}$/.test(flightDate))return null;
+
+  return {
+    airline,
+    flightNumber,
+    flightDate,
+    origin,
+    destination,
+    source:"PDF_HEADER"
+  };
+}
+
+function r223DetectVfIdentityFromPdfText(text){
+  // Header observé pour VF (AJet) : "03/Sep/2026 VF12 CDG - SAW".
+  // Fonction et regex indépendantes de BJ : une évolution du format VF ne
+  // touche jamais r223DetectBjIdentityFromPdfText, et inversement.
+  // On n'utilise volontairement jamais l'horodatage du nom de fichier pdf_* :
+  // la date du vol vient uniquement de l'en-tête du document.
+  const raw=String(text||"")
+    .replace(/\u00a0/g," ")
+    .replace(/\r/g,"\n");
+
+  const m=raw.match(
+    /\b(\d{1,2})\/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\/(20\d{2})\s+(VF)\s*(\d{1,4})\s+([A-Z]{3})\s*[-\u2013]\s*([A-Z]{3})\b/i
+  );
+  if(!m)return null;
+
+  const airline=String(m[4]||"").toUpperCase();
+  const flightNumber=`${airline}${String(m[5]||"").replace(/\D/g,"")}`;
+  const flightDate=r223IsoDate(m[1],m[2],m[3]);
+  const origin=String(m[6]||"").toUpperCase();
+  const destination=String(m[7]||"").toUpperCase();
+
+  if(!/^VF\d{1,4}$/.test(flightNumber))return null;
+  if(!/^20\d{2}-\d{2}-\d{2}$/.test(flightDate))return null;
+
+  return {
+    airline,
+    flightNumber,
+    flightDate,
+    origin,
+    destination,
+    source:"PDF_HEADER"
+  };
+}
+
+function r223DetectBjVfIdentityFromPdfText(text){
+  // Point d'entrée conservé pour les appelants qui ne savent pas encore, à ce
+  // stade, laquelle des deux compagnies ils lisent (le préfixe "pdf_" est
+  // commun aux deux). La détection elle-même reste individuelle par
+  // compagnie via r223DetectBjIdentityFromPdfText / r223DetectVfIdentityFromPdfText.
+  return r223DetectBjIdentityFromPdfText(text) || r223DetectVfIdentityFromPdfText(text);
+}
+
+function r223IsPdfOperationalFilename(filename){
+  const f=String(filename||"").trim();
+  // R22.4: operational rule is the LOGICAL filename prefix.
+  // BJ may arrive without .pdf extension and as application/octet-stream.
+  // VF may arrive as .pdf.pdf. Extension must therefore never be mandatory.
+  return /^pdf_/i.test(f);
+}
+
+async function r223ReadBjVfIdentityFromStoredDocuments(env,gmailMessageId){
+  if(!env.OPS_FILES)return {
+    identity:null,
+    checked:0,
+    error:"BINDING R2 OPS_FILES ABSENT"
+  };
+
+  const {results=[]}=await env.OPS_DB.prepare(`
+    SELECT
+      v.version_id,
+      v.file_id,
+      v.filename_original,
+      v.mime_type,
+      v.file_size,
+      v.r2_key,
+      v.created_at
+    FROM import_file_versions v
+    WHERE v.gmail_message_id=?
+    ORDER BY v.created_at ASC, v.version_id ASC
+  `).bind(gmailMessageId).all();
+
+  const candidates=results.filter(r=>
+    r223IsPdfOperationalFilename(r.filename_original)
+  );
+
+  let checked=0;
+  const diagnostics=[];
+
+  for(const row of candidates){
+    const r2Key=String(row.r2_key||"").trim();
+    if(!r2Key){
+      diagnostics.push({
+        versionId:String(row.version_id||""),
+        filename:String(row.filename_original||""),
+        status:"NO_R2_KEY"
+      });
+      continue;
+    }
+
+    const object=await env.OPS_FILES.get(r2Key);
+    if(!object){
+      diagnostics.push({
+        versionId:String(row.version_id||""),
+        filename:String(row.filename_original||""),
+        status:"R2_NOT_FOUND"
+      });
+      continue;
+    }
+
+    checked++;
+
+    /*
+     * Reuse the already validated Worker PDF extraction engine.
+     * This is NOT an airline parser change.
+     */
+    const extracted=await lot2ExtractTextFromR2Object(
+      object,
+      String(row.filename_original||""),
+      String(row.mime_type||"application/pdf")
+    );
+
+    const text=String(extracted?.text||"");
+    const identity=r223DetectBjVfIdentityFromPdfText(text);
+
+    diagnostics.push({
+      versionId:String(row.version_id||""),
+      filename:String(row.filename_original||""),
+      readable:!!extracted?.readable,
+      extractionReason:String(extracted?.reason||""),
+      identity:identity||null
+    });
+
+    if(identity){
+      return {
+        identity,
+        checked,
+        candidates:candidates.length,
+        diagnostics
+      };
+    }
+  }
+
+  return {
+    identity:null,
+    checked,
+    candidates:candidates.length,
+    diagnostics
+  };
+}
+
+async function r223PersistBjVfIdentity(env,gmailMessageId,identity){
+  if(!identity)return {updated:false};
+
+  const airline=String(identity.airline||"").toUpperCase();
+  const flightNumber=String(identity.flightNumber||"").toUpperCase();
+  const flightDate=String(identity.flightDate||"");
+
+  if(!/^(BJ|VF)$/.test(airline))return {updated:false};
+  if(!new RegExp(`^${airline}\\d{1,4}$`).test(flightNumber))return {updated:false};
+  if(!/^20\d{2}-\d{2}-\d{2}$/.test(flightDate))return {updated:false};
+
+  await env.OPS_DB.prepare(`
+    UPDATE gmail_messages
+    SET
+      airline=?,
+      flight_number=?,
+      flight_date=?,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE gmail_message_id=?
+  `).bind(
+    airline,
+    flightNumber,
+    flightDate,
+    gmailMessageId
+  ).run();
+
+  /*
+   * Keep document/job identity coherent with the canonical Gmail identity.
+   * No document payload and no parser result is modified.
+   */
+  await env.OPS_DB.prepare(`
+    UPDATE import_files
+    SET
+      airline=?,
+      flight_number=?,
+      flight_date=?,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE file_id IN (
+      SELECT DISTINCT file_id
+      FROM import_file_versions
+      WHERE gmail_message_id=?
+    )
+  `).bind(
+    airline,
+    flightNumber,
+    flightDate,
+    gmailMessageId
+  ).run().catch(()=>{});
+
+  await env.OPS_DB.prepare(`
+    UPDATE import_jobs
+    SET
+      airline=?,
+      flight_number=?,
+      flight_date=?,
+      updated_at=CURRENT_TIMESTAMP
+    WHERE gmail_message_id=?
+  `).bind(
+    airline,
+    flightNumber,
+    flightDate,
+    gmailMessageId
+  ).run().catch(()=>{});
+
+  await ensureAirlineProfile(env,airline);
+
+  /*
+   * Existing PREPA bridge. It reads import_file_versions + Drive links
+   * and creates/updates prepa_inbox. We do not duplicate its logic.
+   */
+  await lot5SyncPrepaInboxForMessage(
+    env,
+    gmailMessageId,
+    ""
+  );
+
+  return {
+    updated:true,
+    airline,
+    flightNumber,
+    flightDate
+  };
+}
+
+async function lot5TestOneMessageR223(env,body){
+  /*
+   * Preserve the complete R3.12 clean intake first.
+   * R22.3 is only a post-intake identity/bootstrap layer.
+   */
+  const base=await lot5TestOneMessageR312(env,body);
+  const gmailMessageId=String(body?.gmailMessageId||"").trim();
+
+  if(!gmailMessageId){
+    return base;
+  }
+
+  const gm=await env.OPS_DB.prepare(`
+    SELECT
+      gmail_message_id,
+      gmail_thread_id,
+      subject,
+      sender,
+      airline,
+      flight_number,
+      flight_date,
+      status,
+      received_at
+    FROM gmail_messages
+    WHERE gmail_message_id=?
+    LIMIT 1
+  `).bind(gmailMessageId).first().catch(()=>null);
+
+  /*
+   * Do not interfere with an already resolved identity, whatever the airline.
+   */
+  if(
+    gm &&
+    String(gm.airline||"").trim() &&
+    String(gm.flight_number||"").trim() &&
+    String(gm.flight_date||"").trim()
+  ){
+    const resolvedAirline=String(gm.airline||"").trim().toUpperCase();
+    let prepaSynced=false;
+
+    // R22.4: when pre-gate resolution already found BJ/VF identity,
+    // force the existing PREPA bridge once documents have been stored.
+    if(/^(BJ|VF)$/.test(resolvedAirline)){
+      await ensureAirlineProfile(env,resolvedAirline).catch(()=>{});
+      await lot5SyncPrepaInboxForMessage(env,gmailMessageId,"").catch(()=>{});
+      const prepa=await env.OPS_DB.prepare(`
+        SELECT id
+        FROM prepa_inbox
+        WHERE gmail_message_id=?
+        LIMIT 1
+      `).bind(gmailMessageId).first().catch(()=>null);
+      prepaSynced=!!prepa;
+    }
+
+    return {
+      ...base,
+      airline:String(gm.airline||""),
+      flightNumber:String(gm.flight_number||""),
+      flightDate:String(gm.flight_date||""),
+      r223:{
+        applied:false,
+        reason:"IDENTITY_ALREADY_RESOLVED",
+        prepaCreated:prepaSynced,
+        identity:{
+          airline:String(gm.airline||""),
+          flightNumber:String(gm.flight_number||""),
+          flightDate:String(gm.flight_date||"")
+        }
+      }
+    };
+  }
+
+  const resolved=await r223ReadBjVfIdentityFromStoredDocuments(
+    env,
+    gmailMessageId
+  );
+
+  if(!resolved.identity){
+    /*
+     * No terminal error: the normal retry/review lifecycle remains available.
+     */
+    return {
+      ...base,
+      r223:{
+        applied:false,
+        reason:"NO_BJ_VF_PDF_HEADER_IDENTITY",
+        checked:Number(resolved.checked||0),
+        candidates:Number(resolved.candidates||0),
+        diagnostics:resolved.diagnostics||[]
+      }
+    };
+  }
+
+  const persisted=await r223PersistBjVfIdentity(
+    env,
+    gmailMessageId,
+    resolved.identity
+  );
+
+  const prepa=await env.OPS_DB.prepare(`
+    SELECT
+      id,
+      airline,
+      flight_number,
+      flight_date,
+      status,
+      subject,
+      attachments_json
+    FROM prepa_inbox
+    WHERE gmail_message_id=?
+    LIMIT 1
+  `).bind(gmailMessageId).first().catch(()=>null);
+
+  return {
+    ...base,
+    airline:resolved.identity.airline,
+    flightNumber:resolved.identity.flightNumber,
+    flightDate:resolved.identity.flightDate,
+    r223:{
+      applied:true,
+      source:"PDF_HEADER",
+      identity:resolved.identity,
+      persisted,
+      prepaCreated:!!prepa,
+      prepaStatus:String(prepa?.status||""),
+      checked:Number(resolved.checked||0),
+      candidates:Number(resolved.candidates||0),
+      diagnostics:resolved.diagnostics||[]
+    }
+  };
+}
+
+
+async function lot5SqControlledBridgeR313(env,body){
+  await ensureLot5Tables(env);
+  const airline=String(body?.airline||'SQ').trim().toUpperCase();
+  const flightNumber=String(body?.flightNumber||'').trim().toUpperCase();
+  const flightDate=lot5CanonicalFlightDate(body?.flightDate||'');
+  if(airline!=='SQ'||!/^SQ\d{2,4}$/.test(flightNumber)||!flightDate){
+    return {ok:false,version:LOT5_VERSION,error:'IDENTITE SQ INVALIDE'};
+  }
+
+  const candidates=(await env.OPS_DB.prepare(`
+    SELECT r.job_id,r.status,r.parser_mode,r.card_key,r.list_name,r.flight_date,
+           j.gmail_message_id,j.version_id,
+           v.filename_original,v.mime_type,v.r2_key
+    FROM import_job_results r
+    JOIN import_jobs j ON j.job_id=r.job_id
+    LEFT JOIN import_file_versions v ON v.version_id=j.version_id
+    WHERE UPPER(r.airline)='SQ'
+      AND UPPER(r.flight_number)=?
+      AND r.parser_mode='SPECIFIC_LOCKED'
+    ORDER BY r.updated_at ASC
+  `).bind(flightNumber).all()).results||[];
+
+  const matched=candidates.filter(r=>lot5CanonicalFlightDate(r.flight_date||'')===flightDate);
+  const ready=matched.filter(r=>String(r.status||'').toUpperCase()==='READY_SPECIFIC_PARSER');
+  const injected=matched.filter(r=>String(r.status||'').toUpperCase()==='INJECTED');
+  const messageIds=[...new Set(matched.map(r=>String(r.gmail_message_id||'')).filter(Boolean))];
+
+  const prepaRows=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,airline,flight_number,flight_date,status,subject,sender,attachments_json,body_text
+    FROM prepa_inbox
+    WHERE UPPER(airline)='SQ' AND UPPER(flight_number)=?
+    ORDER BY created_at ASC
+  `).bind(flightNumber).all().catch(()=>({results:[]}))).results||[];
+  const prepaMatched=prepaRows.filter(r=>lot5CanonicalFlightDate(r.flight_date||'')===flightDate);
+
+  return {
+    ok:true,
+    version:LOT5_VERSION,
+    controlled:true,
+    destructive:false,
+    identity:`${flightDate}|SQ|${flightNumber}`,
+    airline:'SQ',
+    flightNumber,
+    flightDate,
+    readyCount:ready.length,
+    alreadyInjectedCount:injected.length,
+    messageCount:messageIds.length,
+    messageIds,
+    prepaCount:prepaMatched.length,
+    ready:ready.map(r=>({
+      jobId:r.job_id,
+      gmailMessageId:r.gmail_message_id,
+      versionId:r.version_id,
+      cardKey:r.card_key,
+      listName:r.list_name,
+      filename:r.filename_original,
+      mimeType:r.mime_type,
+      r2Key:r.r2_key
+    })),
+    note:'READ-ONLY bridge plan. Parser SQ must run in BUILD143 existing browser code.'
+  };
+}
+
+async function deleteAlyziaGmailLabels(env){
+  const labelsDeleted=[];
+  try{
+    const labels=await gmailFetch(env,'/labels');
+    const suffixes=new Set(Object.values(CLEAN_LABEL_SUFFIX));
+    for(const l of labels.labels||[]){
+      const name=String(l.name||'');
+      const oldGlobal=Object.values(GMAIL_LABELS).includes(name);
+      const p=name.split('/');
+      const cleanCompany=name.startsWith('ALYZIA/')&&p.length>=3&&suffixes.has(p[p.length-1]);
+      if(!oldGlobal&&!cleanCompany)continue;
+      await gmailFetch(env,`/labels/${encodeURIComponent(l.id)}`,{method:'DELETE'}).catch(()=>{});
+      labelsDeleted.push(name);
+    }
+    GMAIL_LABEL_ID_CACHE=null;
+    return {ok:true,labelsDeleted};
+  }catch(e){
+    return {ok:false,error:String(e?.message||e),labelsDeleted};
+  }
+}
+
+async function handleLot5(request,env,url){
+  if(!url.pathname.startsWith('/api/autopilot') && !url.pathname.startsWith('/api/gmail-clean'))return null;
+  try{
+    if(url.pathname==='/api/autopilot/status'&&request.method==='GET')return json(await lot5Status(env));
+    if(url.pathname==='/api/autopilot/test-batch'&&request.method==='POST'){ const body=await request.json().catch(()=>({})); return json(await lot5TestBatchV535(env,body)); }
+    if(url.pathname==='/api/autopilot/run'&&(request.method==='POST'||request.method==='GET')){
+      // GET accepté en plus de POST : permet de déclencher un cycle complet
+      // (sync Gmail + classification + injection) d'un simple clic sur mobile,
+      // sans attendre le prochain passage du cron (toutes les 5 min).
+      const body=request.method==='POST'?await request.json().catch(()=>({})):{};
+      return json(await lot5AutoPilotRun(env,{triggerType:'MANUAL',gmailQuery:String(body?.query||url.searchParams.get('query')||''),gmailMax:Number(body?.maxMessages||url.searchParams.get('maxMessages')||0)}));
+    }
+    if(url.pathname==='/api/autopilot/reconcile-canonical-status'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot5ReconcileCanonicalStatusesR4(env,Number(body?.limit||2000)));
+    }
+    if(url.pathname==='/api/autopilot/reconcile-labels'&&(request.method==='POST'||request.method==='GET')){
+      // GET accepté (comme requeue-airline/reset-flight-lists) pour un lien cliquable
+      // depuis un téléphone, sans devoir passer par le cron (toutes les 5 min).
+      // Défaut réduit à 15 (Erreur 1102 vue en direct à 40 après la migration SQ :
+      // chaque mail reconcilié peut déclencher Gmail modify + vérif couverture
+      // Drive, ET cet endpoint enchaîne ensuite lot5SyncPrepaInboxRecent sur 100
+      // mails de plus dans la MÊME requête — le total dépasse la limite de
+      // sous-requêtes/temps CPU du Worker bien avant d'atteindre 40).
+      const body=request.method==='POST'?await request.json().catch(()=>({})):null;
+      const result=await lot5ReconcileGmailStatesV53(env,Math.max(1,Math.min(200,Number(body?.limit||url.searchParams.get('limit')||15))));
+      const synced=await lot5SyncPrepaInboxRecent(env);
+      return json({ok:result.ok,result,prepaSynced:synced});
+    }
+    if(url.pathname==='/api/autopilot/repaint-labels'&&(request.method==='POST'||request.method==='GET')){
+      // Recolore les labels Gmail ALYZIA/* déjà créés selon CLEAN_LABEL_COLORS
+      // (changer la constante seule ne touche que les FUTURS labels créés).
+      return json(await lot5RepaintCleanLabelColorsV1(env));
+    }
+    if(url.pathname==='/api/autopilot/reclassify-ignored'&&(request.method==='POST'||request.method==='GET')){
+      // Réévalue les mails marqués IGNORED_NON_OPERATIONAL par une version
+      // antérieure du code (ex. IZ/TB avant l'ajout du support iPort) : un
+      // sync normal ne les retouche jamais tant qu'ils restent dans cet état.
+      const body=request.method==='POST'?await request.json().catch(()=>({})):null;
+      return json(await lot5ReclassifyIgnoredV1(env,{
+        airlineHint:body?.airline||url.searchParams.get('airline')||'',
+        subjectLike:body?.subjectLike||url.searchParams.get('subjectLike')||'',
+        limit:Number(body?.limit||url.searchParams.get('limit')||20)
+      }));
+    }
+    if(url.pathname==='/api/autopilot/force-relabel'&&(request.method==='POST'||request.method==='GET')){
+      // Corrige les mails avec plusieurs étiquettes de statut à la fois
+      // (ex. MAIL TRAITÉ + FICHE VOL OK simultanément) en réappliquant le
+      // statut actuel de chaque mail, ce qui force le retrait de toute
+      // étiquette périmée.
+      const body=request.method==='POST'?await request.json().catch(()=>({})):null;
+      return json(await lot5ForceRelabelAllV1(env,Number(body?.limit||url.searchParams.get('limit')||40)));
+    }
+    if(url.pathname==='/api/autopilot/repair-identities'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot5RepairIdentityBacklogV534(env,Number(body?.limit||1200)));
+    }
+    if(url.pathname==='/api/autopilot/sq-controlled-bridge'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot5SqControlledBridgeR313(env,body));
+    }
+    if(url.pathname==='/api/gmail-clean/test-one-message'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot5TestOneMessageR223(env,body));
+    }
+    if(url.pathname==='/api/gmail-clean/purge-historical-sq'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanHistoricalSqPurgeR310(env,{
+        dryRun:body?.dryRun!==false,
+        confirm:String(body?.confirm||'')
+      }));
+    }
+    if(url.pathname==='/api/gmail-clean/cleanup-sq-r2-orphans'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanSqR2OrphanCleanupR311(env,{
+        dryRun:body?.dryRun!==false,
+        confirm:String(body?.confirm||'')
+      }));
+    }
+    if(url.pathname==='/api/gmail-clean/diagnostic'&&request.method==='GET'){
+      return json(await gmailCleanDiagnosticV1(env,Number(url.searchParams.get('limit')||100)));
+    }
+    if(url.pathname==='/api/gmail-clean/link-audit'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanLinkAuditV31(env,body?.messageIds||[]));
+    }
+    if(url.pathname==='/api/gmail-clean/backfill-links'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanBackfillExistingLinksV31(env,body?.messageIds||[]));
+    }
+    if(url.pathname==='/api/gmail-clean/replay-sq-documents'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanReplaySqDocumentsV31(env,body?.messageIds||[]));
+    }
+    if(url.pathname==='/api/gmail-clean/merge-links-semantic'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanSemanticLinkMergeV36(env,body?.messageIds||[],body?.dryRun!==false));
+    }
+    if(url.pathname==='/api/gmail-clean/merge-links'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanLinkMergeV35(env,body?.messageIds||[],body?.dryRun!==false));
+    }
+    if(url.pathname==='/api/gmail-clean/merge-sq-sha'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanMergeSqShaV34(env,body?.messageIds||[],body?.dryRun!==false));
+    }
+    if(url.pathname==='/api/gmail-clean/sha-audit'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await gmailCleanShaAuditV33(env,body?.messageIds||[]));
+    }
+    if(url.pathname==='/api/autopilot/dry-list-survey'&&request.method==='GET'){
+      return json(await lot5DryGmailListSurveyV1(env,{
+        query:url.searchParams.get('query')||'in:anywhere',
+        maxMessages:Number(url.searchParams.get('maxMessages')||40),
+        airlineFilter:url.searchParams.get('airline')||''
+      }));
+    }
+    if(url.pathname==='/api/autopilot/dry-raw-message-dump'&&request.method==='GET'){
+      return json(await lot5DryRawMessageDumpV1(env,{
+        query:url.searchParams.get('query')||'in:anywhere',
+        maxMessages:Number(url.searchParams.get('maxMessages')||20)
+      }));
+    }
+    if(url.pathname==='/api/autopilot/specific-generic-preview'&&request.method==='GET'){
+      const messageId=String(url.searchParams.get('messageId')||'').trim();
+      if(!messageId)return json({ok:false,error:'messageId REQUIS'});
+      return json(await lot5SpecificGenericPreviewV1(env,messageId,url.searchParams.get('airline')||''));
+    }
+    if(url.pathname==='/api/autopilot/specific-merge-preview'&&request.method==='GET'){
+      const messageId=String(url.searchParams.get('messageId')||'').trim();
+      if(!messageId)return json({ok:false,error:'messageId REQUIS'});
+      return json(await lot5SpecificMergePreviewV1(env,messageId,url.searchParams.get('airline')||''));
+    }
+    if(url.pathname==='/api/autopilot/flight-summary'&&request.method==='GET'){
+      const identity=String(url.searchParams.get('identity')||'').trim();
+      if(!identity)return json({ok:false,error:'identity REQUISE (format AAAA-MM-JJ|CIE|N°VOL)'});
+      return json(await lot5FlightSummaryV1(env,identity));
+    }
+    if(url.pathname==='/api/autopilot/specific-list-survey'&&request.method==='GET'){
+      const airline=String(url.searchParams.get('airline')||'').trim();
+      if(!airline)return json({ok:false,error:'airline REQUISE'});
+      return json(await lot5SpecificListSurveyV1(env,airline,Number(url.searchParams.get('limit')||30)));
+    }
+    if(url.pathname==='/api/gmail-clean/sq-identity-audit'&&request.method==='GET'){
+      return json(await gmailCleanSqIdentityAuditV37(env,url));
+    }
+    if(url.pathname==='/api/gmail-clean/sq-diagnostic'&&request.method==='GET'){
+      return json(await gmailCleanSqDiagnosticV3(env,Number(url.searchParams.get('limit')||500)));
+    }
+    if(url.pathname==='/api/autopilot/specific-browser-complete'&&request.method==='POST'){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot5SpecificBrowserCompleteV535(env,body));
+    }
+    if(url.pathname==='/api/autopilot/audit'&&request.method==='GET'){
+      const messageId=String(url.searchParams.get('messageId')||'').trim();
+      if(messageId)return json(await lot5AuditMessageV534(env,messageId));
+      return json(await lot5AuditBacklogV534(env,Number(url.searchParams.get('limit')||100),url.searchParams.get('airline')||'',url.searchParams.get('status')||''));
+    }
+    if(url.pathname==='/api/autopilot/unmapped-lists'&&request.method==='GET'){
+      return json(await lot5UnmappedGenericListsReport(env,{
+        airline:url.searchParams.get('airline')||'',
+        limit:Number(url.searchParams.get('limit')||200)
+      }));
+    }
+    if(url.pathname==='/api/autopilot/unmapped-list-preview'&&request.method==='GET'){
+      return json(await lot5UnmappedListPreviewV1(
+        env,
+        url.searchParams.get('airline')||'',
+        url.searchParams.get('listName')||'',
+        Number(url.searchParams.get('limit')||3)
+      ));
+    }
+    if(url.pathname==='/api/autopilot/flight-import-history'&&request.method==='GET'){
+      /*
+       * Lecture seule : la fiche vol finale (flights.data_json) ne garde
+       * "imports" que si lot3MergeFlightData a tourné dessus depuis
+       * l'introduction de ce champ — une fiche ancienne/jamais retouchée
+       * peut avoir booked/web renseignés sans "imports" du tout, ce qui ne
+       * dit pas si un document nominatif a un jour été reçu pour ce vol.
+       * Cette route interroge directement les tables sources
+       * (import_job_results / flight_import_cards / flight_import_injections)
+       * par identité, indépendamment de ce qui a survécu dans la fiche.
+       */
+      const airline=String(url.searchParams.get('airline')||'').trim().toUpperCase();
+      const flightNumber=String(url.searchParams.get('flightNumber')||'').trim().toUpperCase();
+      const flightDate=String(url.searchParams.get('flightDate')||'').trim();
+      if(!airline||!flightNumber||!flightDate)return json({ok:false,error:'PARAMÈTRES MANQUANTS (airline, flightNumber, flightDate=AAAA-MM-JJ)'},400);
+      const identity=[flightDate,airline,flightNumber].join('|');
+      const [jobResults,cards,injections]=await Promise.all([
+        env.OPS_DB.prepare(`SELECT job_id,version_id,file_id,card_key,list_name,parser_mode,document_type,passenger_count,class_counts_json,status,created_at,updated_at FROM import_job_results WHERE airline=? AND flight_number=? AND flight_date=? ORDER BY created_at DESC LIMIT 50`).bind(airline,flightNumber,flightDate).all(),
+        env.OPS_DB.prepare(`SELECT id,card_key,list_name,source_status,passenger_count,class_counts_json,job_id,created_at,updated_at FROM flight_import_cards WHERE identity=? ORDER BY updated_at DESC LIMIT 50`).bind(identity).all(),
+        env.OPS_DB.prepare(`SELECT result_job_id,status,created_at,updated_at FROM flight_import_injections WHERE identity=? ORDER BY updated_at DESC LIMIT 50`).bind(identity).all()
+      ]);
+      return json({
+        ok:true,identity,
+        importJobResults:jobResults.results||[],
+        flightImportCards:cards.results||[],
+        flightImportInjections:injections.results||[]
+      });
+    }
+    if(url.pathname==='/api/autopilot/requeue-airline'&&(request.method==='POST'||request.method==='GET')){
+      // GET accepté (en plus de POST) pour permettre un simple lien cliquable
+      // depuis un téléphone, sans terminal ni page intermédiaire : la CSP des
+      // Artifacts bloque tout fetch() vers un domaine externe, un bouton dans
+      // une page publiée ne peut donc jamais appeler cette route lui-même.
+      const body=request.method==='POST'?await request.json().catch(()=>({})):null;
+      return json(await lot5RequeueAirlineJobsV54(env,body?.airline||url.searchParams.get('airline')||''));
+    }
+    if(url.pathname==='/api/autopilot/requeue-all'&&(request.method==='POST'||request.method==='GET')){
+      // Reset "à zéro" du traitement pour TOUTES les compagnies en un clic :
+      // requeue complet (import_jobs + étiquette) pour les génériques, et
+      // remise à RECEIVED de l'étiquette Gmail pour les verrouillées (SQ/TK/
+      // BJ/TW n'ont pas de import_jobs serveur à requeue). Ne touche pas aux
+      // fiches de vol déjà construites, ni au code des parseurs.
+      return json(await lot5RequeueAllGenericAirlinesV54(env));
+    }
+    if(url.pathname==='/api/autopilot/reset-flight-lists'&&(request.method==='POST'||request.method==='GET')){
+      /*
+       * Avant le correctif d'upsert par identité (voir lot3MergeFlightData),
+       * les entrées de common_lists se dédupliquaient par CONTENU, pas par
+       * passager : un correctif changeant note/specific pour un passager déjà
+       * injecté ajoutait une copie corrigée à côté de l'ancienne au lieu de la
+       * remplacer, et un simple rejeu (requeue-airline) ne pouvait donc pas
+       * nettoyer des données déjà corrompues en base. Cet endpoint vide
+       * common/common_lists/imports.cards d'une fiche vol précise (elle sera
+       * intégralement reconstruite au prochain requeue) sans toucher au
+       * dossier passager consolidé (base.passengers) ni aux jobs source.
+       */
+      const body=request.method==='POST'?await request.json().catch(()=>({})):null;
+      const airline=String(body?.airline||url.searchParams.get('airline')||'').trim().toUpperCase();
+      const flightNumber=String(body?.flightNumber||url.searchParams.get('flightNumber')||'').trim().toUpperCase();
+      const flightDate=String(body?.flightDate||url.searchParams.get('flightDate')||'').trim();
+      if(!airline||!flightNumber||!flightDate)return json({ok:false,error:'PARAMÈTRES MANQUANTS (airline, flightNumber, flightDate=AAAA-MM-JJ)'},400);
+      const identity=[flightDate,airline,flightNumber].join('|');
+      const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(identity).first();
+      if(!row)return json({ok:false,error:'VOL INTROUVABLE',identity},404);
+      const x=JSON.parse(row.data_json||'{}');
+      const before={
+        common:{...(x.common||{})},
+        commonListsKeys:Object.keys(x.common_lists||{}),
+        booked:{...(x.booked||{})},
+        web:{...(x.web||{})}
+      };
+      x.common={};
+      x.common_lists={};
+      if(x.imports&&typeof x.imports==='object')x.imports.cards={};
+      x.inbound=[];
+      x.outbound=[];
+      /*
+       * base.booked/base.web sont écrits par écrasement de clé (voir
+       * lot3MergeFlightData, "if(card.cardKey==='MASTER'/'WEB')") : une
+       * ancienne lettre de classe qui n'existe plus dans le classCounts
+       * actuel (ex. "Y" avant le passage aux lettres natives par compagnie)
+       * n'est jamais retirée automatiquement. Vidés ici pour repartir propre
+       * au prochain requeue, comme common/common_lists/imports.cards déjà.
+       */
+      x.booked={};
+      x.web={};
+      await upsertFlight(env,x);
+      return json({ok:true,identity,before,message:'Cartes dérivées vidées (dont booked/web) — recliquer sur requeue-airline pour les reconstruire avec le code à jour.'});
+    }
+    if(url.pathname==='/api/autopilot/full-reset'&&request.method==='POST'){
+      /*
+       * Remise à zéro complète, demandée explicitement par l'utilisateur
+       * (session du 16/09) : supprime TOUTES les fiches vol déjà construites
+       * ainsi que tout l'état de synchronisation/traitement Gmail (messages,
+       * fichiers, versions, jobs, résultats), pour repartir d'une base vide
+       * et resynchroniser entièrement depuis Gmail avec le code corrigé.
+       * Supprime aussi les libellés Gmail ALYZIA (ancien schéma global +
+       * schéma par compagnie), pour qu'ils soient recréés proprement au fil
+       * de la resynchronisation plutôt que de porter un état obsolète.
+       *
+       * Bug corrigé (17/09) : prepa_inbox n'était jamais vidée, alors que
+       * /api/prepa/summary lit directement cette table — un full-reset
+       * "réussi" laissait donc l'écran PRÉPA afficher des centaines de
+       * vols/documents résiduels malgré une base soi-disant vide.
+       *
+       * Geste irréversible et à fort impact (efface des données consultées
+       * en direct par les équipes au sol) : protégé par un jeton de
+       * confirmation explicite, jamais déclenchable par erreur via un simple
+       * GET ou un appel automatisé.
+       */
+      const body=await request.json().catch(()=>({}));
+      if(String(body?.confirm||'')!=='YES_WIPE_EVERYTHING'){
+        return json({ok:false,error:'CONFIRMATION MANQUANTE — poser {"confirm":"YES_WIPE_EVERYTHING"} dans le corps de la requête pour exécuter cette remise à zéro irréversible.'},400);
+      }
+      await ensureGmailPipelineTables(env);
+      await ensureImportProcessorTables(env);
+      await ensurePrepaControlTables(env);
+
+      const counts={};
+      for(const table of ['flights','gmail_messages','gmail_message_documents','import_files','import_file_versions','import_jobs','import_job_results','import_changes','flight_import_cards','flight_import_injections','prepa_inbox']){
+        const row=await env.OPS_DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first().catch(()=>null);
+        counts[table]=Number(row?.n||0);
+        await env.OPS_DB.prepare(`DELETE FROM ${table}`).run();
+      }
+      await env.OPS_DB.prepare(`DELETE FROM gmail_sync_state`).run().catch(()=>{});
+
+      const labelResult=await deleteAlyziaGmailLabels(env);
+      if(!labelResult.ok){
+        return json({ok:true,warning:`Tables vidées mais suppression des libellés Gmail échouée : ${labelResult.error}`,deletedRows:counts,labelsDeleted:labelResult.labelsDeleted});
+      }
+
+      return json({ok:true,deletedRows:counts,labelsDeleted:labelResult.labelsDeleted,message:'Base entièrement vidée. Relancer /api/gmail/sync-now par lots pour resynchroniser depuis Gmail.'});
+    }
+    if(url.pathname==='/api/autopilot/delete-labels'&&request.method==='POST'){
+      /*
+       * Supprime uniquement les libellés Gmail ALYZIA (sans toucher aux
+       * tables D1), pour repartir avec des libellés propres même quand la
+       * base n'a pas besoin d'être revidée — ex. après un full-reset dont la
+       * suppression des libellés avait échoué (panne OAuth). Recréés à la
+       * demande par ensureGmailLabel au fil de la resynchronisation, donc
+       * sans danger pour un cycle de sync déjà en cours.
+       */
+      const labelResult=await deleteAlyziaGmailLabels(env);
+      if(!labelResult.ok)return json({ok:false,error:labelResult.error,labelsDeleted:labelResult.labelsDeleted},500);
+      return json({ok:true,labelsDeleted:labelResult.labelsDeleted});
+    }
+    if(url.pathname==='/api/autopilot/clear-drive'&&request.method==='POST'){
+      /*
+       * Vide l'archive Google Drive : déplace le dossier racine PRÉPA
+       * entier vers la corbeille Google (récupérable ~30 jours, donc pas
+       * une perte immédiate et irréversible comme un DELETE définitif).
+       * Google Drive corbeille récursivement tout le contenu d'un dossier
+       * mis à la corbeille — pas besoin d'énumérer chaque sous-dossier/fichier.
+       * Demande explicite de l'utilisateur, dans la continuité de la remise
+       * à zéro complète (base + libellés Gmail + Drive).
+       */
+      const rootId=await lot5ResolvePrepaRootFolder(env).catch(e=>{throw new Error(`Résolution du dossier PRÉPA échouée : ${String(e?.message||e)}`)});
+      const result=await trashDriveFoldersDirect(env,[rootId]);
+      return json({ok:result.ok,rootFolderId:rootId,...result});
+    }
+    if(url.pathname==='/api/autopilot/limit-airline-dates'&&request.method==='POST'){
+      /*
+       * Limite volontairement le traitement d'une compagnie aux N dates de
+       * vol les plus récentes après une resynchronisation complète (ex. SQ
+       * après remise à zéro, demande explicite : traiter seulement les 3
+       * dates les plus récentes pour l'instant, pas tout l'historique d'un
+       * coup). Ne touche jamais aux jobs déjà traités (status≠QUEUED) : ne
+       * fait que repousser en DEFERRED les jobs QUEUED hors des N dates les
+       * plus récentes, pour qu'ils soient ignorés par process-next tant
+       * qu'ils restent DEFERRED. Réversible à tout moment avec l'endpoint
+       * existant requeue-airline (repasse tout en QUEUED, sans distinction
+       * de date).
+       */
+      const body=await request.json().catch(()=>({}));
+      const airline=String(body?.airline||'').trim().toUpperCase();
+      const keepDates=Math.max(1,Math.min(30,Number(body?.keepDates||3)));
+      if(!airline)return json({ok:false,error:'COMPAGNIE MANQUANTE'},400);
+      const dateRows=(await env.OPS_DB.prepare(`
+        SELECT DISTINCT flight_date FROM import_jobs
+        WHERE UPPER(airline)=? AND flight_date IS NOT NULL AND flight_date<>''
+        ORDER BY flight_date DESC LIMIT ?
+      `).bind(airline,keepDates).all()).results||[];
+      const keptDates=dateRows.map(r=>String(r.flight_date||'')).filter(Boolean);
+      if(!keptDates.length)return json({ok:true,airline,keptDates:[],deferred:0,message:'AUCUNE DATE TROUVÉE POUR CETTE COMPAGNIE'});
+      const placeholders=keptDates.map(()=>'?').join(',');
+      const r=await env.OPS_DB.prepare(`
+        UPDATE import_jobs SET status='DEFERRED',updated_at=CURRENT_TIMESTAMP
+        WHERE UPPER(airline)=? AND status='QUEUED' AND flight_date NOT IN (${placeholders})
+      `).bind(airline,...keptDates).run();
+      return json({ok:true,airline,keptDates,deferred:r.meta?.changes||0,message:`Jobs QUEUED de ${airline} hors des ${keptDates.length} dates les plus récentes repoussés en DEFERRED. Utiliser requeue-airline pour les reprendre plus tard.`});
+    }
+    if(url.pathname==='/api/autopilot/stop'&&request.method==='POST'){
+      const active=await env.OPS_DB.prepare(`SELECT run_id FROM lot5_autopilot_runs WHERE status='RUNNING' ORDER BY started_at DESC LIMIT 1`).first();
+      await setIntegrationJson(env,'lot5_autopilot_stop_requested',{requested:true,runId:String(active?.run_id||''),requestedAt:new Date().toISOString()});
+      return json({ok:true,requested:true,activeRunId:String(active?.run_id||''),message:'ARRÊT DEMANDÉ — prise en compte au prochain checkpoint'});
+    }
+    return json({ok:false,error:'ROUTE AUTO PILOT INCONNUE'},404);
+  }catch(e){return json({ok:false,error:String(e?.message||e)},500)}
+}
+
+
+
+async function gmailCleanDiagnosticV1(env,limit=100){
+  await ensureGmailPipelineTables(env);
+  const n=Math.max(1,Math.min(500,Number(limit||100)));
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT g.gmail_message_id,g.subject,g.sender,g.airline,g.flight_number,g.flight_date,g.status,g.updated_at,
+           COUNT(v.version_id) AS documents,
+           SUM(CASE WHEN lower(v.filename_normalized) LIKE '%altea_report%' THEN 1 ELSE 0 END) AS altea_reports,
+           SUM(CASE WHEN lower(v.filename_normalized) LIKE '%jfe%' THEN 1 ELSE 0 END) AS jfe_docs,
+           SUM(CASE WHEN v.mime_type LIKE 'text/%' THEN 1 ELSE 0 END) AS text_docs,
+           SUM(CASE WHEN lower(v.filename_normalized) LIKE '%.eml' OR lower(v.mime_type)='message/rfc822' THEN 1 ELSE 0 END) AS eml_docs,
+           (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id) AS linked_documents,
+           (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id AND md.is_duplicate=1) AS duplicate_links,
+           (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id AND md.source_kind LIKE 'EML_%') AS nested_documents
+    FROM gmail_messages g
+    LEFT JOIN import_file_versions v ON v.gmail_message_id=g.gmail_message_id
+    GROUP BY g.gmail_message_id
+    ORDER BY COALESCE(g.updated_at,'') DESC
+    LIMIT ?
+  `).bind(n).all()).results||[];
+  const byFlight=new Map();
+  for(const r of rows){
+    const a=cleanAirlineCodeV1(r.airline); const f=String(r.flight_number||'').toUpperCase();
+    const d=lot5CanonicalFlightDate(r.flight_date,'');
+    if(!a||a==='INCONNU'||!f||!d)continue;
+    const k=`${a}|${f}|${d}`;
+    let x=byFlight.get(k); if(!x){x={airline:a,flightNumber:f,flightDate:d,messages:0,documents:0,alteaReports:0,jfeDocs:0,textDocs:0,emlDocs:0,linkedDocuments:0,duplicateLinks:0,nestedDocuments:0,statuses:{}};byFlight.set(k,x)}
+    x.messages++;x.documents+=Number(r.documents||0);x.alteaReports+=Number(r.altea_reports||0);x.jfeDocs+=Number(r.jfe_docs||0);x.textDocs+=Number(r.text_docs||0);x.emlDocs+=Number(r.eml_docs||0);x.linkedDocuments+=Number(r.linked_documents||0);x.duplicateLinks+=Number(r.duplicate_links||0);x.nestedDocuments+=Number(r.nested_documents||0);x.statuses[r.status||'UNKNOWN']=(x.statuses[r.status||'UNKNOWN']||0)+1;
+  }
+  return {ok:true,version:LOT5_VERSION,limit:n,messages:rows.length,flights:[...byFlight.values()].sort((a,b)=>String(b.flightDate).localeCompare(a.flightDate)||a.flightNumber.localeCompare(b.flightNumber))};
+}
+
+
+
+async function gmailCleanLinkAuditV31(env,messageIds=[]){
+  await ensureGmailPipelineTables(env);
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:true,messages:0,totalLinks:0,items:[]};
+  const qs=ids.map(()=>'?').join(',');
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT
+      g.gmail_message_id,
+      g.airline,
+      g.flight_number,
+      g.flight_date,
+      g.status,
+      (SELECT COUNT(*) FROM import_file_versions v WHERE v.gmail_message_id=g.gmail_message_id) AS versions,
+      (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id) AS links,
+      (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id AND md.is_duplicate=1) AS duplicate_links,
+      (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id AND md.source_kind LIKE 'EML_%') AS nested_links
+    FROM gmail_messages g
+    WHERE g.gmail_message_id IN (${qs})
+    ORDER BY g.gmail_message_id
+  `).bind(...ids).all()).results||[];
+  return {
+    ok:true,
+    messages:rows.length,
+    totalVersions:rows.reduce((n,r)=>n+Number(r.versions||0),0),
+    totalLinks:rows.reduce((n,r)=>n+Number(r.links||0),0),
+    totalDuplicateLinks:rows.reduce((n,r)=>n+Number(r.duplicate_links||0),0),
+    totalNestedLinks:rows.reduce((n,r)=>n+Number(r.nested_links||0),0),
+    items:rows
+  };
+}
+
+async function gmailCleanBackfillExistingLinksV31(env,messageIds=[]){
+  await ensureGmailPipelineTables(env);
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  if(ids.length>20)return {ok:false,error:'Maximum 20 messages'};
+
+  const before=await gmailCleanLinkAuditV31(env,ids);
+  const errors=[];
+  let linked=0;
+
+  for(const messageId of ids){
+    const versions=(await env.OPS_DB.prepare(`
+      SELECT version_id,file_id,attachment_id,filename_original,mime_type,sha256
+      FROM import_file_versions
+      WHERE gmail_message_id=?
+      ORDER BY created_at ASC
+    `).bind(messageId).all()).results||[];
+
+    for(const v of versions){
+      try{
+        const already=await env.OPS_DB.prepare(`
+          SELECT 1 AS ok
+          FROM gmail_message_documents
+          WHERE gmail_message_id=? AND version_id=?
+          LIMIT 1
+        `).bind(messageId,String(v.version_id||'')).first();
+
+        if(already)continue;
+
+        await cleanLinkMessageDocumentV3(env,{
+          gmailMessageId:messageId,
+          versionId:String(v.version_id||''),
+          fileId:String(v.file_id||''),
+          sourceKind:'LEGACY_BACKFILL',
+          sourceRef:cleanNormalizeLinkSourceRefV35(String(v.attachment_id||v.version_id||'')),
+          parentVersionId:'',
+          isDuplicate:false
+        });
+        linked++;
+      }catch(e){
+        errors.push({
+          messageId,
+          versionId:String(v.version_id||''),
+          error:String(e?.message||e)
+        });
+      }
+    }
+  }
+
+  const after=await gmailCleanLinkAuditV31(env,ids);
+  return {ok:errors.length===0,linked,before,after,errors};
+}
+
+async function gmailCleanReplaySqDocumentsV31(env,messageIds=[]){
+  await ensureGmailPipelineTables(env);
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  if(ids.length>10)return {ok:false,error:'Maximum 10 messages pour replay SQ'};
+
+  const before=await gmailCleanLinkAuditV31(env,ids);
+  const results=[];
+  const errors=[];
+
+  for(const messageId of ids){
+    try{
+      const gm=await env.OPS_DB.prepare(`
+        SELECT airline,flight_number,flight_date,subject
+        FROM gmail_messages WHERE gmail_message_id=? LIMIT 1
+      `).bind(messageId).first();
+
+      const looksSq=String(gm?.airline||'').toUpperCase()==='SQ'
+        || /\bSQ\s*\d{1,4}\b/i.test(String(gm?.subject||''));
+
+      if(!looksSq){
+        results.push({messageId,skipped:true,reason:'NOT_SQ'});
+        continue;
+      }
+
+      const stored=await storeGmailMessage(env,messageId);
+      results.push({messageId,stored});
+    }catch(e){
+      errors.push({messageId,error:String(e?.stack||e?.message||e)});
+    }
+  }
+
+  const after=await gmailCleanLinkAuditV31(env,ids);
+  return {
+    ok:errors.length===0,
+    version:LOT5_VERSION,
+    scope:'SQ_DOCUMENT_REPLAY_ONLY',
+    before,
+    after,
+    results,
+    errors
+  };
+}
+
+
+
+function cleanIsCanonicalDateV34(v){
+  return /^20\d{2}-\d{2}-\d{2}$/.test(String(v||''));
+}
+
+function cleanCanonicalScoreV34(row){
+  let score=0;
+  const fileId=String(row?.file_id||'');
+  if(fileId.includes('|SHA256:'))score+=100;
+  if(cleanIsCanonicalDateV34(row?.flight_date))score+=50;
+  if(String(row?.is_active||'')==='1'||Number(row?.is_active||0)===1)score+=10;
+  return score;
+}
+
+async function gmailCleanPlanSqMergeV34(env,messageIds=[]){
+  await ensureImportProcessorTables(env);
+  await ensureLot3Tables(env);
+  await ensureLot5Tables(env);
+
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  if(ids.length>10)return {ok:false,error:'Maximum 10 messages pour SQ CLEAN MERGE'};
+
+  const qs=ids.map(()=>'?').join(',');
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT
+      v.version_id,v.file_id,v.gmail_message_id,v.attachment_id,
+      v.filename_original,v.filename_normalized,v.mime_type,v.file_size,
+      v.sha256,v.r2_key,v.status,v.is_active,v.created_at,
+      f.airline,f.flight_number,f.flight_date,f.document_type,f.retention_status
+    FROM import_file_versions v
+    JOIN import_files f ON f.file_id=v.file_id
+    WHERE v.gmail_message_id IN (${qs})
+      AND UPPER(f.airline)='SQ'
+      AND COALESCE(v.sha256,'')<>''
+    ORDER BY v.created_at ASC
+  `).bind(...ids).all()).results||[];
+
+  const byKey=new Map();
+  for(const r of rows){
+    const date=lot5CanonicalFlightDate(r.flight_date,'')||String(r.flight_date||'');
+    const key=`SQ|${String(r.flight_number||'').toUpperCase()}|${date}|${String(r.sha256||'')}`;
+    if(!byKey.has(key))byKey.set(key,[]);
+    byKey.get(key).push({...r,canonical_flight_date:date});
+  }
+
+  const groups=[];
+  for(const [key,arr] of byKey){
+    if(arr.length<2)continue;
+    const sorted=[...arr].sort((a,b)=>{
+      const ds=cleanCanonicalScoreV34(b)-cleanCanonicalScoreV34(a);
+      if(ds)return ds;
+      return String(a.created_at||'').localeCompare(String(b.created_at||''));
+    });
+    const canonical=sorted[0];
+    const duplicates=sorted.slice(1);
+    groups.push({
+      key,
+      sha:String(canonical.sha256||''),
+      airline:'SQ',
+      flightNumber:String(canonical.flight_number||'').toUpperCase(),
+      flightDate:String(canonical.canonical_flight_date||''),
+      canonical:{
+        versionId:String(canonical.version_id||''),
+        fileId:String(canonical.file_id||''),
+        filename:String(canonical.filename_original||''),
+        documentType:String(canonical.document_type||''),
+        score:cleanCanonicalScoreV34(canonical)
+      },
+      duplicates:duplicates.map(d=>({
+        versionId:String(d.version_id||''),
+        fileId:String(d.file_id||''),
+        filename:String(d.filename_original||''),
+        documentType:String(d.document_type||''),
+        score:cleanCanonicalScoreV34(d)
+      }))
+    });
+  }
+
+  return {
+    ok:true,
+    version:LOT5_VERSION,
+    scope:'SQ_CONTROLLED_MESSAGES',
+    messages:ids.length,
+    groups:groups.length,
+    duplicateVersions:groups.reduce((n,g)=>n+g.duplicates.length,0),
+    plan:groups
+  };
+}
+
+async function cleanMergeOneVersionV34(env,{canonicalVersionId,canonicalFileId,duplicateVersionId,duplicateFileId}){
+  if(!canonicalVersionId||!canonicalFileId||!duplicateVersionId||canonicalVersionId===duplicateVersionId){
+    return {ok:false,skipped:true,reason:'INVALID_OR_SAME_VERSION'};
+  }
+
+  const audit={movedLinks:0,movedJobs:0,movedResults:0,movedCards:0,removedCards:0,driveMoved:0,parentLinksUpdated:0};
+
+  // 1) Preserve all source-message provenance on canonical version.
+  const links=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,source_kind,source_ref,parent_version_id,is_duplicate
+    FROM gmail_message_documents
+    WHERE version_id=?
+    ORDER BY created_at
+  `).bind(duplicateVersionId).all()).results||[];
+
+  for(const l of links){
+    let parent=String(l.parent_version_id||'');
+    if(parent===duplicateVersionId)parent=canonicalVersionId;
+    await cleanLinkMessageDocumentV3(env,{
+      gmailMessageId:String(l.gmail_message_id||''),
+      versionId:canonicalVersionId,
+      fileId:canonicalFileId,
+      sourceKind:String(l.source_kind||'ATTACHMENT'),
+      sourceRef:String(l.source_ref||''),
+      parentVersionId:parent,
+      isDuplicate:true
+    });
+    audit.movedLinks++;
+  }
+
+  // Any nested item that used the duplicate as parent now points to canonical.
+  const pr=await env.OPS_DB.prepare(`
+    UPDATE gmail_message_documents
+    SET parent_version_id=?
+    WHERE parent_version_id=?
+  `).bind(canonicalVersionId,duplicateVersionId).run();
+  audit.parentLinksUpdated=Number(pr?.meta?.changes||0);
+
+  await env.OPS_DB.prepare(`DELETE FROM gmail_message_documents WHERE version_id=?`).bind(duplicateVersionId).run();
+
+  // 2) Repoint parser jobs and results; keep job ids for audit/history.
+  const jr=await env.OPS_DB.prepare(`
+    UPDATE import_jobs
+    SET version_id=?,file_id=?,updated_at=CURRENT_TIMESTAMP
+    WHERE version_id=?
+  `).bind(canonicalVersionId,canonicalFileId,duplicateVersionId).run();
+  audit.movedJobs=Number(jr?.meta?.changes||0);
+
+  const rr=await env.OPS_DB.prepare(`
+    UPDATE import_job_results
+    SET version_id=?,file_id=?,updated_at=CURRENT_TIMESTAMP
+    WHERE version_id=?
+  `).bind(canonicalVersionId,canonicalFileId,duplicateVersionId).run();
+  audit.movedResults=Number(rr?.meta?.changes||0);
+
+  // 3) Flight cards have a UNIQUE constraint including version_id.
+  // Insert/update canonical equivalent first, then remove duplicate-version cards.
+  const cards=(await env.OPS_DB.prepare(`
+    SELECT *
+    FROM flight_import_cards
+    WHERE version_id=?
+    ORDER BY id
+  `).bind(duplicateVersionId).all()).results||[];
+
+  for(const c of cards){
+    const existing=await env.OPS_DB.prepare(`
+      SELECT id FROM flight_import_cards
+      WHERE identity=? AND card_key=? AND list_name=? AND version_id=?
+      LIMIT 1
+    `).bind(c.identity,c.card_key,c.list_name,canonicalVersionId).first();
+
+    if(existing){
+      await env.OPS_DB.prepare(`DELETE FROM flight_import_cards WHERE id=?`).bind(c.id).run();
+      audit.removedCards++;
+    }else{
+      await env.OPS_DB.prepare(`
+        UPDATE flight_import_cards
+        SET version_id=?,file_id=?,updated_at=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).bind(canonicalVersionId,canonicalFileId,c.id).run();
+      audit.movedCards++;
+    }
+  }
+
+  // 4) Preserve Drive pointer on canonical version when needed.
+  const dupDrive=await env.OPS_DB.prepare(`SELECT * FROM lot5_drive_files WHERE version_id=? LIMIT 1`).bind(duplicateVersionId).first();
+  if(dupDrive){
+    const canonDrive=await env.OPS_DB.prepare(`SELECT version_id FROM lot5_drive_files WHERE version_id=? LIMIT 1`).bind(canonicalVersionId).first();
+    if(!canonDrive){
+      await env.OPS_DB.prepare(`
+        INSERT INTO lot5_drive_files(version_id,identity,drive_file_id,drive_folder_id,filename,uploaded_at)
+        VALUES (?,?,?,?,?,?)
+      `).bind(
+        canonicalVersionId,
+        String(dupDrive.identity||''),
+        String(dupDrive.drive_file_id||''),
+        String(dupDrive.drive_folder_id||''),
+        String(dupDrive.filename||''),
+        String(dupDrive.uploaded_at||new Date().toISOString())
+      ).run();
+      audit.driveMoved=1;
+    }
+    await env.OPS_DB.prepare(`DELETE FROM lot5_drive_files WHERE version_id=?`).bind(duplicateVersionId).run();
+  }
+
+  // 5) Keep history rows untouched (import_changes), then remove duplicate version row.
+  await env.OPS_DB.prepare(`DELETE FROM import_file_versions WHERE version_id=?`).bind(duplicateVersionId).run();
+
+  // Remove empty duplicate file shell, otherwise mark merged.
+  const remain=await env.OPS_DB.prepare(`SELECT COUNT(*) AS n FROM import_file_versions WHERE file_id=?`).bind(duplicateFileId).first();
+  if(Number(remain?.n||0)===0){
+    await env.OPS_DB.prepare(`DELETE FROM import_files WHERE file_id=?`).bind(duplicateFileId).run();
+  }else{
+    await env.OPS_DB.prepare(`
+      UPDATE import_files
+      SET retention_status='MERGED',status='MERGED',updated_at=CURRENT_TIMESTAMP
+      WHERE file_id=?
+    `).bind(duplicateFileId).run();
+  }
+
+  // Canonical file stays active and normalized.
+  await env.OPS_DB.prepare(`
+    UPDATE import_files
+    SET active_version_id=?,retention_status='ACTIVE',updated_at=CURRENT_TIMESTAMP
+    WHERE file_id=?
+  `).bind(canonicalVersionId,canonicalFileId).run();
+
+  return {ok:true,audit};
+}
+
+async function gmailCleanMergeSqShaV34(env,messageIds=[],dryRun=true){
+  const plan=await gmailCleanPlanSqMergeV34(env,messageIds);
+  if(!plan.ok||dryRun!==false)return {...plan,dryRun:true};
+
+  const applied=[];
+  const errors=[];
+
+  for(const g of plan.plan){
+    for(const d of g.duplicates){
+      try{
+        const r=await cleanMergeOneVersionV34(env,{
+          canonicalVersionId:g.canonical.versionId,
+          canonicalFileId:g.canonical.fileId,
+          duplicateVersionId:d.versionId,
+          duplicateFileId:d.fileId
+        });
+        applied.push({sha:g.sha,canonicalVersionId:g.canonical.versionId,duplicateVersionId:d.versionId,...r});
+      }catch(e){
+        errors.push({
+          sha:g.sha,
+          canonicalVersionId:g.canonical.versionId,
+          duplicateVersionId:d.versionId,
+          error:String(e?.stack||e?.message||e)
+        });
+      }
+    }
+  }
+
+  const after=await gmailCleanShaAuditV33(env,messageIds);
+  await recordImportChange(env,{
+    scope:'SQ_CLEAN_MERGE',
+    airline:'SQ',
+    changeType:'SQ_SHA_MERGE_V34',
+    after:{
+      messageIds,
+      plannedGroups:plan.groups,
+      plannedDuplicateVersions:plan.duplicateVersions,
+      applied:applied.length,
+      errors:errors.length
+    }
+  }).catch(()=>{});
+
+  return {
+    ok:errors.length===0,
+    version:LOT5_VERSION,
+    dryRun:false,
+    planSummary:{groups:plan.groups,duplicateVersions:plan.duplicateVersions},
+    applied,
+    errors,
+    after
+  };
+}
+
+
+
+async function gmailCleanSemanticLinkPlanV36(env,messageIds=[]){
+  await ensureGmailPipelineTables(env);
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  if(ids.length>10)return {ok:false,error:'Maximum 10 messages'};
+  const qs=ids.map(()=>'?').join(',');
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT rowid AS rid,gmail_message_id,version_id,file_id,source_kind,source_ref,parent_version_id,is_duplicate,created_at
+    FROM gmail_message_documents
+    WHERE gmail_message_id IN (${qs})
+      AND (UPPER(source_kind)='ATTACHMENT' OR UPPER(source_kind) LIKE 'EML_%')
+    ORDER BY gmail_message_id,version_id,source_kind,created_at,rowid
+  `).bind(...ids).all()).results||[];
+
+  const groups=new Map();
+  for(const r of rows){
+    const kind=cleanNormalizeLinkSourceKindV35(r.source_kind);
+    const key=`${r.gmail_message_id}|${r.version_id}|${kind}`;
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push({...r,normalized_kind:kind});
+  }
+
+  const plan=[];
+  for(const [key,arr] of groups){
+    if(arr.length<2)continue;
+    const keep=arr[0];
+    plan.push({
+      key,keepRid:Number(keep.rid),
+      removeRids:arr.slice(1).map(x=>Number(x.rid)),
+      messageId:keep.gmail_message_id,
+      versionId:keep.version_id,
+      sourceKind:keep.normalized_kind,
+      count:arr.length
+    });
+  }
+  return {
+    ok:true,version:LOT5_VERSION,messages:ids.length,totalRows:rows.length,
+    duplicateGroups:plan.length,
+    duplicateRows:plan.reduce((n,g)=>n+g.removeRids.length,0),
+    plan
+  };
+}
+
+async function gmailCleanSemanticLinkMergeV36(env,messageIds=[],dryRun=true){
+  const plan=await gmailCleanSemanticLinkPlanV36(env,messageIds);
+  if(!plan.ok||dryRun!==false)return {...plan,dryRun:true};
+
+  let removed=0; const errors=[];
+  for(const g of plan.plan){
+    try{
+      const rows=(await env.OPS_DB.prepare(`
+        SELECT rowid AS rid,file_id,parent_version_id,is_duplicate,source_ref
+        FROM gmail_message_documents
+        WHERE rowid IN (${[g.keepRid,...g.removeRids].map(()=>'?').join(',')})
+      `).bind(g.keepRid,...g.removeRids).all()).results||[];
+      const keep=rows.find(x=>Number(x.rid)===g.keepRid)||rows[0];
+      const parent=rows.map(x=>String(x.parent_version_id||'')).find(Boolean)||'';
+      const dup=rows.some(x=>Number(x.is_duplicate||0)===1)?1:0;
+      const stableRef=String(keep?.source_ref||'');
+      await env.OPS_DB.prepare(`
+        UPDATE gmail_message_documents
+        SET parent_version_id=?,is_duplicate=?,source_kind=?,source_ref=?
+        WHERE rowid=?
+      `).bind(parent,dup,g.sourceKind,stableRef,g.keepRid).run();
+      for(const rid of g.removeRids){
+        await env.OPS_DB.prepare(`DELETE FROM gmail_message_documents WHERE rowid=?`).bind(rid).run();
+        removed++;
+      }
+    }catch(e){errors.push({key:g.key,error:String(e?.message||e)})}
+  }
+  return {ok:errors.length===0,version:LOT5_VERSION,dryRun:false,removed,errors,after:await gmailCleanLinkAuditV31(env,messageIds)};
+}
+
+async function gmailCleanLinkPlanV35(env,messageIds=[]){
+  await ensureGmailPipelineTables(env);
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  if(ids.length>10)return {ok:false,error:'Maximum 10 messages'};
+  const qs=ids.map(()=>'?').join(',');
+
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT
+      rowid AS rid,
+      gmail_message_id,version_id,file_id,source_kind,source_ref,parent_version_id,is_duplicate,created_at
+    FROM gmail_message_documents
+    WHERE gmail_message_id IN (${qs})
+    ORDER BY gmail_message_id,version_id,created_at,rowid
+  `).bind(...ids).all()).results||[];
+
+  const groups=new Map();
+  for(const r of rows){
+    const kind=cleanNormalizeLinkSourceKindV35(r.source_kind);
+    const ref=cleanNormalizeLinkSourceRefV35(r.source_ref);
+    const key=`${r.gmail_message_id}|${r.version_id}|${kind}|${ref}`;
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push({...r,normalized_kind:kind,normalized_ref:ref});
+  }
+
+  const duplicates=[];
+  for(const [key,arr] of groups){
+    if(arr.length<2)continue;
+    const keep=arr[0];
+    duplicates.push({
+      key,
+      keepRid:Number(keep.rid),
+      removeRids:arr.slice(1).map(x=>Number(x.rid)),
+      count:arr.length,
+      messageId:keep.gmail_message_id,
+      versionId:keep.version_id,
+      sourceKind:keep.normalized_kind,
+      sourceRef:keep.normalized_ref
+    });
+  }
+
+  return {
+    ok:true,
+    version:LOT5_VERSION,
+    messages:ids.length,
+    totalRows:rows.length,
+    duplicateGroups:duplicates.length,
+    duplicateRows:duplicates.reduce((n,g)=>n+g.removeRids.length,0),
+    plan:duplicates
+  };
+}
+
+async function gmailCleanLinkMergeV35(env,messageIds=[],dryRun=true){
+  const plan=await gmailCleanLinkPlanV35(env,messageIds);
+  if(!plan.ok||dryRun!==false)return {...plan,dryRun:true};
+
+  let removed=0;
+  const errors=[];
+  for(const g of plan.plan){
+    try{
+      // Merge duplicate flag / parent value into kept row before deletion.
+      const rows=(await env.OPS_DB.prepare(`
+        SELECT rowid AS rid,parent_version_id,is_duplicate,file_id
+        FROM gmail_message_documents
+        WHERE rowid IN (${[g.keepRid,...g.removeRids].map(()=>'?').join(',')})
+      `).bind(g.keepRid,...g.removeRids).all()).results||[];
+
+      const keep=rows.find(x=>Number(x.rid)===Number(g.keepRid));
+      const parent=rows.map(x=>String(x.parent_version_id||'')).find(Boolean)||String(keep?.parent_version_id||'');
+      const dup=rows.some(x=>Number(x.is_duplicate||0)===1)?1:0;
+      const fileId=String(keep?.file_id||rows[0]?.file_id||'');
+
+      await env.OPS_DB.prepare(`
+        UPDATE gmail_message_documents
+        SET file_id=?,parent_version_id=?,is_duplicate=?,source_kind=?,source_ref=?
+        WHERE rowid=?
+      `).bind(fileId,parent,dup,g.sourceKind,g.sourceRef,g.keepRid).run();
+
+      for(const rid of g.removeRids){
+        await env.OPS_DB.prepare(`DELETE FROM gmail_message_documents WHERE rowid=?`).bind(rid).run();
+        removed++;
+      }
+    }catch(e){
+      errors.push({key:g.key,error:String(e?.stack||e?.message||e)});
+    }
+  }
+
+  const after=await gmailCleanLinkAuditV31(env,messageIds);
+  return {
+    ok:errors.length===0,
+    version:LOT5_VERSION,
+    dryRun:false,
+    removed,
+    errors,
+    after
+  };
+}
+
+async function gmailCleanShaAuditV33(env,messageIds=[]){
+  await ensureGmailPipelineTables(env);
+  const ids=[...new Set((messageIds||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!ids.length)return {ok:false,error:'messageIds requis'};
+  const qs=ids.map(()=>'?').join(',');
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT
+      v.gmail_message_id,
+      v.version_id,
+      v.file_id,
+      v.sha256,
+      v.filename_original,
+      f.airline,
+      f.flight_number,
+      f.flight_date,
+      f.document_type
+    FROM import_file_versions v
+    LEFT JOIN import_files f ON f.file_id=v.file_id
+    WHERE v.gmail_message_id IN (${qs})
+    ORDER BY v.gmail_message_id,v.created_at
+  `).bind(...ids).all()).results||[];
+
+  const bySha=new Map();
+  for(const r of rows){
+    const sha=String(r.sha256||'');
+    if(!sha)continue;
+    if(!bySha.has(sha))bySha.set(sha,[]);
+    bySha.get(sha).push(r);
+  }
+
+  const duplicateShaGroups=[...bySha.entries()]
+    .filter(([,arr])=>arr.length>1)
+    .map(([sha,arr])=>({sha,count:arr.length,versions:arr.map(x=>({
+      gmailMessageId:x.gmail_message_id,
+      versionId:x.version_id,
+      fileId:x.file_id,
+      filename:x.filename_original,
+      airline:x.airline,
+      flightNumber:x.flight_number,
+      flightDate:x.flight_date,
+      documentType:x.document_type
+    }))}));
+
+  return {
+    ok:true,
+    version:LOT5_VERSION,
+    messages:ids.length,
+    versions:rows.length,
+    uniqueSha:bySha.size,
+    duplicateShaGroups:duplicateShaGroups.length,
+    groups:duplicateShaGroups
+  };
+}
+
+
+function cleanIdentityCompleteV37(x){
+  return String(x?.airline||'').toUpperCase()==='SQ'
+    && /^SQ\d{1,4}$/i.test(String(x?.flightNumber||''))
+    && /^20\d{2}-\d{2}-\d{2}$/.test(String(x?.flightDate||''));
+}
+
+function cleanNormalizeSqIdentityV37(found,receivedAt){
+  const airline=String(found?.airline||'').toUpperCase();
+  let flightNumber=String(found?.flightNumber||'').toUpperCase().replace(/\s+/g,'');
+  if(airline==='SQ' && flightNumber && !flightNumber.startsWith('SQ') && /^\d{1,4}$/.test(flightNumber)){
+    flightNumber=`SQ${flightNumber}`;
+  }
+  const flightDate=lot5CanonicalFlightDate(found?.flightDate||'',receivedAt)||String(found?.flightDate||'');
+  return {airline,flightNumber,flightDate};
+}
+
+
+function cleanMonthNumberV38(mon){
+  const m={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  return m[String(mon||'').toUpperCase()]||'';
+}
+
+function cleanResolveYearV38(twoOrFour,receivedAt){
+  const s=String(twoOrFour||'');
+  if(/^\d{4}$/.test(s))return s;
+  if(/^\d{2}$/.test(s))return `20${s}`;
+  const d=new Date(receivedAt||Date.now());
+  return String(Number.isFinite(d.getTime())?d.getUTCFullYear():new Date().getUTCFullYear());
+}
+
+function cleanParseServiceDateTokenV38(token,receivedAt){
+  const t=String(token||'').trim().toUpperCase();
+
+  if(/^20\d{6}$/.test(t)){
+    return `${t.slice(0,4)}-${t.slice(4,6)}-${t.slice(6,8)}`;
+  }
+
+  let m=t.match(/^(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2}|\d{4})?$/i);
+  if(m){
+    const dd=String(Number(m[1])).padStart(2,'0');
+    const mm=cleanMonthNumberV38(m[2]);
+    const yyyy=cleanResolveYearV38(m[3]||'',receivedAt);
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return lot5CanonicalFlightDate(t,receivedAt)||'';
+}
+
+function cleanDetectSqSubjectServiceV38(subject,receivedAt){
+  const s=String(subject||'').toUpperCase().replace(/\s+/g,' ').trim();
+
+  // Explicit priority rule:
+  // the SERVICE DATE is the date token immediately attached to / following SQxxx.
+  // Any later date/time in the subject is document/message generation timestamp.
+  const patterns=[
+    /\b(SQ\s*\d{1,4})\s*\/\s*(20\d{6})\b/i,
+    /\b(SQ\s*\d{1,4})\s+(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2}|\d{4})?)\b/i,
+    /\b(?:PREPA\s+)?(SQ\s*\d{1,4})\s*\/\s*(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2}|\d{4})?)\b/i
+  ];
+
+  for(const re of patterns){
+    const m=s.match(re);
+    if(!m)continue;
+    const flightNumber=String(m[1]||'').replace(/\s+/g,'').toUpperCase();
+    const flightDate=cleanParseServiceDateTokenV38(m[2]||'',receivedAt);
+    if(/^SQ\d{1,4}$/.test(flightNumber) && /^20\d{2}-\d{2}-\d{2}$/.test(flightDate)){
+      return {
+        airline:'SQ',
+        flightNumber,
+        flightDate,
+        serviceDateToken:String(m[2]||''),
+        matched:true
+      };
+    }
+  }
+  return {airline:'',flightNumber:'',flightDate:'',serviceDateToken:'',matched:false};
+}
+
+function cleanDetectSqFromTextV37(text,receivedAt){
+  const t=String(text||'');
+  if(!t.trim())return {airline:'',flightNumber:'',flightDate:''};
+  const found=detectMailFlight(t,'','');
+  return cleanNormalizeSqIdentityV37(found,receivedAt);
+}
+
+async function cleanDetectSqIdentitySourceV37(env,message){
+  const messageId=String(message?.id||'');
+  const subject=extractHeader(message,'Subject');
+  const receivedAt=extractHeader(message,'Date');
+
+  // 1) Subject — R3.8: service date is the token immediately following SQxxx.
+  // Example: "SQ335 30AUG CDG-SIN 27AUG26 11:37"
+  // => service date 30AUG; 27AUG26 is only the document timestamp.
+  const subjectService=cleanDetectSqSubjectServiceV38(subject,receivedAt);
+  const subjectFound=subjectService.matched?subjectService:cleanDetectSqFromTextV37(subject,receivedAt);
+  if(cleanIdentityCompleteV37(subjectFound)){
+    return {
+      ...subjectFound,
+      detectionSource:'SUBJECT',
+      serviceDateToken:String(subjectService.serviceDateToken||''),
+      evidence:subject.slice(0,300)
+    };
+  }
+
+  // 2) Gmail body
+  const bodyText=await extractPlainBodyFullV1(env,message).catch(()=> '');
+  const bodyFound=cleanDetectSqFromTextV37(bodyText,receivedAt);
+  if(cleanIdentityCompleteV37(bodyFound)){
+    return {...bodyFound,detectionSource:'BODY',evidence:bodyText.slice(0,500)};
+  }
+
+  // Preserve partial subject/body identity while probing attachments.
+  const partial={
+    airline:subjectFound.airline||bodyFound.airline||'',
+    flightNumber:subjectFound.flightNumber||bodyFound.flightNumber||'',
+    flightDate:subjectFound.flightDate||bodyFound.flightDate||''
+  };
+
+  // 3) Attachments / nested EML content
+  const parts=walkParts(message?.payload,[]);
+  for(const part of parts){
+    const attachmentId=String(part?.body?.attachmentId||'');
+    if(!attachmentId)continue;
+    const filename=String(part?.filename||'');
+    const mime=String(part?.mimeType||'').toLowerCase();
+
+    try{
+      const att=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
+      const bytes=b64urlToBytes(att?.data||'');
+      if(!bytes?.byteLength)continue;
+
+      if(/\.eml$/i.test(filename)||mime==='message/rfc822'){
+        const raw=new TextDecoder().decode(bytes);
+        const direct=cleanDetectSqFromTextV37(raw,receivedAt);
+        if(cleanIdentityCompleteV37(direct)){
+          return {...direct,detectionSource:'EML',evidence:filename||'message/rfc822'};
+        }
+
+        const parsed=cleanParseEmlRecursiveV3(raw);
+        for(const t of parsed?.textBodies||[]){
+          const nested=cleanDetectSqFromTextV37(t,receivedAt);
+          if(cleanIdentityCompleteV37(nested)){
+            return {...nested,detectionSource:'EML',evidence:filename||'message/rfc822'};
+          }
+        }
+      }else if(/\.pdf$/i.test(filename)||mime.includes('pdf')){
+        const ex=await lot2ExtractPdfTextFromBytes(bytes).catch(()=>({text:''}));
+        const pdfFound=cleanDetectSqFromTextV37(String(ex?.text||''),receivedAt);
+        if(cleanIdentityCompleteV37(pdfFound)){
+          return {...pdfFound,detectionSource:'ATTACHMENT',evidence:filename||'PDF'};
+        }
+      }else if(mime.startsWith('text/')||/\.(txt|csv|html?)$/i.test(filename)){
+        const raw=new TextDecoder().decode(bytes);
+        const txtFound=cleanDetectSqFromTextV37(raw,receivedAt);
+        if(cleanIdentityCompleteV37(txtFound)){
+          return {...txtFound,detectionSource:'ATTACHMENT',evidence:filename||mime};
+        }
+      }
+    }catch(e){}
+  }
+
+  return {
+    ...partial,
+    detectionSource:'UNRESOLVED',
+    evidence:'',
+    unresolved:true
+  };
+}
+
+async function gmailCleanSqIdentityAuditV37(env,url){
+  await ensureGmailPipelineTables(env);
+
+  const storedDateParam=String(url.searchParams.get('storedDate')||'2026-08-30').trim();
+  const flightParam=String(url.searchParams.get('flight')||'').trim().toUpperCase();
+  const limit=Math.max(1,Math.min(50,Number(url.searchParams.get('limit')||20)));
+  const offset=Math.max(0,Number(url.searchParams.get('offset')||0));
+
+  const targetCanonical=lot5CanonicalFlightDate(storedDateParam,'')||storedDateParam;
+
+  // Read a generous candidate window then canonical-filter in JS because legacy rows can contain 30AUG.
+  const candidates=(await env.OPS_DB.prepare(`
+    SELECT gmail_message_id,subject,sender,received_at,flight_number,flight_date,status,updated_at
+    FROM gmail_messages
+    WHERE UPPER(airline)='SQ'
+    ORDER BY COALESCE(updated_at,'') DESC,gmail_message_id
+    LIMIT 1000
+  `).all()).results||[];
+
+  const matching=candidates.filter(r=>{
+    const storedCanonical=lot5CanonicalFlightDate(r.flight_date||'',r.received_at||'')||String(r.flight_date||'');
+    if(storedCanonical!==targetCanonical)return false;
+    if(flightParam && String(r.flight_number||'').toUpperCase()!==flightParam)return false;
+    return true;
+  });
+
+  const page=matching.slice(offset,offset+limit);
+  const items=[];
+
+  for(const row of page){
+    const messageId=String(row.gmail_message_id||'');
+    try{
+      const message=await gmailFetch(env,`/messages/${encodeURIComponent(messageId)}?format=full`);
+      const detected=await cleanDetectSqIdentitySourceV37(env,message);
+      const storedDate=lot5CanonicalFlightDate(row.flight_date||'',row.received_at||'')||String(row.flight_date||'');
+      const storedFlight=String(row.flight_number||'').toUpperCase();
+
+      const mismatch=!!(
+        cleanIdentityCompleteV37(detected)
+        && (detected.flightDate!==storedDate || detected.flightNumber!==storedFlight)
+      );
+
+      items.push({
+        messageId,
+        subject:String(row.subject||extractHeader(message,'Subject')||''),
+        storedFlightNumber:storedFlight,
+        storedDateRaw:String(row.flight_date||''),
+        storedDate,
+        detectedFlightNumber:String(detected.flightNumber||''),
+        detectedDate:String(detected.flightDate||''),
+        serviceDateToken:String(detected.serviceDateToken||''),
+        detectionSource:String(detected.detectionSource||'UNRESOLVED'),
+        mismatch,
+        unresolved:!!detected.unresolved,
+        evidence:String(detected.evidence||'').slice(0,500),
+        status:String(row.status||'')
+      });
+    }catch(e){
+      items.push({
+        messageId,
+        subject:String(row.subject||''),
+        storedFlightNumber:String(row.flight_number||'').toUpperCase(),
+        storedDateRaw:String(row.flight_date||''),
+        storedDate:lot5CanonicalFlightDate(row.flight_date||'',row.received_at||'')||String(row.flight_date||''),
+        detectedFlightNumber:'',
+        detectedDate:'',
+        detectionSource:'TECHNICAL_RETRY',
+        mismatch:false,
+        unresolved:true,
+        error:String(e?.message||e),
+        status:String(row.status||'')
+      });
+    }
+  }
+
+  const summary={
+    scanned:items.length,
+    mismatches:items.filter(x=>x.mismatch).length,
+    detected31Aug:items.filter(x=>x.detectedDate==='2026-08-31').length,
+    detected30Aug:items.filter(x=>x.detectedDate==='2026-08-30').length,
+    unresolved:items.filter(x=>x.unresolved).length,
+    sources:items.reduce((acc,x)=>{
+      const k=x.detectionSource||'UNKNOWN';
+      acc[k]=(acc[k]||0)+1;
+      return acc;
+    },{})
+  };
+
+  return {
+    ok:true,
+    version:LOT5_VERSION,
+    mode:'READ_ONLY',
+    storedDate:targetCanonical,
+    flight:flightParam||null,
+    totalMatching:matching.length,
+    offset,
+    limit,
+    hasMore:offset+limit<matching.length,
+    nextOffset:offset+limit<matching.length?offset+limit:null,
+    summary,
+    items
+  };
+}
+
+async function gmailCleanSqDiagnosticV3(env,limit=500){
+  await ensureGmailPipelineTables(env);
+  const n=Math.max(1,Math.min(2000,Number(limit||500)));
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT g.gmail_message_id,g.subject,g.sender,g.flight_number,g.flight_date,g.status,g.updated_at,
+           COUNT(DISTINCT v.version_id) AS documents,
+           SUM(CASE WHEN lower(v.filename_normalized) LIKE '%altea_report%' THEN 1 ELSE 0 END) AS altea_reports,
+           SUM(CASE WHEN lower(v.filename_normalized) LIKE '%.eml' OR lower(v.mime_type)='message/rfc822' THEN 1 ELSE 0 END) AS eml_docs,
+           (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id) AS linked_documents,
+           (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id AND md.is_duplicate=1) AS duplicate_links,
+           (SELECT COUNT(*) FROM gmail_message_documents md WHERE md.gmail_message_id=g.gmail_message_id AND md.source_kind LIKE 'EML_%') AS nested_documents
+    FROM gmail_messages g
+    LEFT JOIN import_file_versions v ON v.gmail_message_id=g.gmail_message_id
+    WHERE UPPER(g.airline)='SQ'
+    GROUP BY g.gmail_message_id
+    ORDER BY COALESCE(g.updated_at,'') DESC
+    LIMIT ?
+  `).bind(n).all()).results||[];
+
+  const byFlight=new Map();
+  for(const r of rows){
+    const d=lot5CanonicalFlightDate(r.flight_date,'');
+    const f=String(r.flight_number||'').toUpperCase();
+    if(!f||!d)continue;
+    const k=`SQ|${f}|${d}`;
+    let x=byFlight.get(k);
+    if(!x){
+      x={airline:'SQ',flightNumber:f,flightDate:d,messages:0,documents:0,alteaReports:0,emlDocs:0,linkedDocuments:0,duplicateLinks:0,nestedDocuments:0,statuses:{},messageIds:[]};
+      byFlight.set(k,x);
+    }
+    x.messages++; x.documents+=Number(r.documents||0); x.alteaReports+=Number(r.altea_reports||0);
+    x.emlDocs+=Number(r.eml_docs||0); x.linkedDocuments+=Number(r.linked_documents||0);
+    x.duplicateLinks+=Number(r.duplicate_links||0); x.nestedDocuments+=Number(r.nested_documents||0);
+    x.statuses[r.status||'UNKNOWN']=(x.statuses[r.status||'UNKNOWN']||0)+1;
+    x.messageIds.push(String(r.gmail_message_id||''));
+  }
+  return {
+    ok:true,version:LOT5_VERSION,scope:'SQ_ONLY',limit:n,messages:rows.length,
+    flights:[...byFlight.values()].sort((a,b)=>String(b.flightDate).localeCompare(a.flightDate)||a.flightNumber.localeCompare(b.flightNumber))
+  };
+}
+
+
+async function handleGmailPipeline(request,env,url){
+  if(!url.pathname.startsWith("/api/gmail") && !url.pathname.startsWith("/api/import-pipeline"))return null;
+  try{
+    if(url.pathname==="/api/gmail/status" && request.method==="GET")return json(await gmailStatus(env));
+    if(url.pathname==="/api/gmail/oauth/start" && request.method==="GET")return gmailOAuthStart(request,env);
+    if(url.pathname==="/api/gmail/oauth/callback" && request.method==="GET")return gmailOAuthCallback(request,env,url);
+    if(url.pathname==="/api/gmail/sync-now" && (request.method==="POST"||request.method==="GET")){
+      /*
+       * Endpoint volontairement léger et SANS le verrou "un seul AUTO PILOT à la
+       * fois" de lot5AutoPilotRun : ce dernier peut rester bloqué en RUNNING
+       * plusieurs minutes lorsque le carnet d'identités incomplètes (ex. gros
+       * volume SQ en attente de révision) est important, ce qui empêchait
+       * d'atteindre de nouveaux documents même avec une recherche Gmail ciblée
+       * (le paramètre "query" ne s'applique qu'au balayage Gmail, pas aux
+       * étapes suivantes du cycle complet). Ici on fait uniquement : sync
+       * Gmail ciblé -> classification -> injection, sans réparation d'identité
+       * ni audit, pour rester rapide même quand l'auto pilot complet est bloqué.
+       */
+      const body=request.method==="POST"?await request.json().catch(()=>({})):{
+        query:url.searchParams.get('query')||'',
+        maxMessages:Number(url.searchParams.get('maxMessages')||0)
+      };
+      const sync=await gmailSyncNow(env,body);
+      const processRuns=[];
+      let jobsProcessed=0;
+      for(let i=0;i<3;i++){
+        const r=await lot2ProcessNext(env,{limit:20});
+        processRuns.push({found:r.found,processed:r.processed?.length||0});
+        jobsProcessed+=Number(r.processed?.length||0);
+        if(!r.found)break;
+      }
+      const inject=await lot5InjectAvailable(env,lot5Config(env));
+      return json({ok:true,sync,process:processRuns,jobsProcessed,inject});
+    }
+    if(url.pathname==="/api/import-pipeline/status" && request.method==="GET")return json(await lot2PipelineSummary(env));
+    if(url.pathname==="/api/import-pipeline/results" && request.method==="GET")return json(await lot2Results(env,url));
+    if(url.pathname==="/api/import-pipeline/flight-cards" && request.method==="GET")return json(await lot3FlightCards(env,url));
+    if(url.pathname==="/api/import-pipeline/inject-next" && request.method==="POST"){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot3InjectNext(env,body));
+    }
+    if(url.pathname==="/api/import-pipeline/process-next" && request.method==="POST"){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot2ProcessNext(env,body));
+    }
+    if(url.pathname==="/api/import-pipeline/requeue" && request.method==="POST"){
+      const body=await request.json().catch(()=>({}));
+      return json(await lot2Requeue(env,body));
+    }
+    return json({ok:false,error:"ROUTE GMAIL PIPELINE INCONNUE"},404);
+  }catch(e){
+    return json({ok:false,error:String(e?.message||e)},500);
+  }
+}
+
+
+
+async function lot5PrepaFastSummaryV535(env){
+  await ensurePrepaControlTables(env);
+  const rows=(await env.OPS_DB.prepare(`
+    SELECT p.gmail_message_id,p.airline,p.flight_number,p.flight_date,p.status,p.attachments_json,p.received_at,p.updated_at,
+           g.status AS gmail_status,g.received_at AS gmail_received_at,g.updated_at AS gmail_updated_at
+    FROM prepa_inbox p
+    LEFT JOIN gmail_messages g ON g.gmail_message_id=p.gmail_message_id
+    WHERE p.source='GMAIL_AUTOPILOT'
+    ORDER BY p.updated_at DESC
+  `).all()).results||[];
+
+  // R4 : toutes les variantes 03SEP / 02SEP26 / YYYYMMDD sont regroupées sous la date ISO.
+  // Le statut d'une fiche n'est plus le "pire statut historique". Une ancienne ligne REVIEW
+  // ne peut plus contaminer éternellement un vol qui a depuis été injecté/validé.
+  const byFlight=new Map();
+  let documents=0,unidentified=0;
+  const stateClass=(st)=>{
+    st=String(st||'').toUpperCase();
+    if(st==='VALIDATED')return 'VALIDATED';
+    if(st==='INJECTED')return 'INJECTED';
+    if(st==='IMPORTED'||st==='PROCESSED')return 'IMPORTED';
+    if(st==='RECEIVED'||st==='PENDING'||st==='PROCESSING')return 'RECEIVED';
+    if(st==='DUPLICATE')return 'DUPLICATE';
+    if(st==='ERROR_IMPORT'||st==='ERROR_INJECT'||st==='ERROR')return 'ERROR';
+    if(st==='REVIEW'||st==='UNIDENTIFIED')return 'REVIEW';
+    return st||'RECEIVED';
+  };
+  const ts=(r)=>String(r.gmail_updated_at||r.updated_at||r.gmail_received_at||r.received_at||'');
+
+  for(const r of rows){
+    let at=[]; try{at=JSON.parse(r.attachments_json||'[]')||[]}catch(e){}
+    const n=Array.isArray(at)?at.length:0; documents+=n;
+    const a=String(r.airline||'').toUpperCase();
+    const f=String(r.flight_number||'').toUpperCase();
+    const d=lot5CanonicalFlightDate(r.flight_date,r.received_at||r.gmail_received_at||'');
+    if(!a||!f||!d){unidentified++;continue}
+    const key=`${a}|${f}|${d}`;
+    const rawState=String(r.gmail_status||r.status||'RECEIVED').toUpperCase();
+    const st=stateClass(rawState);
+    let cur=byFlight.get(key);
+    if(!cur){
+      cur={airline:a,flightNumber:f,flightDate:d,status:'RECEIVED',messages:0,documents:0,updatedAt:'',_states:[],_latestSuccess:'',_latestBlock:''};
+      byFlight.set(key,cur);
+    }
+    cur.messages++; cur.documents+=n;
+    const t=ts(r); if(t>cur.updatedAt)cur.updatedAt=t;
+    cur._states.push({state:st,rawState,t,messageId:String(r.gmail_message_id||'')});
+    if((st==='VALIDATED'||st==='INJECTED') && t>cur._latestSuccess)cur._latestSuccess=t;
+    if((st==='ERROR'||st==='REVIEW') && t>cur._latestBlock)cur._latestBlock=t;
+  }
+
+  for(const cur of byFlight.values()){
+    const states=cur._states.map(x=>x.state);
+    const has=(x)=>states.includes(x);
+    const allFinal=states.length>0 && states.every(x=>x==='VALIDATED'||x==='DUPLICATE');
+    const blockingIsNewer=cur._latestBlock && (!cur._latestSuccess || cur._latestBlock>cur._latestSuccess);
+    if(allFinal)cur.status='VALIDATED';
+    else if(blockingIsNewer){
+      const blockers=cur._states.filter(x=>x.state==='ERROR'||x.state==='REVIEW').sort((a,b)=>String(b.t).localeCompare(String(a.t)));
+      cur.status=blockers[0]?.state==='ERROR'?'ERROR_IMPORT':'REVIEW';
+    }else if(has('VALIDATED'))cur.status='VALIDATED';
+    else if(has('INJECTED'))cur.status='INJECTED';
+    else if(has('IMPORTED'))cur.status='IMPORTED';
+    else if(has('RECEIVED'))cur.status='RECEIVED';
+    else if(has('ERROR'))cur.status='ERROR_IMPORT';
+    else if(has('REVIEW'))cur.status='REVIEW';
+    else cur.status='RECEIVED';
+    delete cur._states; delete cur._latestSuccess; delete cur._latestBlock;
+  }
+
+  const flights=[...byFlight.values()].sort((x,y)=>String(y.flightDate).localeCompare(String(x.flightDate))||String(x.airline).localeCompare(String(y.airline))||String(x.flightNumber).localeCompare(String(y.flightNumber)));
+  const counters={received:0,imported:0,injected:0,validated:0,errors:0,review:0};
+  const companies={};
+  for(const f of flights){
+    const st=f.status;
+    if(st==='RECEIVED')counters.received++;
+    else if(st==='IMPORTED')counters.imported++;
+    else if(st==='INJECTED')counters.injected++;
+    else if(st==='VALIDATED')counters.validated++;
+    else if(st.startsWith('ERROR'))counters.errors++;
+    else if(st==='REVIEW')counters.review++;
+    const c=companies[f.airline]||(companies[f.airline]={airline:f.airline,flights:0,documents:0,received:0,imported:0,injected:0,validated:0,errors:0,review:0});
+    c.flights++; c.documents+=f.documents;
+    if(st==='RECEIVED')c.received++;
+    else if(st==='IMPORTED')c.imported++;
+    else if(st==='INJECTED')c.injected++;
+    else if(st==='VALIDATED')c.validated++;
+    else if(st.startsWith('ERROR'))c.errors++;
+    else if(st==='REVIEW')c.review++;
+  }
+  return {ok:true,r4:true,documents,flightCount:flights.length,unidentified,counters,companies:Object.values(companies).sort((a,b)=>a.airline.localeCompare(b.airline)),flights};
+}
+
+async function handlePrepa(request, env, url) {
+
+  if (!url.pathname.startsWith("/api/prepa")) {
+    return null;
+  }
+
+
+  if (request.method === "OPTIONS") {
+    return json({ ok: true });
+  }
+
+
+  /*
+   * GOOGLE APPS SCRIPT -> ALYZIA
+   */
+  if (
+    url.pathname === "/api/prepa/import" &&
+    request.method === "POST"
+  ) {
+
+    if (!isAuthorizedPrepa(request, env)) {
+
+      return json({
+        ok: false,
+        error: "NON AUTORISE"
+      }, 401);
+
+    }
+
+
+    const body =
+      await request.json()
+        .catch(() => null);
+
+
+    const item =
+      normalizePrepaPayload(body);
+
+
+    if (!item) {
+
+      return json({
+        ok: false,
+        error: "PREPA INVALIDE"
+      }, 400);
+
+    }
+
+
+    const suppression=await isPrepaSuppressed(env,item);
+
+    if(suppression.suppressed){
+      return json({
+        ok:true,
+        accepted:false,
+        neutralized:true,
+        reason:suppression.reason,
+        gmailMessageId:item.gmailMessageId,
+        airline:item.airline,
+        flightNumber:item.flightNumber,
+        flightDate:item.flightDate,
+        status:"SUPPRESSED"
+      });
+    }
+
+    const savedStatus =
+      await savePrepaInbox(
+        env,
+        item
+      );
+
+
+    return json({
+      ok: true,
+
+      accepted: true,
+
+      gmailMessageId:
+        item.gmailMessageId,
+
+      airline:
+        item.airline,
+
+      flightNumber:
+        item.flightNumber,
+
+      flightDate:
+        item.flightDate,
+
+      status:
+        savedStatus
+    });
+  }
+
+
+
+  /*
+   * V50.5 — statut connexion Google Drive directe.
+   */
+  if(
+    url.pathname==="/api/prepa/google-drive/status" &&
+    request.method==="GET"
+  ){
+    return json({ok:true,...await googleDriveStatus(env)});
+  }
+
+  /*
+   * V50.5 — démarre l'autorisation Google Drive depuis ALYZIA OPS.
+   * Pas d'Apps Script.
+   */
+  if(
+    url.pathname==="/api/prepa/google-drive/oauth/start" &&
+    request.method==="POST"
+  ){
+    await ensurePrepaControlTables(env);
+
+    const clientId=String(env.GOOGLE_CLIENT_ID||"").trim();
+    const clientSecret=String(env.GOOGLE_CLIENT_SECRET||"").trim();
+
+    if(!clientId||!clientSecret){
+      return json({
+        ok:false,
+        error:"GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET MANQUANTS DANS LE WORKER"
+      },409);
+    }
+
+    const state=crypto.randomUUID();
+    await setIntegrationJson(env,"google_drive_oauth_state",{
+      state,
+      created_at:Date.now()
+    });
+
+    const auth=new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    auth.searchParams.set("client_id",clientId);
+    auth.searchParams.set("redirect_uri",googleDriveRedirectUri(request));
+    auth.searchParams.set("response_type","code");
+    auth.searchParams.set("scope","https://www.googleapis.com/auth/drive");
+    auth.searchParams.set("access_type","offline");
+    auth.searchParams.set("prompt","consent");
+    auth.searchParams.set("state",state);
+
+    return json({ok:true,authorizationUrl:auth.toString()});
+  }
+
+  /*
+   * Callback OAuth Google Drive.
+   */
+  if(
+    url.pathname==="/api/prepa/google-drive/oauth/callback" &&
+    request.method==="GET"
+  ){
+    const code=String(url.searchParams.get("code")||"").trim();
+    const state=String(url.searchParams.get("state")||"").trim();
+    const err=String(url.searchParams.get("error")||"").trim();
+
+    if(err)return googleCallbackHtml(false,err);
+    if(!code||!state)return googleCallbackHtml(false,"CODE / STATE MANQUANT");
+
+    const savedState=await getIntegrationJson(env,"google_drive_oauth_state");
+    if(
+      !savedState ||
+      String(savedState.state||"")!==state ||
+      Date.now()-Number(savedState.created_at||0)>15*60*1000
+    ){
+      return googleCallbackHtml(false,"STATE OAUTH INVALIDE OU EXPIRÉ");
+    }
+
+    const form=new URLSearchParams({
+      code,
+      client_id:String(env.GOOGLE_CLIENT_ID||""),
+      client_secret:String(env.GOOGLE_CLIENT_SECRET||""),
+      redirect_uri:googleDriveRedirectUri(request),
+      grant_type:"authorization_code"
+    });
+
+    const resp=await fetch("https://oauth2.googleapis.com/token",{
+      method:"POST",
+      headers:{"Content-Type":"application/x-www-form-urlencoded"},
+      body:form.toString()
+    });
+
+    const token=await resp.json().catch(()=>({}));
+    if(!resp.ok||!token?.refresh_token){
+      return googleCallbackHtml(
+        false,
+        token?.error_description||token?.error||`TOKEN HTTP ${resp.status}`
+      );
+    }
+
+    // Récupère l'adresse du compte si possible.
+    let email="";
+    try{
+      const me=await fetch(
+        "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)",
+        {headers:{Authorization:`Bearer ${token.access_token}`}}
+      );
+      const mj=await me.json();
+      email=String(mj?.user?.emailAddress||"");
+    }catch(e){}
+
+    await setIntegrationJson(env,"google_drive_oauth",{
+      refresh_token:String(token.refresh_token),
+      email,
+      connected_at:new Date().toISOString()
+    });
+
+    return googleCallbackHtml(
+      true,
+      email ? `Compte connecté : ${email}` : "Google Drive est prêt."
+    );
+  }
+
+  /*
+   * V50.5 — REPAIR par VOL / COMPAGNIE / TOUT.
+   * Les vols neutralisés par suppression ne sont jamais remis à PENDING.
+   */
+  if(
+    url.pathname==="/api/prepa/repair" &&
+    request.method==="POST"
+  ){
+    const body=await request.json().catch(()=>null);
+    try{
+      const result=await repairPrepaScope(env,body||{});
+      return json({ok:true,...result});
+    }catch(e){
+      return json({ok:false,error:String(e?.message||e)},400);
+    }
+  }
+
+
+  /*
+   * ALYZIA OPS -> résultat du traitement d'une PREPA
+   * Autorise uniquement PENDING / PROCESSING / PROCESSED / ERROR.
+   */
+  if (
+    url.pathname === "/api/prepa/status" &&
+    request.method === "PATCH"
+  ) {
+
+    const body =
+      await request.json()
+        .catch(() => null);
+
+    const id =
+      Number(body?.id);
+
+    const gmailMessageId =
+      String(body?.gmailMessageId || "").trim();
+
+    const status =
+      String(body?.status || "")
+        .trim()
+        .toUpperCase();
+
+    const errorMessage =
+      String(body?.errorMessage || "").trim();
+
+    const allowed =
+      new Set([
+        "PENDING",
+        "UNIDENTIFIED",
+        "PROCESSING",
+        "PROCESSED",
+        "ERROR"
+      ]);
+
+    if (
+      !Number.isFinite(id) ||
+      id <= 0 ||
+      !gmailMessageId ||
+      !allowed.has(status)
+    ) {
+      return json({
+        ok: false,
+        error: "STATUT PREPA INVALIDE"
+      }, 400);
+    }
+
+    const existing =
+      await env.OPS_DB.prepare(`
+        SELECT
+          id,
+          gmail_message_id,
+          status
+        FROM prepa_inbox
+        WHERE id=?
+          AND gmail_message_id=?
+        LIMIT 1
+      `)
+      .bind(id, gmailMessageId)
+      .first();
+
+    if (!existing) {
+      return json({
+        ok: false,
+        error: "PREPA INTROUVABLE"
+      }, 404);
+    }
+
+    await env.OPS_DB.prepare(`
+      UPDATE prepa_inbox
+      SET
+        status=?,
+        error_message=?,
+        processed_at=
+          CASE
+            WHEN ?='PROCESSED'
+              THEN CURRENT_TIMESTAMP
+            ELSE processed_at
+          END,
+        updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+        AND gmail_message_id=?
+    `)
+    .bind(
+      status,
+      status === "ERROR"
+        ? errorMessage
+        : "",
+      status,
+      id,
+      gmailMessageId
+    )
+    .run();
+
+    return json({
+      ok: true,
+      id,
+      gmailMessageId,
+      status
+    });
+  }
+
+
+
+  /*
+   * V50.5 — suppression totale d'un vol importé.
+   * - supprime fiche D1 / PREPA / Notes / R2
+   * - si deleteDrive=true, supprime directement le dossier Drive via OAuth Google avant la suppression D1.
+   */
+  if (
+    url.pathname === "/api/prepa/flight" &&
+    request.method === "DELETE"
+  ) {
+    const body=await request.json().catch(()=>null);
+    const airline=String(body?.airline||"").trim().toUpperCase();
+    const flightNumber=String(body?.flightNumber||"").replace(/\s+/g,"").trim().toUpperCase();
+    const flightDate=String(body?.flightDate||"").trim();
+    const deleteDrive=body?.deleteDrive===true;
+
+    if(!airline||!flightNumber||!flightDate){
+      return json({ok:false,error:"AIRLINE / FLIGHT / DATE MANQUANTS"},400);
+    }
+
+    const prepaRows=(await env.OPS_DB.prepare(`
+      SELECT id,drive_folder_id,gmail_message_id
+      FROM prepa_inbox
+      WHERE UPPER(airline)=?
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(airline,flightNumber,flightDate).all()).results||[];
+
+    const driveFolderIds=[...new Set(prepaRows.map(r=>String(r.drive_folder_id||"").trim()).filter(Boolean))];
+    const driveStatus=await googleDriveStatus(env);
+    let driveDeleteResult=null;
+
+    if(deleteDrive){
+      if(!driveStatus.configured){
+        return json({
+          ok:false,
+          error:"GOOGLE DRIVE DIRECT NON CONFIGURÉ",
+          driveDeleteConfigured:false,
+          googleDrive:driveStatus
+        },409);
+      }
+
+      driveDeleteResult=await trashDriveFoldersDirect(env,driveFolderIds);
+
+      if(!driveDeleteResult.ok){
+        return json({
+          ok:false,
+          error:"SUPPRESSION DRIVE INCOMPLÈTE",
+          driveDeleteConfigured:true,
+          driveDeleteResult
+        },502);
+      }
+    }
+
+    /*
+     * Neutralisation AVANT suppression D1 :
+     * les messages restent dans Gmail, mais toute nouvelle remontée
+     * du Dispatcher sera ignorée par /api/prepa/import.
+     */
+    await suppressPrepaFlight(env,{
+      airline,
+      flightNumber,
+      flightDate,
+      prepaRows
+    });
+
+    const flightRows=(await env.OPS_DB.prepare(`
+      SELECT identity
+      FROM flights
+      WHERE UPPER(airline)=?
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(airline,flightNumber,flightDate).all()).results||[];
+
+    const identities=[...new Set(flightRows.map(r=>String(r.identity||"").trim()).filter(Boolean))];
+
+    let deletedR2=0;
+    for(const identity of identities){
+      const attachments=(await env.OPS_DB.prepare(`
+        SELECT id,r2_key
+        FROM flight_attachments
+        WHERE flight_identity=?
+      `).bind(identity).all()).results||[];
+
+      if(env.OPS_FILES){
+        for(const att of attachments){
+          const key=String(att.r2_key||"").trim();
+          if(key){
+            try{await env.OPS_FILES.delete(key);deletedR2++}catch(e){}
+          }
+        }
+      }
+      await env.OPS_DB.prepare("DELETE FROM flight_attachments WHERE flight_identity=?").bind(identity).run();
+      await env.OPS_DB.prepare("DELETE FROM flight_notes WHERE flight_identity=?").bind(identity).run();
+    }
+
+    const fdel=await env.OPS_DB.prepare(`
+      DELETE FROM flights
+      WHERE UPPER(airline)=?
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(airline,flightNumber,flightDate).run();
+    if(fdel?.meta?.changes)await bumpFlightsEpoch(env);
+
+    const pdel=await env.OPS_DB.prepare(`
+      DELETE FROM prepa_inbox
+      WHERE UPPER(airline)=?
+        AND UPPER(REPLACE(flight_number,' ',''))=?
+        AND flight_date=?
+    `).bind(airline,flightNumber,flightDate).run();
+
+    return json({
+      ok:true,
+      deleted:true,
+      airline,
+      flightNumber,
+      flightDate,
+      driveDeleteConfigured:driveStatus.configured,
+      driveDeleteResult,
+      neutralized:true,
+      driveFolderIds,
+      flightsDeleted:Number(fdel.meta?.changes||0),
+      prepaDeleted:Number(pdel.meta?.changes||0),
+      r2Deleted:deletedR2,
+      identities
+    });
+  }
+
+
+  /*
+   * ALYZIA OPS -> lecture boîte PRÉPA
+   */
+  if (url.pathname === "/api/prepa/summary" && request.method === "GET") {
+    return json(await lot5PrepaFastSummaryV535(env));
+  }
+
+  if (
+    url.pathname === "/api/prepa" &&
+    request.method === "GET"
+  ) {
+
+    const items =
+      await getPrepaInbox(
+        env,
+        url
+      );
+
+
+    return json({
+      ok: true,
+      count: items.length,
+      items
+    });
+  }
+
+
+  return json({
+    ok: false,
+    error: "ROUTE PREPA INTROUVABLE"
+  }, 404);
+}
+
+/*
+ * Plan cabine ALYZIA (remplace le pont SARIA pour l'affichage).
+ * Constat SARIA (audit CI du 21/09) : le rendu de SARIA ne lit jamais les
+ * lignes zones/seats/equipments de sa propre base D1 (code mort côté
+ * front) — il retombe systématiquement sur un gabarit générique par
+ * catégorie d'avion. On reconstruit donc ici un modèle minimal mais
+ * réellement utilisé par le rendu : une config = une ou plusieurs zones
+ * (classe, plage de rangées, motif de sièges façon "AC|DEF|HK", quelques
+ * exceptions ligne par ligne) + des équipements (office/toilette/sortie).
+ * La plupart des sièges se déduisent du motif ; pas de table par siège.
+ */
+async function ensureCabinTables(env){
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS cabin_configs (
+        config_key TEXT PRIMARY KEY,
+        airline TEXT NOT NULL,
+        aircraft TEXT NOT NULL,
+        configuration TEXT NOT NULL,
+        total INTEGER NOT NULL DEFAULT 0,
+        classes_json TEXT NOT NULL DEFAULT '[]',
+        quality TEXT NOT NULL DEFAULT 'manuel',
+        source_label TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS cabin_zones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_key TEXT NOT NULL,
+        class TEXT NOT NULL,
+        row_start INTEGER NOT NULL,
+        row_end INTEGER NOT NULL,
+        pattern TEXT NOT NULL,
+        placement_mode TEXT NOT NULL DEFAULT 'ALIGNE',
+        exceptions TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS cabin_equipment (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        row_reference INTEGER,
+        side TEXT,
+        label TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS cabin_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_key TEXT NOT NULL,
+        message TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_configs_ac ON cabin_configs(airline, aircraft)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_zones_key ON cabin_zones(config_key)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_equipment_key ON cabin_equipment(config_key)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_reports_resolved ON cabin_reports(resolved)`)
+  ]);
+  /*
+   * Ajout après coup (ordre manuel des zones dans l'éditeur "ZONES DU
+   * PLAN" — permet ex. de placer une zone C avant une zone M même si
+   * leurs plages de rangées se chevauchent). ALTER TABLE ADD COLUMN
+   * échoue si la colonne existe déjà : on l'exécute hors du batch
+   * (qui est transactionnel — une erreur y annulerait tout) et on
+   * avale l'erreur, comme une migration idempotente classique.
+   */
+  await env.OPS_DB.prepare(`ALTER TABLE cabin_zones ADD COLUMN sort_order INTEGER`).run().catch(()=>{});
+  // Pont (MAIN / UPPER) pour les avions à deux ponts ; vide = pont unique.
+  await env.OPS_DB.prepare(`ALTER TABLE cabin_zones ADD COLUMN deck TEXT`).run().catch(()=>{});
+}
+
+// Etend un motif "AC|DEFG|HK" (+ exceptions "13=SKIP" / "38=AB||JK") en un
+// nombre reel de sieges, rangee par rangee — meme logique que cabinZoneRows
+// cote front (public/index.html), pour que classes_json/total stockes en base
+// correspondent exactement a ce que le plan affiche (jamais le calcul naif
+// largeur-du-motif x nombre-de-rangees, qui ignore les rangees reduites).
+function cabinZonesToClassCounts(zones){
+  const counts={};
+  for(const z of (zones||[])){
+    const cls=String(z.class||"").trim().toUpperCase();
+    if(!cls)continue;
+    const excMap={};
+    String(z.exceptions||"").split(/\n+/).map(s=>s.trim()).filter(Boolean).forEach(line=>{
+      const m=line.match(/^(\d+)\s*=\s*(.+)$/);
+      if(m)excMap[Number(m[1])]=m[2].trim();
+    });
+    const start=Number(z.row_start),end=Number(z.row_end);
+    for(let r=start;r<=end;r++){
+      const pat=Object.prototype.hasOwnProperty.call(excMap,r)?excMap[r]:z.pattern;
+      if(pat==="SKIP")continue;
+      const groups=String(pat||"").split("|");
+      let n=0;
+      for(const g of groups)n+=(g.match(/[A-Z]/g)||[]).length;
+      counts[cls]=(counts[cls]||0)+n;
+    }
+  }
+  return counts;
+}
+
+async function handleCabin(request,env,url){
+  if(!url.pathname.startsWith("/api/cabin"))return null;
+  await ensureCabinTables(env);
+
+  if(request.method==="OPTIONS")return json({ok:true});
+
+  if(url.pathname==="/api/cabin/configs" && request.method==="GET"){
+    const airline=String(url.searchParams.get("airline")||"").trim().toUpperCase();
+    const aircraft=String(url.searchParams.get("aircraft")||"").trim().toUpperCase();
+    let sql=`SELECT config_key,airline,aircraft,configuration,total,classes_json,quality,source_label,updated_at FROM cabin_configs WHERE 1=1`;
+    const binds=[];
+    if(airline){sql+=` AND airline=?`;binds.push(airline)}
+    if(aircraft){sql+=` AND aircraft=?`;binds.push(aircraft)}
+    sql+=` ORDER BY airline,aircraft,configuration`;
+    const {results=[]}=await env.OPS_DB.prepare(sql).bind(...binds).all();
+    return json({ok:true,count:results.length,configs:results});
+  }
+
+  if(url.pathname==="/api/cabin/layout" && request.method==="GET"){
+    const key=String(url.searchParams.get("key")||"").trim();
+    if(!key)return json({ok:false,error:"KEY MANQUANTE"},400);
+
+    const configuration=await env.OPS_DB.prepare(`SELECT * FROM cabin_configs WHERE config_key=? LIMIT 1`).bind(key).first();
+    // Tant qu'aucune zone n'a jamais été réordonnée manuellement, sort_order
+    // reste NULL pour toutes et on retombe sur l'ordre naturel (rangée, id).
+    // Dès qu'un réordonnancement a eu lieu (voir /api/cabin/zone/move), les
+    // sort_order de TOUTES les zones de la config sont renseignées d'un coup,
+    // donc on les priorise dès qu'elles existent.
+    const zones=await env.OPS_DB.prepare(`SELECT * FROM cabin_zones WHERE config_key=? ORDER BY (sort_order IS NULL),sort_order,row_start,id`).bind(key).all();
+    const equipment=await env.OPS_DB.prepare(`SELECT * FROM cabin_equipment WHERE config_key=? ORDER BY row_reference,id`).bind(key).all();
+
+    return json({ok:true,key,configuration:configuration||null,zones:zones.results||[],equipment:equipment.results||[]});
+  }
+
+  if(url.pathname==="/api/cabin/config" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    const airline=String(body?.airline||"").trim().toUpperCase();
+    const aircraft=String(body?.aircraft||"").trim().toUpperCase();
+    const configuration=String(body?.configuration||"").trim().toUpperCase();
+    if(!airline||!aircraft||!configuration)return json({ok:false,error:"AIRLINE / AIRCRAFT / CONFIGURATION OBLIGATOIRES"},400);
+    const configKey=String(body?.configKey||`${airline}|${aircraft}|${configuration}`);
+
+    await env.OPS_DB.prepare(`
+      INSERT INTO cabin_configs (config_key,airline,aircraft,configuration,total,classes_json,quality,source_label,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(config_key) DO UPDATE SET
+        airline=excluded.airline, aircraft=excluded.aircraft, configuration=excluded.configuration,
+        total=excluded.total, classes_json=excluded.classes_json, quality=excluded.quality,
+        source_label=excluded.source_label, updated_at=CURRENT_TIMESTAMP
+    `).bind(
+      configKey,airline,aircraft,configuration,
+      Number(body?.total||0),
+      typeof body?.classes==="string"?body.classes:JSON.stringify(body?.classes||[]),
+      String(body?.quality||"manuel"),
+      body?.sourceLabel?String(body.sourceLabel):null
+    ).run();
+
+    return json({ok:true,configKey});
+  }
+
+  if(url.pathname==="/api/cabin/zone" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    const configKey=String(body?.configKey||"").trim();
+    const cls=String(body?.class||"").trim().toUpperCase();
+    const rowStart=Number(body?.rowStart);
+    const rowEnd=Number(body?.rowEnd);
+    const pattern=String(body?.pattern||"").trim().toUpperCase();
+    if(!configKey||!cls||!Number.isFinite(rowStart)||!Number.isFinite(rowEnd)||!pattern){
+      return json({ok:false,error:"ZONE INVALIDE (configKey/class/rowStart/rowEnd/pattern requis)"},400);
+    }
+
+    const result=await env.OPS_DB.prepare(`
+      INSERT INTO cabin_zones (config_key,class,row_start,row_end,pattern,placement_mode,exceptions,deck,created_at)
+      VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    `).bind(configKey,cls,rowStart,rowEnd,pattern,String(body?.placementMode||"ALIGNE"),String(body?.exceptions||""),String(body?.deck||"").trim().toUpperCase()||null).run();
+
+    return json({ok:true,id:Number(result.meta?.last_row_id||0)});
+  }
+
+  if(url.pathname==="/api/cabin/zone" && request.method==="DELETE"){
+    const id=Number(url.searchParams.get("id"));
+    if(!id)return json({ok:false,error:"ID MANQUANT"},400);
+    await env.OPS_DB.prepare(`DELETE FROM cabin_zones WHERE id=?`).bind(id).run();
+    return json({ok:true});
+  }
+
+  // Modifier une zone existante EN PLACE (au lieu de supprimer + recréer,
+  // qui perdait l'historique et forçait à tout retaper) — demande explicite
+  // utilisateur sur l'éditeur "ZONES DU PLAN".
+  if(url.pathname==="/api/cabin/zone" && request.method==="PATCH"){
+    const body=await request.json().catch(()=>null);
+    const id=Number(body?.id);
+    if(!id)return json({ok:false,error:"ID MANQUANT"},400);
+    const cls=String(body?.class||"").trim().toUpperCase();
+    const rowStart=Number(body?.rowStart);
+    const rowEnd=Number(body?.rowEnd);
+    const pattern=String(body?.pattern||"").trim().toUpperCase();
+    if(!cls||!Number.isFinite(rowStart)||!Number.isFinite(rowEnd)||!pattern){
+      return json({ok:false,error:"ZONE INVALIDE (class/rowStart/rowEnd/pattern requis)"},400);
+    }
+    await env.OPS_DB.prepare(`
+      UPDATE cabin_zones SET class=?,row_start=?,row_end=?,pattern=?,placement_mode=?,exceptions=?,deck=COALESCE(?,deck) WHERE id=?
+    `).bind(cls,rowStart,rowEnd,pattern,String(body?.placementMode||"ALIGNE"),String(body?.exceptions||""),body?.deck===undefined?null:String(body.deck||"").trim().toUpperCase(),id).run();
+    return json({ok:true,id});
+  }
+
+  // Déplace une zone avant/après sa voisine dans l'ordre d'affichage de
+  // l'éditeur (ex. mettre C avant M même si les deux commencent à la même
+  // rangée). Au premier déplacement sur une config, on fige l'ordre courant
+  // de TOUTES ses zones dans sort_order (jusque-là NULL), puis on échange
+  // simplement la valeur de la zone déplacée avec celle de sa voisine.
+  if(url.pathname==="/api/cabin/zone/move" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    const id=Number(body?.id);
+    const configKey=String(body?.configKey||"").trim();
+    const direction=String(body?.direction||"").trim();
+    if(!id||!configKey||(direction!=="up"&&direction!=="down")){
+      return json({ok:false,error:"id/configKey/direction(up|down) requis"},400);
+    }
+    const {results:zones=[]}=await env.OPS_DB.prepare(
+      `SELECT id,sort_order FROM cabin_zones WHERE config_key=? ORDER BY (sort_order IS NULL),sort_order,row_start,id`
+    ).bind(configKey).all();
+    const needsBackfill=zones.some(z=>z.sort_order==null);
+    const ordered=needsBackfill?zones.map((z,i)=>({...z,sort_order:(i+1)*10})):zones;
+    const idx=ordered.findIndex(z=>z.id===id);
+    if(idx<0)return json({ok:false,error:"ZONE INTROUVABLE DANS CETTE CONFIG"},404);
+    const swapIdx=direction==="up"?idx-1:idx+1;
+    if(swapIdx<0||swapIdx>=ordered.length){
+      // Déjà en première/dernière position : si un backfill était nécessaire
+      // (première utilisation du réordonnancement sur cette config), on
+      // l'écrit quand même pour que l'ordre actuel devienne l'ordre stocké.
+      if(needsBackfill){
+        await env.OPS_DB.batch(ordered.map(z=>env.OPS_DB.prepare(`UPDATE cabin_zones SET sort_order=? WHERE id=?`).bind(z.sort_order,z.id)));
+      }
+      return json({ok:true,moved:false});
+    }
+    const a=ordered[idx],b=ordered[swapIdx];
+    const aOrder=a.sort_order,bOrder=b.sort_order;
+    const stmts=ordered
+      .filter(z=>needsBackfill||z.id===a.id||z.id===b.id)
+      .map(z=>{
+        const order=z.id===a.id?bOrder:z.id===b.id?aOrder:z.sort_order;
+        return env.OPS_DB.prepare(`UPDATE cabin_zones SET sort_order=? WHERE id=?`).bind(order,z.id);
+      });
+    await env.OPS_DB.batch(stmts);
+    return json({ok:true,moved:true});
+  }
+
+  if(url.pathname==="/api/cabin/equipment" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    const configKey=String(body?.configKey||"").trim();
+    const type=String(body?.type||"").trim().toUpperCase();
+    if(!configKey||!type)return json({ok:false,error:"CONFIGKEY / TYPE OBLIGATOIRES"},400);
+
+    const result=await env.OPS_DB.prepare(`
+      INSERT INTO cabin_equipment (config_key,type,row_reference,side,label,created_at)
+      VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+    `).bind(
+      configKey,type,
+      body?.rowReference==null?null:Number(body.rowReference),
+      body?.side?String(body.side):null,
+      body?.label?String(body.label):null
+    ).run();
+
+    return json({ok:true,id:Number(result.meta?.last_row_id||0)});
+  }
+
+  if(url.pathname==="/api/cabin/equipment" && request.method==="DELETE"){
+    const id=Number(url.searchParams.get("id"));
+    if(!id)return json({ok:false,error:"ID MANQUANT"},400);
+    await env.OPS_DB.prepare(`DELETE FROM cabin_equipment WHERE id=?`).bind(id).run();
+    return json({ok:true});
+  }
+
+  if(url.pathname==="/api/cabin/layout" && request.method==="DELETE"){
+    const key=String(url.searchParams.get("key")||"").trim();
+    if(!key)return json({ok:false,error:"KEY MANQUANTE"},400);
+    await env.OPS_DB.batch([
+      env.OPS_DB.prepare(`DELETE FROM cabin_zones WHERE config_key=?`).bind(key),
+      env.OPS_DB.prepare(`DELETE FROM cabin_equipment WHERE config_key=?`).bind(key),
+      env.OPS_DB.prepare(`DELETE FROM cabin_configs WHERE config_key=?`).bind(key)
+    ]);
+    return json({ok:true,key});
+  }
+
+  // Import groupé (utilisé une fois pour amorcer la base avec des plans réels
+  // connus, réutilisable ensuite pour tout nouveau lot de plans vérifiés).
+  if(url.pathname==="/api/cabin/seed" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    const rows=Array.isArray(body?.configs)?body.configs:[];
+    if(!rows.length)return json({ok:false,error:"AUCUNE CONFIG A IMPORTER"},400);
+
+    let configsWritten=0,zonesWritten=0,equipmentWritten=0;
+    for(const row of rows){
+      const airline=String(row?.airline||"").trim().toUpperCase();
+      const aircraft=String(row?.aircraft||"").trim().toUpperCase();
+      const configuration=String(row?.configuration||"").trim().toUpperCase();
+      const configKey=String(row?.configKey||`${airline}|${aircraft}|${configuration}`);
+      const zones=Array.isArray(row?.zones)?row.zones:[];
+      if(!airline||!aircraft||!configuration||!zones.length)continue;
+
+      const classCounts=cabinZonesToClassCounts(zones);
+      const total=Object.values(classCounts).reduce((a,b)=>a+b,0);
+
+      await env.OPS_DB.prepare(`
+        INSERT INTO cabin_configs (config_key,airline,aircraft,configuration,total,classes_json,quality,source_label,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(config_key) DO UPDATE SET
+          airline=excluded.airline, aircraft=excluded.aircraft, configuration=excluded.configuration,
+          total=excluded.total, classes_json=excluded.classes_json, quality=excluded.quality,
+          source_label=excluded.source_label, updated_at=CURRENT_TIMESTAMP
+      `).bind(configKey,airline,aircraft,configuration,total,JSON.stringify(classCounts),String(row?.quality||"summary"),row?.sourceLabel?String(row.sourceLabel):null).run();
+      configsWritten++;
+
+      await env.OPS_DB.prepare(`DELETE FROM cabin_zones WHERE config_key=?`).bind(configKey).run();
+      for(const z of zones){
+        const cls=String(z?.class||"").trim().toUpperCase();
+        const rowStart=Number(z?.row_start);
+        const rowEnd=Number(z?.row_end);
+        const pattern=String(z?.pattern||"").trim().toUpperCase();
+        if(!cls||!Number.isFinite(rowStart)||!Number.isFinite(rowEnd)||!pattern)continue;
+        await env.OPS_DB.prepare(`
+          INSERT INTO cabin_zones (config_key,class,row_start,row_end,pattern,placement_mode,exceptions,deck,created_at)
+          VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+        `).bind(configKey,cls,rowStart,rowEnd,pattern,"ALIGNE",String(z?.exceptions||""),String(z?.deck||"").trim().toUpperCase()||null).run();
+        zonesWritten++;
+      }
+
+      const equipmentRows=Array.isArray(row?.equipment)?row.equipment:[];
+      await env.OPS_DB.prepare(`DELETE FROM cabin_equipment WHERE config_key=?`).bind(configKey).run();
+      for(const eq of equipmentRows){
+        const type=String(eq?.type||"").trim().toUpperCase();
+        const rowReference=Number(eq?.row_reference);
+        if(!type||!Number.isFinite(rowReference))continue;
+        await env.OPS_DB.prepare(`
+          INSERT INTO cabin_equipment (config_key,type,row_reference,side,label,created_at)
+          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+        `).bind(configKey,type,rowReference,eq?.side?String(eq.side):null,eq?.label?String(eq.label):null).run();
+        equipmentWritten++;
+      }
+    }
+
+    return json({ok:true,configsWritten,zonesWritten,equipmentWritten});
+  }
+
+  // Corrige apres-coup classes_json/total pour les configs deja en base :
+  // avant ce correctif, /api/cabin/seed calculait le total en multipliant
+  // betement largeur-du-motif x nombre-de-rangees, sans jamais retirer les
+  // rangees reduites listees en exception (ex. rangee sans galley/porte) —
+  // le total stocke pouvait donc etre superieur au vrai compte verifie.
+  // Recalcule chaque config_key a partir de ses zones actuelles, sans avoir
+  // a renvoyer tout le payload d'import.
+  if(url.pathname==="/api/cabin/recompute-classes" && request.method==="POST"){
+    const {results:configRows=[]}=await env.OPS_DB.prepare(`SELECT config_key FROM cabin_configs`).all();
+    let updated=0;
+    const changes=[];
+    for(const row of configRows){
+      const configKey=row.config_key;
+      const {results:zones=[]}=await env.OPS_DB.prepare(`SELECT class,row_start,row_end,pattern,exceptions FROM cabin_zones WHERE config_key=?`).bind(configKey).all();
+      if(!zones.length)continue;
+      const classCounts=cabinZonesToClassCounts(zones);
+      const total=Object.values(classCounts).reduce((a,b)=>a+b,0);
+      const before=await env.OPS_DB.prepare(`SELECT total,classes_json FROM cabin_configs WHERE config_key=?`).bind(configKey).first();
+      await env.OPS_DB.prepare(`UPDATE cabin_configs SET total=?,classes_json=?,updated_at=CURRENT_TIMESTAMP WHERE config_key=?`)
+        .bind(total,JSON.stringify(classCounts),configKey).run();
+      updated++;
+      if(Number(before?.total)!==total||String(before?.classes_json)!==JSON.stringify(classCounts)){
+        changes.push({configKey,before:{total:before?.total,classes_json:before?.classes_json},after:{total,classes_json:classCounts}});
+      }
+    }
+    return json({ok:true,updated,changed:changes.length,changes});
+  }
+
+  // Couvre l'écart entre les avions réellement traités dans les vols et les
+  // plans cabine déjà en base — sert à prioriser la vérification par usage
+  // réel plutôt que de revoir les 75 configs importées en vrac.
+  if(url.pathname==="/api/cabin/coverage" && request.method==="GET"){
+    const {results:flightRows=[]}=await env.OPS_DB.prepare(`
+      SELECT airline, json_extract(data_json,'$.aircraft') AS aircraft, COUNT(*) AS n
+      FROM flights
+      WHERE json_extract(data_json,'$.aircraft') IS NOT NULL AND json_extract(data_json,'$.aircraft')!=''
+      GROUP BY airline, aircraft
+      ORDER BY n DESC
+    `).all();
+    const {results:cabinRows=[]}=await env.OPS_DB.prepare(`
+      SELECT airline, aircraft, configuration, quality FROM cabin_configs ORDER BY airline, aircraft
+    `).all();
+
+    const byAc={};
+    for(const c of cabinRows){
+      const k=c.airline+"|"+c.aircraft;
+      (byAc[k]=byAc[k]||[]).push(c);
+    }
+    const coverage=flightRows.map(f=>{
+      const k=f.airline+"|"+f.aircraft;
+      const configs=byAc[k]||[];
+      let status;
+      if(!configs.length)status="none";
+      else if(configs.every(c=>c.quality==="exact"))status="exact";
+      else status="approximate";
+      return {airline:f.airline,aircraft:f.aircraft,flightCount:f.n,status,configs};
+    });
+
+    return json({ok:true,coverage});
+  }
+
+  // Signalement d'un bug sur un plan cabine depuis l'ecran Outils > SEATMAP —
+  // l'utilisateur decrit le probleme, on le retrouve ensuite dans la liste
+  // pour le corriger (au besoin en lui redemandant le PDF/mail source).
+  if(url.pathname==="/api/cabin/report" && request.method==="POST"){
+    const body=await request.json().catch(()=>null);
+    const configKey=String(body?.configKey||"").trim();
+    const message=String(body?.message||"").trim();
+    if(!configKey||!message)return json({ok:false,error:"CONFIG ET MESSAGE REQUIS"},400);
+    await env.OPS_DB.prepare(`INSERT INTO cabin_reports (config_key,message) VALUES (?,?)`).bind(configKey,message).run();
+    return json({ok:true});
+  }
+  if(url.pathname==="/api/cabin/report" && request.method==="GET"){
+    const resolved=url.searchParams.get("resolved");
+    const query=resolved===null
+      ? `SELECT * FROM cabin_reports ORDER BY resolved ASC, created_at DESC`
+      : `SELECT * FROM cabin_reports WHERE resolved=? ORDER BY created_at DESC`;
+    const stmt=resolved===null?env.OPS_DB.prepare(query):env.OPS_DB.prepare(query).bind(Number(resolved)?1:0);
+    const {results=[]}=await stmt.all();
+    return json({ok:true,reports:results});
+  }
+  if(url.pathname==="/api/cabin/report" && request.method==="PATCH"){
+    const body=await request.json().catch(()=>null);
+    const id=Number(body?.id);
+    if(!Number.isFinite(id))return json({ok:false,error:"ID REQUIS"},400);
+    await env.OPS_DB.prepare(`UPDATE cabin_reports SET resolved=1 WHERE id=?`).bind(id).run();
+    return json({ok:true});
+  }
+
+  return json({ok:false,error:"ROUTE CABIN INCONNUE"},404);
+}
+
+async function handleSariaBridge(request,env,url){
+  if(!url.pathname.startsWith("/api/saria/"))return null;
+
+  const subpath=url.pathname.replace(/^\/api\/saria/,"/api");
+  const headers=new Headers(request.headers);
+  headers.delete("host");
+
+  let response;
+
+  if(env.SARIA && typeof env.SARIA.fetch==="function"){
+    const internal=new URL(request.url);
+    internal.protocol="https:";
+    internal.hostname="saria.internal";
+    internal.pathname=subpath;
+
+    response=await env.SARIA.fetch(new Request(internal.toString(),{
+      method:request.method,
+      headers,
+      body:["GET","HEAD"].includes(request.method)?undefined:request.body
+    }));
+  }else{
+    const target=new URL(subpath+url.search,SARIA_PUBLIC_ORIGIN);
+    response=await fetch(target.toString(),{
+      method:request.method,
+      headers,
+      body:["GET","HEAD"].includes(request.method)?undefined:request.body
+    });
+  }
+
+  const outHeaders=new Headers(response.headers);
+  outHeaders.set("Access-Control-Allow-Origin","*");
+  outHeaders.set("X-ALYZIA-SARIA-BRIDGE",env.SARIA?"SERVICE-BINDING":"PUBLIC-FALLBACK");
+
+  if(request.method==="GET"){
+    outHeaders.set(
+      "Cache-Control",
+      subpath.includes("/layout")?"public, max-age=3600":"public, max-age=300"
+    );
+  }
+
+  return new Response(response.body,{
+    status:response.status,
+    statusText:response.statusText,
+    headers:outHeaders
+  });
+}
+
+export default {
+  async fetch(request,env){
+    const url=new URL(request.url);
+
+    try{
+      if(request.method==="OPTIONS")return json({ok:true});
+
+      if(url.pathname.startsWith("/api/flights")){
+        const result=await handleFlights(request,env,url);
+        if(result)return result;
+      }
+
+      if(url.pathname.startsWith("/api/airline-profiles")){
+        const result=await handleAirlineProfiles(request,env,url);
+        if(result)return result;
+      }
+
+      if(url.pathname.startsWith("/api/flight-notes") ||
+         url.pathname.startsWith("/api/flight-attachments")){
+        const result=await handleFlightNotes(request,env,url);
+        if(result)return result;
+      }
+
+      if(
+        url.pathname.startsWith("/api/autopilot") ||
+        url.pathname.startsWith("/api/gmail-clean")
+      ){
+        const result=await handleLot5(request,env,url);
+        if(result)return result;
+      }
+
+      if(url.pathname.startsWith("/api/gmail") || url.pathname.startsWith("/api/import-pipeline")){
+        const result=await handleGmailPipeline(request,env,url);
+        if(result)return result;
+      }
+
+      if(url.pathname.startsWith("/api/prepa")){
+        const result=await handlePrepa(request,env,url);
+        if(result)return result;
+      }
+
+      if(url.pathname.startsWith("/api/saria/")){
+        const result=await handleSariaBridge(request,env,url);
+        if(result)return result;
+      }
+
+      if(url.pathname.startsWith("/api/cabin")){
+        const result=await handleCabin(request,env,url);
+        if(result)return result;
+      }
+
+      const assetResponse=await env.ASSETS.fetch(request);
+    const headers=new Headers(assetResponse.headers);
+    if(url.pathname==="/" || url.pathname.endsWith(".html")){
+      headers.set("Cache-Control","no-store, no-cache, must-revalidate, max-age=0");
+      headers.set("Pragma","no-cache");
+      headers.set("Expires","0");
+    }
+    return new Response(assetResponse.body,{
+      status:assetResponse.status,
+      statusText:assetResponse.statusText,
+      headers
+    });
+
+    }catch(err){
+      console.error("ALYZIA OPS V50.1",err);
+      return json({
+        ok:false,
+        error:err?.message||String(err)
+      },500);
+    }
+  },
+
+  async scheduled(controller,env,ctx){
+    ctx.waitUntil((async()=>{
+      await catchUpEntAircraft(env);
+      await catchUpAircraftChanges(env);
+      const result=await lot5AutoPilotRun(env,{triggerType:"CRON"});
+      if(!result?.ok)console.error("ALYZIA LOT5 AUTO PILOT",result?.error||result);
+    })());
+  }
+};
+
+export {catchUpEntAircraft,catchUpAircraftChanges,normalizeEntAircraft}; // pour les tests
