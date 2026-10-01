@@ -10,6 +10,7 @@ import {runFr24ApiQueue} from "./fr24api-queue-runner.js";
 import {runCdgBoardQueue} from "./cdgboard-queue-runner.js";
 import {runFlightradar1Queue,runFlightradar8Queue} from "./flightradar1-queue-runner.js";
 import {handleOpenSkyIngest} from "./opensky-live-wrapper.js";
+import {handlePublicWebDayTest} from "./public-web-day-test.js";
 
 const FIRST_PAINT=String.raw`<style id="alyzia-first-paint-guard-css">html:not(.alyzia-ui-stability-ready) #app{visibility:hidden!important}</style>`;
 
@@ -23,8 +24,6 @@ function patch(html){
 const jsonResp=(o,status=200)=>new Response(JSON.stringify(o),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}});
 const liveApisEnabled=env=>String(env?.ALYZIA_LIVE_APIS_ENABLED||"").trim().toLowerCase()==="true";
 
-// Bouton PUSH de l'ADMIN : lance tout de suite le même enchaînement que le cron (file d'attente + fournisseurs),
-// sans attendre le prochain passage et en ignorant les cadences (jamais les plafonds jour / mois). 1 push / 60 s.
 async function adminPushNow(request,env,ctx){
   if(!liveApisEnabled(env))return jsonResp({ok:false,error:"LIVE_APIS_DISABLED"},423);
   if(request.method!=="POST")return jsonResp({ok:false,error:"METHOD"},405);
@@ -39,8 +38,6 @@ async function adminPushNow(request,env,ctx){
   const snapshot=async()=>{try{const {results=[]}=await env.OPS_DB.prepare(`SELECT provider,calls FROM api_provider_usage WHERE period=?`).bind(day).all();const m={};for(const r of results){const k=String(r.provider||"").toUpperCase().replace(/_.*/,"");m[k]=(m[k]||0)+Number(r.calls||0)}return m}catch{return {}}};
   const before=await snapshot(),t0=Date.now();
   globalThis.__ALYZIA_MANUAL_PUSH=true;
-  // On n'exécute PAS tout le cron (trop long pour une requête HTTP : il ne répondait pas) mais l'essentiel : mise à jour de la file
-  // puis les fournisseurs qui rattrapent ATD/ATA/ETD/ETA/STA/porte/immat., dans l'ordre d'efficacité, avec un budget de 25 s.
   const steps=[["QUEUE",refreshProviderQueue],["FR24DEP",runFr24DepQueue],["FLIGHTERA",runFlighteraQueue],["CDGBOARD",runCdgBoardQueue],["KAYAK",runKayakQueue],["SERPAPI",runSerpapiQueue],["FR24API",runFr24ApiQueue],["FLIGHTRADAR8",runFlightradar8Queue],["FLIGHTRADAR1",runFlightradar1Queue]];
   const results={},started=Date.now();
   const work=(async()=>{for(const [name,fn] of steps){if(Date.now()-started>22000){results[name]="ignoré (temps)";continue}try{const r=await fn(env);results[name]=r?.skipped||"ok"}catch(e){results[name]="erreur: "+String(e?.message||e).slice(0,80)}}})();
@@ -91,10 +88,8 @@ export default {
   async fetch(request,env,ctx){
     const denied=guardApi(request,env);
     if(denied)return denied;
-    // Page finale fabriquée au déploiement (scripts/bake-html.mjs) : servie telle quelle, sans repasser par les wrappers.
-    // Pas de validateur (ETag / Last-Modified) volontairement : Cloudflare retire l'ETag, et un validateur calculé à part du fichier
-    // pourrait, le temps de la propagation d'un déploiement, étiqueter une ancienne page avec le nouveau jeton (page figée côté navigateur).
-    // Si le fichier n'est pas (encore) disponible sur ce point de présence, repli automatique sur le calcul à l'ouverture.
+    const publicTest=await handlePublicWebDayTest(request,env);
+    if(publicTest)return publicTest;
     let bakeFallback="";
     if(!globalThis.__ALYZIA_BAKING&&(request.method==="GET"||request.method==="HEAD")){
       const path=new URL(request.url).pathname;
