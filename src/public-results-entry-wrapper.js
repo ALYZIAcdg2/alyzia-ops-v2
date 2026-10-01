@@ -58,11 +58,11 @@ function patchRow(row){
  const x=getFlight(row);if(!x||!row.querySelector('.v2-card'))return;
  const sched=scheduleFor(x);
  const std=hh(val(x,['std','scheduledDeparture','scheduled_departure'])||sched.std);
- const etd=hh(val(x,['etd','edt','estimatedDeparture','estimated_departure'])||sched.etd);
- const atd=hh(val(x,['atd','actualDeparture','actual_departure','gateOut','gate_out'])||sched.atd);
+ const etd=hh(val(x,['etd','edt','estimatedDeparture','estimated_departure']));
+ const atd=hh(val(x,['atd','actualDeparture','actual_departure','gateOut','gate_out']));
  const sta=hh(val(x,['sta','scheduledArrival','scheduled_arrival'])||sched.sta);
- const eta=hh(val(x,['eta','estimatedArrival','estimated_arrival'])||sched.eta);
- const ata=hh(val(x,['ata','actualArrival','actual_arrival','gateIn','gate_in'])||sched.ata);
+ const eta=hh(val(x,['eta','estimatedArrival','estimated_arrival']));
+ const ata=hh(val(x,['ata','actualArrival','actual_arrival','gateIn','gate_in']));
  const boxes=row.querySelectorAll('.v2-timebox');
  const depSig=[std,etd,atd].join('|'),arrSig=[sta,eta,ata].join('|');
  patchGrid(boxes[0]?.querySelector('.v2-time-grid'),depSig,cell('STD',std)+cell('ETD',etd,etd?'warn':'')+cell('ATD',atd,atd?'ok':''));
