@@ -64,10 +64,117 @@ function extract(raw,flight,id){
   return {times,registrations,aircraft,terminals,gates,statuses,excerpt:text.slice(0,3200),fr24OccurrenceId:id||"",occurrenceMatched,flightMatched,useful};
 }
 
+const nested=(obj,path)=>path.reduce((v,k)=>v!=null?v[k]:null,obj);
+const epoch=v=>Number.isFinite(Number(v))&&Number(v)>0?Number(v):null;
+const iso=v=>{const n=epoch(v);return n?new Date(n*1000).toISOString():null};
+
+function playbackFlight(json){
+  const data=nested(json,["result","response","data"]);
+  if(data?.flight&&typeof data.flight==="object")return data.flight;
+  if(Array.isArray(data))return data[0]||null;
+  return null;
+}
+
+function playbackCandidates(data,flight,id){
+  const f=playbackFlight(data);
+  if(!f)return null;
+  const number=upper(nested(f,["identification","number","default"])||nested(f,["identification","callsign"]));
+  const requested=upper(flight.designator);
+  const identificationMatched=!number||number===requested||number.replace(/\s+/g,"")===requested;
+  const scheduledDeparture=epoch(nested(f,["time","scheduled","departure"]));
+  const estimatedDeparture=epoch(nested(f,["time","estimated","departure"]));
+  const realDeparture=epoch(nested(f,["time","real","departure"]));
+  const scheduledArrival=epoch(nested(f,["time","scheduled","arrival"]));
+  const estimatedArrival=epoch(nested(f,["time","estimated","arrival"]));
+  const realArrival=epoch(nested(f,["time","real","arrival"]));
+  const registration=upper(nested(f,["aircraft","registration"]));
+  const aircraft=upper(nested(f,["aircraft","model","code"]));
+  const status=clean(nested(f,["status","generic","status","text"])||nested(f,["status","text"]));
+  const origin=upper(nested(f,["airport","origin","code","iata"])||nested(f,["airport","origin","code","icao"]));
+  const destination=upper(nested(f,["airport","destination","code","iata"])||nested(f,["airport","destination","code","icao"]));
+  const terminalOrigin=upper(nested(f,["airport","origin","info","terminal"]));
+  const terminalDestination=upper(nested(f,["airport","destination","info","terminal"]));
+  const gateOrigin=upper(nested(f,["airport","origin","info","gate"]));
+  const gateDestination=upper(nested(f,["airport","destination","info","gate"]));
+  const semantic={
+    std:iso(scheduledDeparture),
+    etd:iso(estimatedDeparture),
+    takeoff:iso(realDeparture),
+    sta:iso(scheduledArrival),
+    eta:iso(estimatedArrival),
+    landing:iso(realArrival),
+    type:aircraft||null,
+    reg:registration||null,
+    status:status||null,
+    origin:origin||null,
+    destination:destination||null,
+    terminalOrigin:terminalOrigin||null,
+    terminalDestination:terminalDestination||null,
+    gateOrigin:gateOrigin||null,
+    gateDestination:gateDestination||null
+  };
+  const times=[scheduledDeparture,estimatedDeparture,realDeparture,scheduledArrival,estimatedArrival,realArrival].filter(Boolean).map(iso);
+  const useful=times.length+(registration?1:0)+(aircraft?1:0)+(status?1:0)+(origin?1:0)+(destination?1:0);
+  return {
+    times,
+    registrations:registration?[registration]:[],
+    aircraft:aircraft?[aircraft]:[],
+    terminals:uniq([terminalOrigin,terminalDestination]),
+    gates:uniq([gateOrigin,gateDestination]),
+    statuses:status?[upper(status)]:[],
+    excerpt:"FR24 public playback data for exact occurrence",
+    semantic,
+    fr24OccurrenceId:id||"",
+    occurrenceMatched:true,
+    flightMatched:identificationMatched,
+    useful
+  };
+}
+
+async function fetchPlayback(flight,id){
+  if(!id)return null;
+  const url=`https://api.flightradar24.com/common/v1/flight-playback.json?flightId=${encodeURIComponent(id)}`;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),10000);
+  try{
+    const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
+      "accept":"application/json,text/plain,*/*",
+      "accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
+      "origin":"https://www.flightradar24.com",
+      "referer":`https://www.flightradar24.com/${encodeURIComponent(upper(flight.designator))}/${encodeURIComponent(id)}`,
+      "sec-fetch-dest":"empty",
+      "sec-fetch-mode":"cors",
+      "sec-fetch-site":"same-site",
+      "user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36"
+    }});
+    const ct=clean(r.headers.get("content-type")).toLowerCase();
+    if(!r.ok)return {url,finalUrl:r.url,httpStatus:r.status,status:r.status===403?"PLAYBACK_BLOCKED":"PLAYBACK_HTTP_ERROR",candidates:null};
+    if(!ct.includes("json"))return {url,finalUrl:r.url,httpStatus:r.status,status:"PLAYBACK_NOT_JSON",candidates:null};
+    const data=await r.json();
+    const candidates=playbackCandidates(data,flight,id);
+    if(!candidates)return {url,finalUrl:r.url,httpStatus:r.status,status:"PLAYBACK_NO_FLIGHT",candidates:null};
+    const usable=candidates.flightMatched&&candidates.useful>0;
+    return {url,finalUrl:r.url,httpStatus:r.status,status:usable?"OK":"PLAYBACK_NO_USABLE_DATA",candidates};
+  }catch(e){
+    return {url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"PLAYBACK_TIMEOUT":"PLAYBACK_FETCH_ERROR",candidates:null,error:String(e?.message||e).slice(0,200)};
+  }finally{clearTimeout(timer)}
+}
+
 export async function fetchFr24Public(flight){
   const {id,urls}=fr24PublicUrls(flight);
   const checkedAt=new Date().toISOString();
   const attempts=[];
+
+  // This is the public website playback request used by FR24's own browser UI.
+  // It is distinct from the authenticated fr24api.flightradar24.com provider API.
+  if(id){
+    const playback=await fetchPlayback(flight,id);
+    attempts.push({url:playback.url,finalUrl:playback.finalUrl,httpStatus:playback.httpStatus,status:playback.status,candidates:playback.candidates,error:playback.error});
+    if(playback.status==="OK"){
+      return {name:"FR24",url:playback.url,status:"OK",httpStatus:playback.httpStatus,finalUrl:playback.finalUrl,mentionsFlight:true,candidates:{...playback.candidates,method:"PUBLIC_PLAYBACK",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
+    }
+  }
+
   for(const url of urls){
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),10000);
@@ -75,23 +182,24 @@ export async function fetchFr24Public(flight){
       const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
         "accept":"text/html,application/xhtml+xml",
         "accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
-        "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.1; public-web-page)"
+        "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.2; public-web-page)"
       }});
       const ct=clean(r.headers.get("content-type")).toLowerCase();
       const body=(ct.includes("text")||ct.includes("json")||ct.includes("javascript"))?await r.text():"";
       const candidates=extract(body,flight,id);
       const exactOk=id?candidates.occurrenceMatched:true;
       const usable=r.ok&&candidates.flightMatched&&exactOk&&candidates.useful>0;
-      const attempt={url,finalUrl:r.url,httpStatus:r.status,ok:r.ok,candidates};
+      const attempt={url,finalUrl:r.url,httpStatus:r.status,status:usable?"OK":"HTML_NO_USABLE_DATA",ok:r.ok,candidates};
       attempts.push(attempt);
       if(usable){
-        return {name:"FR24",url,status:"OK",httpStatus:r.status,finalUrl:r.url,mentionsFlight:true,candidates:{...candidates,attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,occurrenceMatched:a.candidates.occurrenceMatched,useful:a.candidates.useful}))},checkedAt};
+        return {name:"FR24",url,status:"OK",httpStatus:r.status,finalUrl:r.url,mentionsFlight:true,candidates:{...candidates,method:"PUBLIC_HTML",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
       }
     }catch(e){
-      attempts.push({url,finalUrl:url,httpStatus:0,error:String(e?.message||e).slice(0,200)});
+      attempts.push({url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"HTML_TIMEOUT":"HTML_FETCH_ERROR",error:String(e?.message||e).slice(0,200)});
     }finally{clearTimeout(timer)}
   }
   const best=[...attempts].sort((a,b)=>(b.candidates?.useful||0)-(a.candidates?.useful||0))[0];
-  const reason=id&&!best?.candidates?.occurrenceMatched?"EXACT_OCCURRENCE_NOT_EXTRACTED":"FR24_NO_USABLE_DATA";
-  return {name:"FR24",url:urls[0]||"",status:reason,httpStatus:Number(best?.httpStatus||0),finalUrl:best?.finalUrl||urls[0]||"",mentionsFlight:Boolean(best?.candidates?.flightMatched),candidates:{...(best?.candidates||{}),attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},error:reason,checkedAt};
+  const playbackAttempt=attempts.find(a=>String(a.status||"").startsWith("PLAYBACK_"));
+  const reason=playbackAttempt?.status||((id&&!best?.candidates?.occurrenceMatched)?"EXACT_OCCURRENCE_NOT_EXTRACTED":"FR24_NO_USABLE_DATA");
+  return {name:"FR24",url:best?.url||urls[0]||"",status:reason,httpStatus:Number(best?.httpStatus||0),finalUrl:best?.finalUrl||urls[0]||"",mentionsFlight:Boolean(best?.candidates?.flightMatched),candidates:{...(best?.candidates||{}),fr24OccurrenceId:id||"",method:"NONE",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},error:reason,checkedAt};
 }
