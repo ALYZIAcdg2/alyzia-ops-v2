@@ -1,3 +1,4 @@
+import {withIcaoFallback,publicPageStatus,matchesFlightStatsOccurrence} from "./public-flight-alias.js";
 const PUBLIC_SOURCES=[
   ["FR24",f=>`https://www.flightradar24.com/data/flights/${encodeURIComponent(f.designator.toLowerCase())}`],
   ["FLIGHTAWARE",f=>`https://www.flightaware.com/live/flight/${encodeURIComponent(f.designator)}`],
@@ -66,7 +67,8 @@ async function fetchSource(name,buildUrl,flight){
     const text=htmlText(body);
     const candidates=extractCandidates(text,flight);
     const mentionsFlight=upper(text).includes(upper(flight.designator))||upper(text).includes(`${flight.airline} ${flight.number}`);
-    return {name,url,status:r.ok?(mentionsFlight?"OK":"FETCHED_NO_MATCH"):"HTTP_ERROR",httpStatus:r.status,finalUrl:r.url,mentionsFlight,candidates,checkedAt};
+    let status=publicPageStatus(name,text,r.status,mentionsFlight);if(status==="OK"&&name==="FLIGHTSTATS"&&!matchesFlightStatsOccurrence(text,flight))status="OCCURRENCE_MISMATCH";
+    return {name,url,status,httpStatus:r.status,finalUrl:r.url,mentionsFlight,candidates,checkedAt};
   }catch(e){
     return {name,url,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,finalUrl:url,mentionsFlight:false,candidates:{times:[],registrations:[],aircraft:[],terminals:[],gates:[],statuses:[],excerpt:""},error:String(e?.message||e).slice(0,300),checkedAt};
   }finally{clearTimeout(timer)}
@@ -118,12 +120,12 @@ async function stepRun(env,runId,limit=2){
   const flights=await listFlights(env,run.flight_date,Math.max(1,Math.min(3,limit)),Number(run.cursor||0));
   let processed=0;
   for(const flight of flights){
-    const results=await Promise.all(PUBLIC_SOURCES.map(([name,buildUrl])=>fetchSource(name,buildUrl,flight)));
+    const results=await Promise.all(PUBLIC_SOURCES.map(([name,buildUrl])=>withIcaoFallback(flight,buildUrl,f=>fetchSource(name,buildUrl,f))));
     for(const r of results){
       await env.OPS_DB.prepare(`INSERT INTO public_web_test_results(run_id,flight_identity,flight_designator,source,status,http_status,url,final_url,mentions_flight,candidates_json,error,checked_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(run_id,flight_identity,source) DO UPDATE SET status=excluded.status,http_status=excluded.http_status,url=excluded.url,final_url=excluded.final_url,mentions_flight=excluded.mentions_flight,candidates_json=excluded.candidates_json,error=excluded.error,checked_at=excluded.checked_at`)
-        .bind(runId,flight.identity,flight.designator,r.name,r.status,r.httpStatus,r.url,r.finalUrl,r.mentionsFlight?1:0,JSON.stringify(r.candidates||{}),r.error||null,r.checkedAt).run();
+        .bind(runId,flight.identity,flight.designator,r.name,r.status,r.httpStatus,r.url,r.finalUrl,r.mentionsFlight?1:0,JSON.stringify({...r.candidates,lookupDesignator:r.lookupDesignator,lookupAttempts:r.lookupAttempts}),r.error||null,r.checkedAt).run();
     }
     processed++;
   }
