@@ -77,6 +77,16 @@ export async function applyCtmSingleFlight(env,{flight,date,identity}={}){
   apply("takeoff",takeoff);
   apply("eta",eta);
   apply("landing",landing);
+  // CTM-only fallback approved: takeoff stands in for a missing gate ATD.
+  if(!manualProtected(x,"atd")&&clean(x.takeoff)&&(!clean(x.atd)||x.atdSource==="DERIVED:CTM_TAKEOFF")){
+    const next=clean(x.takeoff),before=clean(x.atd);
+    if(next!==before){
+      pushLog(x,"atd",before,next,"DERIVED:CTM_TAKEOFF",now);
+      x.atd=next;x.atdSource="DERIVED:CTM_TAKEOFF";x.atdUpdatedAt=now;
+      x.atdDerived=true;x.atdDerivedFrom="takeoff";x.atdDerivationMinutes=0;
+      applied.atd=next;
+    }
+  }
   if(sem.gateOrigin)apply("gate",upper(sem.gateOrigin));
   if(sem.terminalOrigin)apply("terminal",upper(sem.terminalOrigin));
   if(setReg(x,sem.reg,source,now))applied.reg=upper(sem.reg);
@@ -117,3 +127,4 @@ export async function handleCtmSingleFlightApply(request,env){
   const result=await applyCtmSingleFlight(env,identity?{identity}:{flight,date});
   return json(result,result.ok?200:400);
 }
+
