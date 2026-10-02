@@ -23,7 +23,7 @@ html,body,#app{overflow-anchor:none!important}
   const capture=()=>{
     if(detailVisible())return null;
     const y=window.scrollY||0;
-    const visible=rows().filter(r=>{const b=r.getBoundingClientRect();return b.bottom>0&&b.top<innerHeight});
+    const visible=rows().filter(r=>{const b=r.getBoundingClientRect();return b.height>0&&b.bottom>0&&b.top<innerHeight});
     const row=visible.sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0]||null;
     return {key:rowKey(row),top:row?row.getBoundingClientRect().top:0,y};
   };
@@ -58,6 +58,7 @@ html,body,#app{overflow-anchor:none!important}
     const token=generation;
     active={anchor,until:Date.now()+1800};
     const schedule=delay=>setTimeout(()=>apply(token),delay);
+    apply(token);
     requestAnimationFrame(()=>{apply(token);requestAnimationFrame(()=>apply(token))});
     [40,100,180,300,500,750,1050,1400,1750].forEach(schedule);
     const appNode=document.getElementById('app');
@@ -81,23 +82,10 @@ html,body,#app{overflow-anchor:none!important}
     if(e.target?.closest?.('#app .flight-home-row,#app [data-flight-index],#app .ops-search-flight'))stop();
   },true);
 
-  // Le refresh D1 (/api/flights) est la vraie frontière : capturer AVANT que les
-  // nouvelles données déclenchent les différents wrappers de rendu, puis garder
-  // la même carte au même pixel durant toutes les vagues de rerender qui suivent.
-  const baseFetch=window.fetch;
-  if(typeof baseFetch==='function'&&!baseFetch.__alyziaAnchorStable){
-    const wrappedFetch=async function(...args){
-      const raw=typeof args[0]==='string'?args[0]:String(args[0]?.url||'');
-      let isFlights=false;
-      try{const u=new URL(raw,location.origin);isFlights=u.pathname==='/api/flights'}catch{}
-      const anchor=isFlights&&!detailVisible()?capture():null;
-      const response=await baseFetch.apply(this,args);
-      if(anchor&&response?.ok)stabilize(anchor);
-      return response;
-    };
-    wrappedFetch.__alyziaAnchorStable=true;
-    window.fetch=wrappedFetch;
-  }
+  // Une réponse réseau ne signifie pas qu'un rendu va suivre (delta vide,
+  // erreur, autre onglet). Ne jamais restaurer une position prise avant une
+  // requête : l'utilisateur peut avoir défilé pendant son attente.
+  // Les hooks ci-dessous capturent la position au moment du vrai rendu.
 
   function install(){
     let installed=0;

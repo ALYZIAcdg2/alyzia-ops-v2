@@ -103,7 +103,7 @@ const NAV_STABILITY=String.raw`<script id="alyzia-ui-stability-nav-js">(()=>{
           if(homeLocked()&&!detailVisible())return;
           const wasDetail=detailVisible(),y=window.scrollY||0;
           const out=original.apply(this,args);
-          if(!wasDetail){window.scrollTo(0,0);requestAnimationFrame(()=>{if(detailVisible())window.scrollTo(0,0)})}   // arrivée sur une fiche : toujours en haut (la liste garde sa position)
+          if(!wasDetail&&detailVisible()){window.scrollTo(0,0);requestAnimationFrame(()=>{if(detailVisible())window.scrollTo(0,0)})}   // arrivée sur une fiche : toujours en haut (la liste garde sa position)
           else if(!homeLocked())restoreDetailScroll(y);
           else if(homeLocked())restoreHomeScroll();
           return out;
