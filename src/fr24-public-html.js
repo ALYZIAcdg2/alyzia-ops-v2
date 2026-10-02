@@ -75,6 +75,32 @@ function playbackFlight(json){
   return null;
 }
 
+function inferTakeoffFromTrack(track){
+  if(!Array.isArray(track)||track.length<2)return null;
+  const rows=track.filter(p=>epoch(p?.timestamp)).sort((a,b)=>Number(a.timestamp)-Number(b.timestamp));
+  let sawGround=false;
+  for(const p of rows){
+    const alt=Number(nested(p,["altitude","feet"]));
+    const speed=Number(nested(p,["speed","kts"]));
+    if(Number.isFinite(alt)&&alt<=50){sawGround=true;continue}
+    if(sawGround&&Number.isFinite(alt)&&alt>=200&&Number.isFinite(speed)&&speed>=80)return epoch(p.timestamp);
+  }
+  return null;
+}
+
+function inferLandingFromTrack(track){
+  if(!Array.isArray(track)||track.length<2)return null;
+  const rows=track.filter(p=>epoch(p?.timestamp)).sort((a,b)=>Number(a.timestamp)-Number(b.timestamp));
+  let airborne=false;
+  for(const p of rows){
+    const alt=Number(nested(p,["altitude","feet"]));
+    const speed=Number(nested(p,["speed","kts"]));
+    if(Number.isFinite(alt)&&alt>=200&&Number.isFinite(speed)&&speed>=80){airborne=true;continue}
+    if(airborne&&Number.isFinite(alt)&&alt<=50&&Number.isFinite(speed)&&speed<=80)return epoch(p.timestamp);
+  }
+  return null;
+}
+
 function playbackCandidates(data,flight,id){
   const f=playbackFlight(data);
   if(!f)return null;
@@ -87,9 +113,13 @@ function playbackCandidates(data,flight,id){
   const scheduledArrival=epoch(nested(f,["time","scheduled","arrival"]));
   const estimatedArrival=epoch(nested(f,["time","estimated","arrival"]));
   const realArrival=epoch(nested(f,["time","real","arrival"]));
-  const registration=upper(nested(f,["aircraft","registration"]));
-  const aircraft=upper(nested(f,["aircraft","model","code"]));
+  const track=nested(f,["track"]);
+  const takeoff=realDeparture||inferTakeoffFromTrack(track);
   const status=clean(nested(f,["status","generic","status","text"])||nested(f,["status","text"]));
+  const statusEvent=epoch(nested(f,["status","generic","eventTime","utc"]));
+  const landing=realArrival||(/^landed$/i.test(status)&&statusEvent)||inferLandingFromTrack(track);
+  const registration=upper(nested(f,["aircraft","identification","registration"])||nested(f,["aircraft","registration"]));
+  const aircraft=upper(nested(f,["aircraft","model","code"]));
   const origin=upper(nested(f,["airport","origin","code","iata"])||nested(f,["airport","origin","code","icao"]));
   const destination=upper(nested(f,["airport","destination","code","iata"])||nested(f,["airport","destination","code","icao"]));
   const terminalOrigin=upper(nested(f,["airport","origin","info","terminal"]));
@@ -99,10 +129,10 @@ function playbackCandidates(data,flight,id){
   const semantic={
     std:iso(scheduledDeparture),
     etd:iso(estimatedDeparture),
-    takeoff:iso(realDeparture),
+    takeoff:iso(takeoff),
     sta:iso(scheduledArrival),
     eta:iso(estimatedArrival),
-    landing:iso(realArrival),
+    landing:iso(landing),
     type:aircraft||null,
     reg:registration||null,
     status:status||null,
@@ -113,7 +143,7 @@ function playbackCandidates(data,flight,id){
     gateOrigin:gateOrigin||null,
     gateDestination:gateDestination||null
   };
-  const times=[scheduledDeparture,estimatedDeparture,realDeparture,scheduledArrival,estimatedArrival,realArrival].filter(Boolean).map(iso);
+  const times=[scheduledDeparture,estimatedDeparture,takeoff,scheduledArrival,estimatedArrival,landing].filter(Boolean).map(iso);
   const useful=times.length+(registration?1:0)+(aircraft?1:0)+(status?1:0)+(origin?1:0)+(destination?1:0);
   return {
     times,
@@ -164,9 +194,6 @@ export async function fetchFr24Public(flight){
   const {id,urls}=fr24PublicUrls(flight);
   const checkedAt=new Date().toISOString();
   const attempts=[];
-
-  // This is the public website playback request used by FR24's own browser UI.
-  // It is distinct from the authenticated fr24api.flightradar24.com provider API.
   if(id){
     const playback=await fetchPlayback(flight,id);
     attempts.push({url:playback.url,finalUrl:playback.finalUrl,httpStatus:playback.httpStatus,status:playback.status,candidates:playback.candidates,error:playback.error});
@@ -174,16 +201,11 @@ export async function fetchFr24Public(flight){
       return {name:"FR24",url:playback.url,status:"OK",httpStatus:playback.httpStatus,finalUrl:playback.finalUrl,mentionsFlight:true,candidates:{...playback.candidates,method:"PUBLIC_PLAYBACK",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
     }
   }
-
   for(const url of urls){
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),10000);
     try{
-      const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
-        "accept":"text/html,application/xhtml+xml",
-        "accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
-        "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.2; public-web-page)"
-      }});
+      const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{"accept":"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.3; public-web-page)"}});
       const ct=clean(r.headers.get("content-type")).toLowerCase();
       const body=(ct.includes("text")||ct.includes("json")||ct.includes("javascript"))?await r.text():"";
       const candidates=extract(body,flight,id);
@@ -194,8 +216,7 @@ export async function fetchFr24Public(flight){
       if(usable){
         return {name:"FR24",url,status:"OK",httpStatus:r.status,finalUrl:r.url,mentionsFlight:true,candidates:{...candidates,method:"PUBLIC_HTML",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
       }
-    }catch(e){
-      attempts.push({url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"HTML_TIMEOUT":"HTML_FETCH_ERROR",error:String(e?.message||e).slice(0,200)});
+    }catch(e){attempts.push({url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"HTML_TIMEOUT":"HTML_FETCH_ERROR",error:String(e?.message||e).slice(0,200)});
     }finally{clearTimeout(timer)}
   }
   const best=[...attempts].sort((a,b)=>(b.candidates?.useful||0)-(a.candidates?.useful||0))[0];
