@@ -1,53 +1,133 @@
 import app from "./v2-compat-schema-wrapper.js";
 
-const SCROLL_STABILITY=String.raw`<script id="alyzia-refresh-scroll-stability-js">(()=>{
+const SCROLL_STABILITY=String.raw`<style id="alyzia-refresh-scroll-anchor-css">
+html,body,#app{overflow-anchor:none!important}
+</style><script id="alyzia-refresh-scroll-stability-js">(()=>{
   'use strict';
-  if(window.__alyziaRefreshScrollStability)return;
-  window.__alyziaRefreshScrollStability=true;
+  if(window.__alyziaRefreshScrollStabilityV2)return;
+  window.__alyziaRefreshScrollStabilityV2=true;
 
   const detailVisible=()=>Boolean(document.querySelector('#app .flight-head'));
-  const restore=(y,expectDetail)=>{
-    const apply=()=>{
-      if(detailVisible()!==expectDetail)return;
-      if(Math.abs((window.scrollY||0)-y)>2)window.scrollTo({top:y,left:0,behavior:'auto'});
-    };
-    apply();
-    requestAnimationFrame(()=>{apply();requestAnimationFrame(apply)});
+  const rows=()=>[...document.querySelectorAll('#app .flight-home-row')];
+  const norm=v=>String(v??'').trim().toUpperCase().replace(/\s+/g,'');
+  const rowKey=row=>{
+    if(!row)return '';
+    const flight=norm(row.querySelector('.v2-flight,.home-flight')?.textContent||'');
+    const dest=norm(row.querySelector('.v2-destination,.home-destination,[data-destination]')?.textContent||row.getAttribute('data-destination')||'');
+    const idx=String(row.getAttribute('data-flight-index')||'');
+    if(flight)return 'F:'+flight+'|D:'+dest;
+    const onclick=String(row.getAttribute('onclick')||row.querySelector('.home-open')?.getAttribute('onclick')||'');
+    const m=onclick.match(/openFlightFromHomeList\((\d+)\)/);
+    return idx?'I:'+idx:(m?'I:'+m[1]:'');
   };
+  const capture=()=>{
+    if(detailVisible())return null;
+    const y=window.scrollY||0;
+    const visible=rows().filter(r=>{const b=r.getBoundingClientRect();return b.bottom>0&&b.top<innerHeight});
+    const row=visible.sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0]||null;
+    return {key:rowKey(row),top:row?row.getBoundingClientRect().top:0,y};
+  };
+  const findRow=key=>{
+    if(!key)return null;
+    return rows().find(r=>rowKey(r)===key)||null;
+  };
+
+  let active=null;
+  let observer=null;
+  let mutationTimer=null;
+  let generation=0;
+  const stop=()=>{
+    generation++;
+    active=null;
+    clearTimeout(mutationTimer);
+    if(observer){observer.disconnect();observer=null}
+  };
+  const apply=token=>{
+    if(!active||token!==generation||detailVisible()||Date.now()>active.until)return;
+    const row=findRow(active.anchor.key);
+    if(row){
+      const delta=row.getBoundingClientRect().top-active.anchor.top;
+      if(Math.abs(delta)>1)window.scrollBy({top:delta,left:0,behavior:'auto'});
+    }else if(Math.abs((window.scrollY||0)-active.anchor.y)>2){
+      window.scrollTo({top:active.anchor.y,left:0,behavior:'auto'});
+    }
+  };
+  const stabilize=anchor=>{
+    if(!anchor||detailVisible())return;
+    stop();
+    const token=generation;
+    active={anchor,until:Date.now()+1800};
+    const schedule=delay=>setTimeout(()=>apply(token),delay);
+    requestAnimationFrame(()=>{apply(token);requestAnimationFrame(()=>apply(token))});
+    [40,100,180,300,500,750,1050,1400,1750].forEach(schedule);
+    const appNode=document.getElementById('app');
+    if(appNode&&typeof MutationObserver==='function'){
+      observer=new MutationObserver(()=>{
+        clearTimeout(mutationTimer);
+        mutationTimer=setTimeout(()=>apply(token),16);
+      });
+      observer.observe(appNode,{childList:true,subtree:true,attributes:true,characterData:true});
+      setTimeout(()=>{if(token===generation)stop()},1850);
+    }
+  };
+
+  // Si l'utilisateur agit volontairement pendant la fenêtre de stabilisation,
+  // on ne lutte jamais contre son propre scroll/navigation.
+  ['wheel','touchstart','pointerdown'].forEach(type=>window.addEventListener(type,stop,{capture:true,passive:true}));
+  window.addEventListener('keydown',e=>{
+    if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key))stop();
+  },true);
+  document.addEventListener('click',e=>{
+    if(e.target?.closest?.('#app .flight-home-row,#app [data-flight-index],#app .ops-search-flight'))stop();
+  },true);
+
+  // Le refresh D1 (/api/flights) est la vraie frontière : capturer AVANT que les
+  // nouvelles données déclenchent les différents wrappers de rendu, puis garder
+  // la même carte au même pixel durant toutes les vagues de rerender qui suivent.
+  const baseFetch=window.fetch;
+  if(typeof baseFetch==='function'&&!baseFetch.__alyziaAnchorStable){
+    const wrappedFetch=async function(...args){
+      const raw=typeof args[0]==='string'?args[0]:String(args[0]?.url||'');
+      let isFlights=false;
+      try{const u=new URL(raw,location.origin);isFlights=u.pathname==='/api/flights'}catch{}
+      const anchor=isFlights&&!detailVisible()?capture():null;
+      const response=await baseFetch.apply(this,args);
+      if(anchor&&response?.ok)stabilize(anchor);
+      return response;
+    };
+    wrappedFetch.__alyziaAnchorStable=true;
+    window.fetch=wrappedFetch;
+  }
 
   function install(){
     let installed=0;
     try{
-      if(typeof render==='function'&&!render.__alyziaRefreshScrollStable){
+      if(typeof render==='function'&&!render.__alyziaAnchorStable){
         const original=render;
         const wrapped=function(...args){
           const beforeDetail=detailVisible();
-          const y=window.scrollY||0;
+          const anchor=!beforeDetail?capture():null;
           const out=original.apply(this,args);
           const afterDetail=detailVisible();
-          // Navigation explicite liste -> fiche : conserver le comportement existant (fiche en haut).
-          // Tout autre rendu silencieux doit conserver exactement la position de lecture.
-          if(!(beforeDetail===false&&afterDetail===true))restore(y,afterDetail);
+          if(!beforeDetail&&!afterDetail&&anchor)stabilize(anchor);
           return out;
         };
-        wrapped.__alyziaRefreshScrollStable=true;
+        wrapped.__alyziaAnchorStable=true;
         render=wrapped;
         installed++;
       }
     }catch{}
     try{
-      if(typeof renderHome==='function'&&!renderHome.__alyziaRefreshScrollStable){
+      if(typeof renderHome==='function'&&!renderHome.__alyziaAnchorStable){
         const original=renderHome;
         const wrapped=function(...args){
-          const beforeDetail=detailVisible();
-          const y=window.scrollY||0;
+          const wasHome=!detailVisible();
+          const anchor=wasHome?capture():null;
           const out=original.apply(this,args);
-          // Si on était déjà sur la liste, c'est un refresh/rerender : ne jamais remonter en haut.
-          // Si on revient d'une fiche, le wrapper navigation existant restaure lastHomeScroll.
-          if(!beforeDetail&&!detailVisible())restore(y,false);
+          if(wasHome&&!detailVisible()&&anchor)stabilize(anchor);
           return out;
         };
-        wrapped.__alyziaRefreshScrollStable=true;
+        wrapped.__alyziaAnchorStable=true;
         renderHome=wrapped;
         installed++;
       }
@@ -61,7 +141,8 @@ const SCROLL_STABILITY=String.raw`<script id="alyzia-refresh-scroll-stability-js
 })();</script>`;
 
 function patch(html){
-  const s=String(html||'');
+  let s=String(html||'');
+  // Remplace aussi l'ancien patch V1 si le HTML a été retraité par un cache intermédiaire.
   if(s.includes('id="alyzia-refresh-scroll-stability-js"'))return s;
   const i=s.lastIndexOf('</body>');
   return i>=0?s.slice(0,i)+SCROLL_STABILITY+'\n'+s.slice(i):s+SCROLL_STABILITY;
