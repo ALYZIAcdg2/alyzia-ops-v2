@@ -1,3 +1,4 @@
+import {flightOperationalStatus} from "./flight-operational-status.js";
 import {noteActualAircraft} from "./aircraft-change.js";
 
 const clean=v=>String(v??"").trim();
@@ -56,13 +57,7 @@ async function recoverStaFromRaw(env,runId,identity){
 }
 function setRegistrationAliases(x,value){x.reg=value;x.registration=value;x.aircraftRegistration=value}
 function deriveStatus(x,confirmedStatus){
-  if(/ANNUL|CANCEL/.test(upper(confirmedStatus))||/ANNUL|CANCEL/.test(upper(x.status)))return "ANNULÉ";
-  if(clean(x.ata))return "ARRIVÉE";
-  if(clean(x.landing))return "ATTERI";
-  if(clean(x.takeoff))return "EN VOL";
-  if(clean(x.atd))return "DECOLLE";
-  const d=delayMinutes(x.std,x.etd);if(d!=null&&d>=5)return "RETARDÉ";
-  return "PRÉVU";
+  return flightOperationalStatus({...x,providerStatusRaw:confirmedStatus||x.providerStatusRaw});
 }
 
 export async function applyRunV4(env,runId){

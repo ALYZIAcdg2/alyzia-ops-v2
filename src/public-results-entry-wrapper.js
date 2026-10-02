@@ -1,4 +1,5 @@
 import app from "./ui-first-paint-wrapper.js";
+import {flightOperationalStatus} from "./flight-operational-status.js";
 import {handlePublicWebConsolidation} from "./public-web-consolidation-routes.js";
 
 const OPS_LIST_V4=String.raw`
@@ -34,27 +35,7 @@ const flightNo=v=>up(v).replace(/\s+/g,'');
 const getFlight=row=>{const list=flights(),i=rowIndex(row);if(i!==null&&list[i])return list[i];const shown=flightNo(row.querySelector('.v2-flight,.home-flight')?.textContent||'');return list.find(x=>flightNo(x.flight||x.flight_number)===shown)||null};
 const scheduleFor=x=>{try{if(typeof schedule==='function')return schedule(x)||{}}catch{}try{if(typeof window.schedule==='function')return window.schedule(x)||{}}catch{}return {}};
 const val=(x,keys)=>{for(const k of keys){const v=txt(x?.[k]);if(v)return v}return ''};
-const statusOf=x=>{
- const raw=up(val(x,['opsStatus','status','flight_status','providerStatusRaw']));
- if(/CANCEL|ANNUL/.test(raw))return 'ANNULÉ';
- if(/ARRIV/.test(raw))return 'ARRIVÉE';
- if(/ATTERI|LANDED/.test(raw))return 'ATTERI';
- if(/EN VOL|IN AIR|AIRBORNE/.test(raw))return 'EN VOL';
- if(/DECOL|DEPARTED/.test(raw))return 'DECOLLE';
- const ata=val(x,['ata','actualArrival','actual_arrival','gateIn','gate_in']);
- const landing=val(x,['landing','landingTime','landing_time','touchdown']);
- const takeoff=val(x,['takeoff','takeoffTime','takeoff_time','airborne']);
- const atd=val(x,['atd','actualDeparture','actual_departure','gateOut','gate_out']);
- if(ata)return 'ARRIVÉE';
- if(landing)return 'ATTERI';
- if(takeoff)return 'EN VOL';
- if(atd)return 'DECOLLE';
- const std=val(x,['std','scheduledDeparture','scheduled_departure']);
- const etd=val(x,['etd','edt','estimatedDeparture','estimated_departure']);
- const d=etd?delta(std,etd):null;
- if(/DELAY|RETARD/.test(raw)||(d!=null&&d>=5))return 'RETARDÉ';
- return 'PRÉVU';
-};
+const statusOf=${flightOperationalStatus.toString()};
 const statusClass=s=>'status-'+s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z]+/g,'-').replace(/^-|-$/g,'');
 const cell=(label,value,tone='')=>'<div class="v2-time-cell"><div class="v2-time-label">'+label+'</div><div class="v2-time-value '+tone+'">'+(value||'—')+'</div></div>';
 function patchGrid(grid,signature,html){if(!grid||grid.dataset.opsV4===signature)return;grid.classList.add('ops-list-v4');grid.innerHTML=html;grid.dataset.opsV4=signature}
@@ -110,3 +91,4 @@ export default {
     if(typeof app.scheduled==='function')return app.scheduled(controller,env,ctx);
   }
 };
+

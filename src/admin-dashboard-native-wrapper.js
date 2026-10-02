@@ -1,5 +1,5 @@
 import app from "./flight-card-v2-wrapper.js";
-import {shiftToParis} from "./airport-tz.js";
+import {flightOperationalStatus} from "./flight-operational-status.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -16,37 +16,37 @@ function minute(v){const h=hhmm(v);if(!h)return null;const [a,b]=h.split(":").ma
 function parseRow(row){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}return {row,x}}
 function statusText(x){return upper([x.opsStatus,x.status,x.flight_status,x.providerStatusRaw].filter(Boolean).join(" "))}
 function isCancelled(x){const s=statusText(x);return s.includes("CANCEL")||s.includes("ANNUL")}
-function classify({row,x},now){
+export function classify({row,x},now){
   const date=row.flight_date;
   const std=hhmm(x.std||row.std),sta=hhmm(x.sta),etd=hhmm(x.etd||x.edt),atd=hhmm(x.atd),eta=hhmm(x.eta),ata=hhmm(x.ata);
   const gate=clean(x.gate||x.departureGate||x.departure_gate),reg=clean(x.reg||x.registration||x.aircraftRegistration);
   const flight=upper(x.flight||x.flight_number||row.flight_number),destination=upper(x.destination||x.dest||x.arrival||"");
-  const miss=[]; if(!std)miss.push("STD"); if(!sta)miss.push("STA");
-  const today=date===now.date,future=date>now.date,nowMin=minute(now.hhmm),stdMin=minute(std),delta=today&&nowMin!==null&&stdMin!==null?stdMin-nowMin:null;
-  const cancelled=isCancelled(x),final=cancelled||Boolean(atd&&ata); let state="OK";
-  if(future){if(!std&&!sta)state="NON TRAITÉ";else if(!std||!sta)state="PARTIEL"}
-  else if(today){
-    if(cancelled||final)state="OK";
-    else if(delta!==null&&delta<0&&!atd){
-      // Grace period: only flag once the expected departure (ETD, else STD) is 20+ min past.
-      const depMin=minute(etd)??stdMin,late=(depMin!==null&&depMin<=nowMin&&nowMin-depMin>20)||(!etd&&delta>=-60);
-      // Fenêtre H-1 / H+1 : sans ETD ni ATD, le vol est à contrôler (voir plus bas pour H+1).
-      miss.push("ATD");state=late?"À CONTRÔLER":"PARTIEL";
-      // Sans ATD mais heure d'arrivée (ETA, sinon STA) dépassée de 20+ min (même jour) : le vol a forcément volé, il est considéré arrivé.
-      const shift=shiftToParis(x.dest||x.destination),am0=minute(eta)??minute(sta),arrMin0=am0===null?null:am0-shift;
-      if(arrMin0!==null&&stdMin!==null&&arrMin0>=stdMin&&arrMin0<=nowMin&&nowMin-arrMin0>20){state="OK";miss.push("ATA")}
+  const missing=[];if(!std)missing.push("STD");if(!sta)missing.push("STA");
+  const today=date===now.date,future=date>now.date,past=date<now.date;
+  const nowMin=minute(now.hhmm),stdMin=minute(std),delta=today&&nowMin!==null&&stdMin!==null?stdMin-nowMin:null;
+  const cancelled=isCancelled(x),flightStatus=flightOperationalStatus(x);
+  const departed=Boolean(atd||hhmm(x.takeoff))||["EN VOL","ATTERI","ARRIVÉE"].includes(flightStatus);
+  let state=missing.length?"PARTIEL":"OK";
+  if(cancelled){state="OK";missing.length=0}
+  else if(future){if(!std&&!sta)state="NON TRAITÉ"}
+  else if(past||departed){
+    if(!atd)missing.push("ATD");
+    if(!ata)missing.push("ATA");
+    state=missing.length?"PARTIEL":"OK";
+  }else if(today){
+    if(delta!==null&&delta<0){
+      missing.push("ATD");
+      const expected=minute(etd)??stdMin;
+      state=expected!==null&&nowMin-expected>20?"À CONTRÔLER":"PARTIEL";
+    }else if(delta!==null&&delta<=60){
+      if(!etd)missing.push("ETD/ATD");
+      if(!gate||gate==="—")missing.push("GATE");
+      if(!reg)missing.push("REG");
+      state=!etd&&delta<=30?"À CONTRÔLER":missing.length?"PARTIEL":"OK";
     }
-    else if(atd&&!ata){
-      // Airborne is normal. Once ETA (else STA) is 20+ min past, the flight is considered arrived (OK)
-      // even without ATA; ATA stays listed as missing and provider recovery keeps chasing it.
-      const shift=shiftToParis(x.dest||x.destination),am=minute(eta)??minute(sta),atdMin=minute(atd);let arrMin=am===null?null:am-shift;if(arrMin!==null&&atdMin!==null)while(arrMin<atdMin)arrMin+=1440;const sameDay=arrMin!==null&&atdMin!==null&&arrMin>=atdMin;
-      if(sameDay&&arrMin<=nowMin&&nowMin-arrMin>20)miss.push("ATA")
-    }
-    else if(delta!==null&&delta<=60){const noDep=!etd&&!atd;if(noDep)miss.push("ETD/ATD");if(!gate&&!atd)miss.push("GATE");if(!reg)miss.push("REG");state=noDep?(delta<=30?"À CONTRÔLER":"PARTIEL"):miss.length?"PARTIEL":"OK"}   // sans ETD/ATD : À CONTRÔLER seulement à 30 min du départ (ou passé), PARTIEL avant
-    else if(!std||!sta)state="PARTIEL";
-    if(!sta&&!etd&&!atd&&!eta&&!ata&&!gate&&!reg)state="NON TRAITÉ";
+    if(!sta&&!etd&&!atd&&!eta&&!ata&&(!gate||gate==="—")&&!reg)state="NON TRAITÉ";
   }
-  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus:upper(clean(x.opsStatus||x.status||"")),std,sta,etd,atd,eta,ata,gate,reg,state,missing:[...new Set(miss)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at)};
+  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus,std,sta,etd,atd,eta,ata,gate,reg,state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at)};
 }
 function baseProvider(v){const p=upper(v);if(p.startsWith("AIRLABS"))return "AIRLABS";if(p.startsWith("SKYLINK"))return "SKYLINK";if(p.startsWith("OAG"))return "OAG";if(p.includes("AERODATABOX")||p.startsWith("ADB"))return "AERODATABOX";if(p.startsWith("OPENSKY"))return "OPENSKY";if(p.startsWith("QUARK"))return "QUARK";if(p.startsWith("AVIATIONDATA"))return "AVIATIONDATA";if(p.startsWith("FLIGHTERA"))return "FLIGHTERA";if(p.startsWith("KAYAK"))return "KAYAK";if(p.startsWith("SERPAPI"))return "SERPAPI";if(p.startsWith("FLIGHTRADAR1"))return "FLIGHTRADAR1";if(p.startsWith("FLIGHTRADAR8"))return "FLIGHTRADAR8";if(p.startsWith("FR24DEP"))return "FR24DEP";if(p.startsWith("FR24API"))return "FR24API";if(p.startsWith("CDGBOARD"))return "CDGBOARD";return p}
 function quotaLimit(env,key){
@@ -135,3 +135,4 @@ export default {
   },
   scheduled(controller,env,ctx){if(typeof app.scheduled==='function')return app.scheduled(controller,env,ctx)}
 };
+
