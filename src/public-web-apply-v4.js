@@ -19,8 +19,14 @@ function pushLog(x,field,from,to,source,at){
 }
 function hh(v){const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?String(m[1]).padStart(2,"0")+":"+m[2]:""}
 function minutes(v){const m=hh(v).match(/^(\d{2}):(\d{2})$/);return m?Number(m[1])*60+Number(m[2]):null}
+function addMinutes(v,delta){const m=minutes(v);if(m==null)return "";const n=(m+Number(delta)+1440)%1440;return String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0")}
 function delayMinutes(std,etd){const a=minutes(std),b=minutes(etd);if(a==null||b==null)return null;let d=b-a;if(d<-720)d+=1440;if(d>720)d-=1440;return d}
 function circularDiff(a,b){const x=minutes(a),y=minutes(b);if(x==null||y==null)return 999;const d=Math.abs(x-y);return Math.min(d,1440-d)}
+function isCtmFlight(x,identity){
+  const airline=upper(x?.airline||x?.airlineCode||x?.carrier);
+  const designator=upper(x?.flight||x?.flightNumber||x?.flight_number||x?.designator);
+  return airline==="CTM"||designator.startsWith("CTM")||upper(identity).includes("|CTM|");
+}
 function recoverPlanningSta(x){
   if(clean(x.sta))return false;
   for(const v of [x.scheduledArrival,x.scheduled_arrival,x.schedule?.sta,x.planning?.sta,x.timings?.sta]){
@@ -64,7 +70,7 @@ export async function applyRunV4(env,runId){
   if(!run||run.status!=="DONE")return {ok:false,error:"RUN_NOT_DONE"};
   const {results:ids=[]}=await env.OPS_DB.prepare(`SELECT DISTINCT flight_identity FROM public_web_consolidated_v2 WHERE run_id=?`).bind(runId).all();
   const now=new Date().toISOString();
-  let flightsChanged=0,fieldsChanged=0,preserved=0,recoveredSta=0,recoveredStaFromSources=0,aircraftActualChanged=0,manualSkipped=0;
+  let flightsChanged=0,fieldsChanged=0,preserved=0,recoveredSta=0,recoveredStaFromSources=0,aircraftActualChanged=0,manualSkipped=0,derivedCtmAta=0;
   for(const it of ids){
     const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=?`).bind(it.flight_identity).first();if(!row)continue;
     let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
@@ -89,6 +95,23 @@ export async function applyRunV4(env,runId){
       pushLog(x,field,before,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);x[field]=next;x[field+"Source"]=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x[field+"UpdatedAt"]=now;fieldsChanged++;changed=true;
     }
 
+    if(isCtmFlight(x,it.flight_identity)&&!manualProtected(x,"ata")&&clean(x.landing)){
+      const source=upper(x.ataSource);
+      if(!clean(x.ata)||source==="DERIVED:CTM_LANDING_PLUS_10"){
+        const next=addMinutes(x.landing,10),before=clean(x.ata);
+        if(next&&before!==next){
+          pushLog(x,"ata",before,next,"DERIVED:CTM_LANDING_PLUS_10",now);
+          x.ata=next;
+          x.ataSource="DERIVED:CTM_LANDING_PLUS_10";
+          x.ataUpdatedAt=now;
+          x.ataDerived=true;
+          x.ataDerivedFrom="landing";
+          x.ataDerivationMinutes=10;
+          derivedCtmAta++;fieldsChanged++;changed=true;
+        }
+      }
+    }
+
     const aircraft=by.aircraft;
     if(aircraft?.state==="CONFIRMED"&&clean(aircraft.chosen_value)&&!manualProtected(x,"aircraft")){
       const before=clean(x.aircraftActual||x.aircraftChange?.to||x.aircraft);
@@ -103,5 +126,5 @@ export async function applyRunV4(env,runId){
 
     if(changed){x.publicWebV4AppliedAt=now;x.publicWebV4RunId=runId;await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),it.flight_identity).run();flightsChanged++}
   }
-  return {ok:true,runId,flightsChanged,fieldsChanged,preserved,recoveredSta,recoveredStaFromSources,aircraftActualChanged,manualSkipped,mode:"SAFE_MERGE_V4"};
+  return {ok:true,runId,flightsChanged,fieldsChanged,preserved,recoveredSta,recoveredStaFromSources,aircraftActualChanged,manualSkipped,derivedCtmAta,mode:"SAFE_MERGE_V4"};
 }
