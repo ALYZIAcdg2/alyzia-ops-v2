@@ -7,7 +7,6 @@ let bootstrapPromise=null;
 let bootstrapped=false;
 
 const json=(o,status=200)=>new Response(JSON.stringify(o),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}});
-const clean=v=>String(v??"").trim();
 
 function effectiveSeed(){
   const overrides=seedOverrides&&typeof seedOverrides==="object"?seedOverrides:{};
@@ -24,15 +23,14 @@ function effectiveSeed(){
   return {configs:[...byKey.values()],deleteKeys:[...deleteKeys],overrides};
 }
 
-function internalRequest(baseUrl,path,{method="GET",body=null,env}={}){
+function internalRequest(baseUrl,path,{method="GET",body=null}={}){
   const headers=new Headers();
   if(body!=null)headers.set("content-type","application/json");
-  if(clean(env?.ALYZIA_API_SECRET))headers.set("authorization",`Bearer ${env.ALYZIA_API_SECRET}`);
   return new Request(new URL(path,baseUrl),{method,headers,body:body==null?undefined:JSON.stringify(body)});
 }
 
 async function call(baseUrl,path,opts,env,ctx){
-  return app.fetch(internalRequest(baseUrl,path,{...opts,env}),env,ctx);
+  return app.fetch(internalRequest(baseUrl,path,opts),env,ctx);
 }
 
 async function parseJson(response){
@@ -45,42 +43,179 @@ async function currentConfigs(baseUrl,env,ctx){
   return {response,data,count:Array.isArray(data?.configs)?data.configs.length:0};
 }
 
+function cabinZonesToClassCounts(zones){
+  const counts={};
+  for(const z of (zones||[])){
+    const cls=String(z?.class||"").trim().toUpperCase();
+    if(!cls)continue;
+    const excMap={};
+    String(z?.exceptions||"").split(/\n+/).map(s=>s.trim()).filter(Boolean).forEach(line=>{
+      const m=line.match(/^(\d+)\s*=\s*(.+)$/);
+      if(m)excMap[Number(m[1])]=m[2].trim();
+    });
+    const start=Number(z?.row_start),end=Number(z?.row_end);
+    if(!Number.isFinite(start)||!Number.isFinite(end))continue;
+    for(let r=start;r<=end;r++){
+      const pat=Object.prototype.hasOwnProperty.call(excMap,r)?excMap[r]:String(z?.pattern||"");
+      if(String(pat).trim().toUpperCase()==="SKIP")continue;
+      const seats=String(pat||"").replace(/[^A-Z]/gi,"").length;
+      counts[cls]=(counts[cls]||0)+seats;
+    }
+  }
+  return counts;
+}
+
+async function ensureCabinTables(env){
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS cabin_configs (
+      config_key TEXT PRIMARY KEY,
+      airline TEXT NOT NULL,
+      aircraft TEXT NOT NULL,
+      configuration TEXT,
+      total INTEGER,
+      classes_json TEXT NOT NULL DEFAULT '{}',
+      quality TEXT,
+      source_label TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS cabin_zones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      config_key TEXT NOT NULL,
+      class TEXT NOT NULL,
+      row_start INTEGER NOT NULL,
+      row_end INTEGER NOT NULL,
+      pattern TEXT NOT NULL,
+      placement_mode TEXT NOT NULL DEFAULT 'ALIGNE',
+      exceptions TEXT DEFAULT '',
+      sort_order INTEGER,
+      deck TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS cabin_equipment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      config_key TEXT NOT NULL,
+      type TEXT NOT NULL,
+      row_reference INTEGER,
+      side TEXT,
+      label TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_configs_ac ON cabin_configs(airline,aircraft)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_zones_key ON cabin_zones(config_key)`),
+    env.OPS_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cabin_equipment_key ON cabin_equipment(config_key)`)
+  ]);
+  // Compat avec une D1 V2 créée par la migration initiale.
+  await env.OPS_DB.prepare(`ALTER TABLE cabin_configs ADD COLUMN source_label TEXT`).run().catch(()=>{});
+  await env.OPS_DB.prepare(`ALTER TABLE cabin_zones ADD COLUMN sort_order INTEGER`).run().catch(()=>{});
+  await env.OPS_DB.prepare(`ALTER TABLE cabin_zones ADD COLUMN deck TEXT`).run().catch(()=>{});
+}
+
+async function deleteCabinKey(env,key){
+  await env.OPS_DB.batch([
+    env.OPS_DB.prepare(`DELETE FROM cabin_zones WHERE config_key=?`).bind(key),
+    env.OPS_DB.prepare(`DELETE FROM cabin_equipment WHERE config_key=?`).bind(key),
+    env.OPS_DB.prepare(`DELETE FROM cabin_configs WHERE config_key=?`).bind(key)
+  ]);
+}
+
+async function writeCabinRow(env,row){
+  const airline=String(row?.airline||"").trim().toUpperCase();
+  const aircraft=String(row?.aircraft||"").trim().toUpperCase();
+  const configuration=String(row?.configuration||"").trim().toUpperCase();
+  const configKey=String(row?.configKey||`${airline}|${aircraft}|${configuration}`).trim();
+  const zones=Array.isArray(row?.zones)?row.zones:[];
+  if(!airline||!aircraft||!configuration||!configKey||!zones.length)return {configs:0,zones:0,equipment:0};
+
+  const classCounts=row?.operationalClasses&&Object.keys(row.operationalClasses).length
+    ? Object.fromEntries(Object.entries(row.operationalClasses).map(([k,v])=>[String(k).toUpperCase(),Number(v)||0]))
+    : cabinZonesToClassCounts(zones);
+  const total=Number(row?.operationalTotal||Object.values(classCounts).reduce((a,b)=>a+Number(b||0),0));
+
+  await env.OPS_DB.prepare(`
+    INSERT INTO cabin_configs (config_key,airline,aircraft,configuration,total,classes_json,quality,source_label,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(config_key) DO UPDATE SET
+      airline=excluded.airline,
+      aircraft=excluded.aircraft,
+      configuration=excluded.configuration,
+      total=excluded.total,
+      classes_json=excluded.classes_json,
+      quality=excluded.quality,
+      source_label=excluded.source_label,
+      updated_at=CURRENT_TIMESTAMP
+  `).bind(configKey,airline,aircraft,configuration,total,JSON.stringify(classCounts),String(row?.quality||"summary"),row?.sourceLabel?String(row.sourceLabel):null).run();
+
+  await env.OPS_DB.prepare(`DELETE FROM cabin_zones WHERE config_key=?`).bind(configKey).run();
+  let zonesWritten=0;
+  let sortOrder=10;
+  for(const z of zones){
+    const cls=String(z?.class||"").trim().toUpperCase();
+    const rowStart=Number(z?.row_start),rowEnd=Number(z?.row_end);
+    const pattern=String(z?.pattern||"").trim().toUpperCase();
+    if(!cls||!Number.isFinite(rowStart)||!Number.isFinite(rowEnd)||!pattern)continue;
+    await env.OPS_DB.prepare(`
+      INSERT INTO cabin_zones (config_key,class,row_start,row_end,pattern,placement_mode,exceptions,sort_order,deck,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    `).bind(configKey,cls,rowStart,rowEnd,pattern,String(z?.placement_mode||z?.placementMode||"ALIGNE"),String(z?.exceptions||""),sortOrder,String(z?.deck||"").trim().toUpperCase()||null).run();
+    sortOrder+=10;
+    zonesWritten++;
+  }
+
+  await env.OPS_DB.prepare(`DELETE FROM cabin_equipment WHERE config_key=?`).bind(configKey).run();
+  let equipmentWritten=0;
+  for(const eq of (Array.isArray(row?.equipment)?row.equipment:[])){
+    const type=String(eq?.type||"").trim().toUpperCase();
+    const rowReference=Number(eq?.row_reference??eq?.rowReference);
+    if(!type||!Number.isFinite(rowReference))continue;
+    await env.OPS_DB.prepare(`
+      INSERT INTO cabin_equipment (config_key,type,row_reference,side,label,created_at)
+      VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+    `).bind(configKey,type,rowReference,eq?.side?String(eq.side):null,eq?.label?String(eq.label):null).run();
+    equipmentWritten++;
+  }
+
+  return {configs:1,zones:zonesWritten,equipment:equipmentWritten};
+}
+
 async function bootstrapCabins(baseUrl,env,ctx,{force=false}={}){
   if(bootstrapped&&!force)return {ok:true,alreadyBootstrapped:true};
   if(bootstrapPromise&&!force)return bootstrapPromise;
   const work=(async()=>{
+    await ensureCabinTables(env);
     const before=await currentConfigs(baseUrl,env,ctx);
     if(!force&&before.response.ok&&before.count>0){bootstrapped=true;return {ok:true,alreadyPresent:true,count:before.count}}
 
-    const {configs,deleteKeys,overrides}=effectiveSeed();
+    const {configs,deleteKeys}=effectiveSeed();
     const failures=[];
+    let configsWritten=0,zonesWritten=0,equipmentWritten=0;
 
     for(const key of deleteKeys){
-      const r=await call(baseUrl,`/api/cabin/layout?key=${encodeURIComponent(key)}`,{method:"DELETE"},env,ctx);
-      if(!r.ok&&r.status!==404)failures.push({step:"delete",key,status:r.status,body:await r.text()});
+      try{await deleteCabinKey(env,key)}catch(e){failures.push({step:"delete",key,error:String(e?.message||e)})}
     }
 
-    const seedResponse=await call(baseUrl,"/api/cabin/seed",{method:"POST",body:{configs}},env,ctx);
-    if(!seedResponse.ok){
-      return {ok:false,error:"CABIN_SEED_FAILED",status:seedResponse.status,body:(await seedResponse.text()).slice(0,800),configsAttempted:configs.length,failures};
-    }
-
-    const recompute=await call(baseUrl,"/api/cabin/recompute-classes",{method:"POST",body:{}},env,ctx);
-    if(!recompute.ok)failures.push({step:"recompute",status:recompute.status,body:(await recompute.text()).slice(0,500)});
-
-    let operationalApplied=0;
-    for(const row of (Array.isArray(overrides.configs)?overrides.configs:[])){
-      if(!row?.operationalClasses||!Object.keys(row.operationalClasses).length)continue;
-      const total=Number(row.operationalTotal||Object.values(row.operationalClasses).reduce((a,b)=>a+Number(b||0),0));
-      const payload={configKey:row.configKey,airline:row.airline,aircraft:row.aircraft,configuration:row.configuration,total,classes:row.operationalClasses,quality:row.quality||"good",sourceLabel:row.sourceLabel||null};
-      const r=await call(baseUrl,"/api/cabin/config",{method:"POST",body:payload},env,ctx);
-      if(r.ok)operationalApplied++;else failures.push({step:"operational",key:row.configKey,status:r.status,body:(await r.text()).slice(0,500)});
+    for(const row of configs){
+      try{
+        const n=await writeCabinRow(env,row);
+        configsWritten+=n.configs;zonesWritten+=n.zones;equipmentWritten+=n.equipment;
+      }catch(e){
+        failures.push({step:"write",key:row?.configKey||null,error:String(e?.message||e)});
+      }
     }
 
     const after=await currentConfigs(baseUrl,env,ctx);
     const ok=after.response.ok&&after.count>0;
     if(ok)bootstrapped=true;
-    return {ok,mode:"V2_V1_CABIN_RESTORE",configsAttempted:configs.length,configsLoaded:after.count,operationalApplied,failures};
+    return {
+      ok,
+      mode:"V2_V1_CABIN_RESTORE_DIRECT_D1",
+      configsAttempted:configs.length,
+      configsWritten,
+      zonesWritten,
+      equipmentWritten,
+      configsLoaded:after.count,
+      failures
+    };
   })();
   bootstrapPromise=work.finally(()=>{bootstrapPromise=null});
   return bootstrapPromise;
@@ -91,7 +226,8 @@ export default {
     const url=new URL(request.url);
 
     if(url.pathname==="/api/v2/cabin/bootstrap"&&request.method==="POST"){
-      return json(await bootstrapCabins(request.url,env,ctx,{force:url.searchParams.get("force")==="1"}));
+      try{return json(await bootstrapCabins(request.url,env,ctx,{force:url.searchParams.get("force")==="1"}))}
+      catch(e){return json({ok:false,error:"V2_CABIN_BOOTSTRAP_EXCEPTION",detail:String(e?.message||e)},500)}
     }
 
     if(url.pathname==="/api/cabin/configs"&&request.method==="GET"){
