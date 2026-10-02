@@ -9,7 +9,7 @@ const OPS_LIST_V4=String.raw`
 #app .flight-home-row .v2-time-grid.ops-list-v4 .v2-time-cell+.v2-time-cell{border-left:1px solid #dce5ee!important;padding-left:9px!important}
 #app .flight-home-row .v2-time-grid.ops-list-v4 .v2-time-label{font-size:10px!important;font-weight:950!important}
 #app .flight-home-row .v2-time-grid.ops-list-v4 .v2-time-value{font-size:24px!important;white-space:nowrap!important}
-#app .flight-home-row .v2-flight-stack>.v2-status:not(.v4-status){display:none!important}
+#app .flight-home-row .v2-flight-stack[data-ops-status-ready]>.v2-status:not(.v4-status){display:none!important}
 #app .flight-home-row .v4-status.status-annule{background:#111!important;color:#ff3347!important}
 #app .flight-home-row .v4-status.status-prevu{background:#e7f2ff!important;color:#086bc1!important}
 #app .flight-home-row .v4-status.status-retarde{background:#fff0dc!important;color:#c25e00!important}
@@ -53,8 +53,9 @@ function patchRow(row){
  patchGrid(boxes[0]?.querySelector('.v2-time-grid'),depSig,cell('STD',std)+cell('ETD',etd,etd?'warn':'')+cell('ATD',atd,atd?'ok':''));
  patchGrid(boxes[1]?.querySelector('.v2-time-grid'),arrSig,cell('STA',sta)+cell('ETA',eta,eta?'neutral':'')+cell('ATA',ata,ata?'ok':''));
  const stack=row.querySelector('.v2-flight-stack');if(!stack)return;
+ const s=statusOf(x);
  let badge=stack.querySelector('.v4-status');if(!badge){badge=document.createElement('span');stack.appendChild(badge)}
- const s=statusOf(x),cls='v2-status v4-status '+statusClass(s);if(badge.textContent!==s)badge.textContent=s;if(badge.className!==cls)badge.className=cls;
+ const cls='v2-status v4-status '+statusClass(s);if(badge.textContent!==s)badge.textContent=s;if(badge.className!==cls)badge.className=cls;stack.dataset.opsStatusReady='1';
 }
 const run=()=>document.querySelectorAll('#app .flight-home-row').forEach(row=>{try{patchRow(row)}catch{}});
 const scheduleRun=()=>{requestAnimationFrame(run);setTimeout(run,80);setTimeout(run,350)};
