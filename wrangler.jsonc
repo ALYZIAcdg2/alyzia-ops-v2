@@ -1,6 +1,6 @@
 {
   "name": "alyzia-ops-v2",
-  "main": "./src/audit-entry-wrapper.js",
+  "main": "./src/v2-compat-schema-wrapper.js",
   "compatibility_date": "2026-08-06",
 
   "assets": {
