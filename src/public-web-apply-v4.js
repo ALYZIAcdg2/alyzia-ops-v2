@@ -70,7 +70,7 @@ export async function applyRunV4(env,runId){
   if(!run||run.status!=="DONE")return {ok:false,error:"RUN_NOT_DONE"};
   const {results:ids=[]}=await env.OPS_DB.prepare(`SELECT DISTINCT flight_identity FROM public_web_consolidated_v2 WHERE run_id=?`).bind(runId).all();
   const now=new Date().toISOString();
-  let flightsChanged=0,fieldsChanged=0,preserved=0,recoveredSta=0,recoveredStaFromSources=0,aircraftActualChanged=0,manualSkipped=0,derivedCtmAta=0;
+  let flightsChanged=0,fieldsChanged=0,preserved=0,recoveredSta=0,recoveredStaFromSources=0,aircraftActualChanged=0,manualSkipped=0,derivedCtmAta=0,derivedCtmAtd=0;
   for(const it of ids){
     const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=?`).bind(it.flight_identity).first();if(!row)continue;
     let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
@@ -91,8 +91,24 @@ export async function applyRunV4(env,runId){
         const old=clean(x.reg||x.registration||x.aircraftRegistration);if(old===next)continue;
         pushLog(x,"reg",old,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);setRegistrationAliases(x,next);x.regSource=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x.regUpdatedAt=now;fieldsChanged++;changed=true;continue;
       }
+      // Upgrade a CTM fallback even when the confirmed gate ATD has the same time.
+      if(field==="atd"&&x.atdSource==="DERIVED:CTM_TAKEOFF"){
+        x.atdDerived=false;delete x.atdDerivedFrom;delete x.atdDerivationMinutes;
+        x.atdSource=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x.atdUpdatedAt=now;
+        changed=true;
+      }
       if(before===next)continue;
       pushLog(x,field,before,next,`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`,now);x[field]=next;x[field+"Source"]=`PUBLIC_WEB_V4:${r.source||"CONSENSUS"}`;x[field+"UpdatedAt"]=now;fieldsChanged++;changed=true;
+    }
+
+    if(isCtmFlight(x,it.flight_identity)&&!manualProtected(x,"atd")&&clean(x.takeoff)&&(!clean(x.atd)||x.atdSource==="DERIVED:CTM_TAKEOFF")){
+      const next=clean(x.takeoff),before=clean(x.atd);
+      if(next!==before){
+        pushLog(x,"atd",before,next,"DERIVED:CTM_TAKEOFF",now);
+        x.atd=next;x.atdSource="DERIVED:CTM_TAKEOFF";x.atdUpdatedAt=now;
+        x.atdDerived=true;x.atdDerivedFrom="takeoff";x.atdDerivationMinutes=0;
+        derivedCtmAtd++;fieldsChanged++;changed=true;
+      }
     }
 
     if(isCtmFlight(x,it.flight_identity)&&!manualProtected(x,"ata")&&clean(x.landing)){
@@ -126,5 +142,6 @@ export async function applyRunV4(env,runId){
 
     if(changed){x.publicWebV4AppliedAt=now;x.publicWebV4RunId=runId;await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),it.flight_identity).run();flightsChanged++}
   }
-  return {ok:true,runId,flightsChanged,fieldsChanged,preserved,recoveredSta,recoveredStaFromSources,aircraftActualChanged,manualSkipped,derivedCtmAta,mode:"SAFE_MERGE_V4"};
+  return {ok:true,runId,flightsChanged,fieldsChanged,preserved,recoveredSta,recoveredStaFromSources,aircraftActualChanged,manualSkipped,derivedCtmAta,derivedCtmAtd,mode:"SAFE_MERGE_V4"};
 }
+
