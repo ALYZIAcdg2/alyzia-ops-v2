@@ -2,9 +2,11 @@
 // but public sites are retried with the airline ICAO designator when the IATA lookup
 // does not return a usable occurrence.
 const ICAO_CODES={
-  AI:"AIC",AV:"AVA",BJ:"LBT",BM:"MNS",DE:"CFG",E4:"ENT",HF:"VRE",
-  LA:"LAN",MH:"MAS",MS:"MSR",NH:"ANA",OZ:"AAR",SK:"SAS",SQ:"SIA",
-  TB:"JAF",TK:"THY",TU:"TAR",VF:"TKJ",WB:"RWD"
+  AA:"AAL",AC:"ACA",AF:"AFR",AI:"AIC",AT:"RAM",AV:"AVA",BA:"BAW",BJ:"LBT",BM:"MNS",
+  DE:"CFG",DL:"DAL",E4:"ENT",EK:"UAE",ET:"ETH",EY:"ETD",GF:"GFA",HF:"VRE",IB:"IBE",
+  KL:"KLM",KQ:"KQA",KU:"KAC",LA:"LAN",LH:"DLH",LX:"SWR",MH:"MAS",MK:"MAU",MS:"MSR",
+  NH:"ANA",OZ:"AAR",QR:"QTR",RJ:"RJA",SK:"SAS",SN:"BEL",SQ:"SIA",SV:"SVA",TB:"JAF",
+  TK:"THY",TP:"TAP",TU:"TAR",TW:"TWB",UA:"UAL",UU:"REU",VF:"TKJ",WB:"RWD",WY:"OMA"
 };
 export const PUBLIC_AIRLINE_ICAO=Object.freeze({...ICAO_CODES});
 
@@ -32,11 +34,9 @@ export async function withIcaoFallback(flight,buildUrl,read){
   const attempts=[{designator:flight.designator,codeType:"IATA",url:first.url,status:first.status,checkedAt:first.checkedAt}];
   const alias=icaoFlight(flight);
   // Dès que le premier lookup n'est pas exploitable, on tente aussi le code OACI.
-  // Cela inclut NOT_TRACKED / NO_USABLE_DATA / mismatch / erreur HTTP / blocage de page.
   if(!alias||first.status==="OK"||buildUrl(alias)===buildUrl(flight))return {...first,lookupDesignator:flight.designator,lookupCodeType:"IATA",lookupAttempts:attempts};
   const second=await read(alias);
   attempts.push({designator:alias.designator,codeType:"ICAO",url:second.url,status:second.status,checkedAt:second.checkedAt});
   if(second.status==="OK")return {...second,lookupDesignator:alias.designator,lookupCodeType:"ICAO",lookupAttempts:attempts};
-  // Garde la dernière tentative dans le résultat, mais conserve les deux essais pour le diagnostic Admin.
   return {...second,lookupDesignator:alias.designator,lookupCodeType:"ICAO",lookupAttempts:attempts};
 }
