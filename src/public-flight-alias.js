@@ -1,14 +1,18 @@
 // Public-source flight lookup aliases. The application keeps its planning/IATA code
 // and raw flight number, but public sites may publish the same occurrence with a
-// zero-padded number (example VF12 -> VF012).
-const ICAO_CODES={
-  AA:"AAL",AC:"ACA",AF:"AFR",AI:"AIC",AT:"RAM",AV:"AVA",BA:"BAW",BJ:"LBT",BM:"MNS",
-  DE:"CFG",DL:"DAL",E4:"ENT",EK:"UAE",ET:"ETH",EY:"ETD",GF:"GFA",HF:"VRE",IB:"IBE",
-  KL:"KLM",KQ:"KQA",KU:"KAC",LA:"LAN",LH:"DLH",LX:"SWR",MH:"MAS",MK:"MAU",MS:"MSR",
-  NH:"ANA",OZ:"AAR",QR:"QTR",RJ:"RJA",SK:"SAS",SM:"MSC",SN:"BEL",SQ:"SIA",SV:"SVA",TB:"JAF",
-  TK:"THY",TP:"TAP",TU:"TAR",TW:"TWB",UA:"UAL",UU:"REU",VF:"TKJ",WB:"RWD",WY:"OMA"
+// zero-padded number or a different ICAO/callsign designator.
+const ICAO_ALIASES={
+  AA:["AAL"],AC:["ACA"],AF:["AFR"],AI:["AIC"],AT:["RAM"],AV:["AVA"],BA:["BAW"],BJ:["LBT"],BM:["MNS"],
+  DE:["CFG"],DL:["DAL"],E4:["ENT"],EK:["UAE"],ET:["ETH"],EY:["ETD"],GF:["GFA"],HF:["VRE"],IB:["IBE"],
+  KL:["KLM"],KQ:["KQA"],KU:["KAC"],LA:["LAN"],LH:["DLH"],LX:["SWR"],MH:["MAS"],MK:["MAU"],MS:["MSR"],
+  NH:["ANA"],OZ:["AAR"],QR:["QTR"],RJ:["RJA"],SK:["SAS"],SM:["MSC"],SN:["BEL"],SQ:["SIA"],SV:["SVA"],TB:["JAF"],
+  TK:["THY"],TP:["TAP"],TU:["TAR"],TW:["TWB"],UA:["UAL"],UU:["REU"],
+  // AJet is a special case: FlightStats exposes AJA while FlightAware uses TKJ callsigns.
+  VF:["AJA","TKJ"],
+  WB:["RWD"],WY:["OMA"]
 };
-export const PUBLIC_AIRLINE_ICAO=Object.freeze({...ICAO_CODES});
+export const PUBLIC_AIRLINE_ICAO=Object.freeze(Object.fromEntries(Object.entries(ICAO_ALIASES).map(([iata,codes])=>[iata,codes[0]])));
+export const PUBLIC_AIRLINE_ALIASES=Object.freeze(Object.fromEntries(Object.entries(ICAO_ALIASES).map(([iata,codes])=>[iata,Object.freeze([...codes])])));
 
 const upper=v=>String(v??"").trim().toUpperCase();
 export function publicFlightNumberVariants(number){
@@ -26,12 +30,13 @@ export function publicFlightNumberVariants(number){
 export function flightLookupVariants(flight){
   const iata=upper(flight?.airline),numbers=publicFlightNumberVariants(flight?.number),out=[];
   for(const number of numbers)out.push({...flight,airline:iata,number,designator:`${iata}${number}`,lookupCodeType:"IATA",lookupNumberType:number===upper(flight?.number)?"RAW":"PADDED"});
-  const icao=ICAO_CODES[iata];
-  if(icao)for(const number of numbers)out.push({...flight,airline:icao,number,designator:`${icao}${number}`,lookupIata:iata,lookupIcao:icao,lookupCodeType:"ICAO",lookupNumberType:number===upper(flight?.number)?"RAW":"PADDED"});
+  for(const icao of ICAO_ALIASES[iata]||[]){
+    for(const number of numbers)out.push({...flight,airline:icao,number,designator:`${icao}${number}`,lookupIata:iata,lookupIcao:icao,lookupCodeType:"ICAO",lookupNumberType:number===upper(flight?.number)?"RAW":"PADDED"});
+  }
   return out;
 }
 export function icaoFlight(flight){
-  const iata=upper(flight?.airline),code=ICAO_CODES[iata];
+  const iata=upper(flight?.airline),code=(ICAO_ALIASES[iata]||[])[0];
   return code?{...flight,airline:code,designator:`${code}${flight.number}`,lookupIata:iata,lookupIcao:code}:null;
 }
 export function publicPageStatus(name,text,httpStatus,matched,hasData=true){
