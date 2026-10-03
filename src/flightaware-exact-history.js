@@ -17,6 +17,7 @@ const EXACT={
   "LO336|2026-10-03":"https://flightaware.com/live/flight/LOT336/history/20261003/1755Z/LFPG/EPWA",
   "TK1828|2026-10-03":"https://flightaware.com/live/flight/THY1828/history/20261003/1800Z/LFPG/LTFM",
   "SK560|2026-10-03":"https://flightaware.com/live/flight/SAS560/history/20261003/1825Z/LFPG/EKCH",
+  "SQ337|2026-10-03":"https://www.flightaware.com/live/flight/SIA337/history/20261003/2045Z/LFPG/WSSS",
   "LO334|2026-10-03":"https://flightaware.com/live/flight/LOT334/history/20261003/0515Z/LFPG/EPWA",
   "RJ120|2026-10-03":"https://flightaware.com/live/flight/RJA120/history/20261003/0530Z/LFPG/OJAI",
   "TK1830|2026-10-03":"https://flightaware.com/live/flight/THY1830/history/20261003/0530Z/LFPG/LTFM"
