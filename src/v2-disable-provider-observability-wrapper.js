@@ -1,12 +1,9 @@
-import app from "./v2-admin-public-flow-wrapper.js";
+import app from "./v2-admin-envol-exact-wrapper.js";
 
 const GUARD=String.raw`<style id="alyzia-disable-provider-observability-css">#providerObservability,.provider-observability{display:none!important}</style><script id="alyzia-disable-provider-observability-js">(()=>{'use strict';try{window.__alyziaProviderObservability=true}catch{};const kill=()=>{document.querySelectorAll('#providerObservability,.provider-observability').forEach(n=>n.remove())};kill();document.addEventListener('DOMContentLoaded',kill,{once:true});})();</script>`;
 
 function stripLegacyProviderUi(html){
   let s=String(html||"");
-  // The legacy observability wrapper mounts itself with a MutationObserver and
-  // recreates the panel after removal. Remove its injected JS/CSS before the
-  // browser can execute it. This also removes the detail companion wrapper.
   s=s.replace(/<style\s+id=["']alyzia-provider-observability[^"']*["'][\s\S]*?<\/style>/gi,"");
   s=s.replace(/<script\s+id=["']alyzia-provider-observability[^"']*["'][\s\S]*?<\/script>/gi,"");
   const i=s.lastIndexOf("</body>");
