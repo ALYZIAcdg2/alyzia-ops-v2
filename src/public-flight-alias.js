@@ -1,5 +1,5 @@
 // Verified carrier aliases from exact dated public occurrences.
-const ICAO_CODES={BM:"MNS",TB:"JAF",HF:"VRE",VF:"TKJ",NH:"ANA",AI:"AIC",WB:"RWD",TU:"TAR",SQ:"SIA",TK:"THY"};
+const ICAO_CODES={BM:"MNS",TB:"JAF",HF:"VRE",VF:"TKJ",NH:"ANA",AI:"AIC",WB:"RWD",TU:"TAR",SQ:"SIA",TK:"THY",E4:"ENT"};
 const NO_DATA=new Set(["NOT_TRACKED","NO_USABLE_DATA","FETCHED_NO_MATCH","OCCURRENCE_MISMATCH"]);
 export function icaoFlight(flight){
   const code=ICAO_CODES[flight.airline];
