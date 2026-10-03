@@ -22,6 +22,13 @@ async function runLive(env,opts){
   return {...live,recovery,parisAeroport,flightAwareEvidence,regFix,statusModel};
 }
 async function runGround(env){const ground=await runGroundPublicFlow(env);const regFix=await sanitizeTodayRegistrations(env);return {...ground,regFix}}
+async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=true}={}){
+  const etd=await runEtd(env);
+  const live=await runLive(env,{limit:liveLimit,concurrency:liveConcurrency});
+  const ground=withGround?await runGround(env):{ok:true,skipped:true};
+  const statusModel=await runStatusModelTest(env);
+  return {etd,live,ground,statusModel};
+}
 function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15===0}
 
 const STATUS_UI=String.raw`<style id="alyzia-status-model-test-css">
@@ -97,9 +104,8 @@ export default {
     if(url.pathname==="/api/admin/push-now"&&request.method==="POST"){
       try{
         const base=await app.fetch(request,env,ctx);let sta={};try{sta=await base.clone().json()}catch{}
-        const [etd,live,ground]=await Promise.all([runEtd(env),runLive(env,{limit:36,concurrency:4}),runGround(env)]);
-        const statusModel=await runStatusModelTest(env);
-        return json({...sta,ok:base.ok&&etd.ok&&live.ok&&ground.ok&&statusModel.ok,etd,live,ground,statusModel,statusMode:'TEST'});
+        const {etd,live,ground,statusModel}=await runAllSequential(env,{liveLimit:36,liveConcurrency:4,withGround:true});
+        return json({...sta,ok:base.ok&&etd.ok&&live.ok&&ground.ok&&statusModel.ok,etd,live,ground,statusModel,statusMode:'TEST',writeMode:'SEQUENTIAL'});
       }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     const response=await app.fetch(request,env,ctx);const type=String(response.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return response;
@@ -107,6 +113,11 @@ export default {
   },
   scheduled(controller,env,ctx){
     if(typeof app.scheduled==="function")app.scheduled(controller,env,ctx);
-    ctx.waitUntil((async()=>{await runEtd(env).catch(()=>{});await runLive(env,{limit:12,concurrency:3}).catch(()=>{});if(isQuarterHour(controller))await runGround(env).catch(()=>{});await runStatusModelTest(env).catch(()=>{})})());
+    ctx.waitUntil((async()=>{
+      await runEtd(env).catch(()=>{});
+      await runLive(env,{limit:12,concurrency:3}).catch(()=>{});
+      if(isQuarterHour(controller))await runGround(env).catch(()=>{});
+      await runStatusModelTest(env).catch(()=>{});
+    })());
   }
 };
