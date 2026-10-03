@@ -1,6 +1,6 @@
 {
   "name": "alyzia-ops-v2",
-  "main": "./src/v2-admin-all-public-sources-wrapper.js",
+  "main": "./src/v2-etd-public-wrapper.js",
   "compatibility_date": "2026-08-06",
 
   "assets": {
@@ -10,7 +10,7 @@
   },
 
   "triggers": {
-    "crons": ["*/30 * * * *"]
+    "crons": ["*/5 * * * *"]
   },
 
   "vars": {
