@@ -1,4 +1,4 @@
-import app from "./v2-etd-public-wrapper.js";
+import app from "./v2-exact-occurrence-wrapper.js";
 
 const UI=String.raw`<style id="alyzia-v2-single-status-css">
 #app .alyzia-status-single{display:inline-flex!important;align-items:center;justify-content:center;margin-top:6px;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:950;line-height:1;white-space:nowrap;background:#eef3f8;color:#607086}
