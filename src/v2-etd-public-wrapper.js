@@ -31,6 +31,20 @@ async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=t
 }
 function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15===0}
 
+const FINAL_FIRST_PAINT=String.raw`<style id="alyzia-v2-final-first-paint-css">
+html.alyzia-v2-final-loading #app{visibility:hidden!important}
+html.alyzia-v2-final-loading body::after{content:"Chargement des vols du jour…";position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:99999;padding:12px 18px;border-radius:14px;background:#fff;color:#15233a;font:800 14px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 8px 30px rgba(20,35,58,.14);border:1px solid rgba(20,35,58,.08);pointer-events:none}
+</style><script id="alyzia-v2-final-first-paint-head-js">(()=>{'use strict';document.documentElement.classList.add('alyzia-v2-final-loading')})();</script>`;
+const FINAL_REVEAL=String.raw`<script id="alyzia-v2-final-first-paint-js">(()=>{'use strict';
+if(window.__alyziaV2FinalPaint)return;window.__alyziaV2FinalPaint=true;
+const root=document.documentElement;let done=false,seenFlights=false,quiet=null,maxTimer=null,obs=null;
+const reveal=()=>{if(done)return;done=true;clearTimeout(quiet);clearTimeout(maxTimer);try{obs?.disconnect()}catch{};requestAnimationFrame(()=>requestAnimationFrame(()=>root.classList.remove('alyzia-v2-final-loading')))};
+const bump=()=>{if(done||!seenFlights)return;clearTimeout(quiet);quiet=setTimeout(reveal,650)};
+const originalFetch=window.fetch;if(typeof originalFetch==='function')window.fetch=async function(...args){const raw=typeof args[0]==='string'?args[0]:String(args[0]?.url||'');const response=await originalFetch.apply(this,args);try{const u=new URL(raw,location.origin);if(u.pathname==='/api/flights'&&response?.ok){seenFlights=true;bump()}}catch{}return response};
+const start=()=>{const app=document.getElementById('app');if(app&&typeof MutationObserver==='function'){obs=new MutationObserver(bump);obs.observe(app,{childList:true,subtree:true,attributes:true,characterData:true})}setTimeout(()=>{if(document.querySelector('#app .flight-home-row')){seenFlights=true;bump()}},250);maxTimer=setTimeout(reveal,5000)};
+document.readyState==='loading'?document.addEventListener('DOMContentLoaded',start,{once:true}):start();
+})();</script>`;
+
 const STATUS_UI=String.raw`<style id="alyzia-status-model-test-css">
 .flight-home-row .v2-status,.flight-detail-status-wrap .v2-status,.flight-head .v2-status{display:inline-flex!important}
 .flight-detail-status-wrap{display:flex!important;align-items:center;margin-top:7px;min-height:34px}.flight-detail-status-wrap .v2-status{font-size:14px!important;padding:8px 13px!important}
@@ -72,8 +86,21 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-active-card-ops-fix">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-flight-status-authoritative-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-flight-list-live-sync-js">[\s\S]*?<\/script>/g,'')
- .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);const inserts=[];if(!s.includes('id="alyzia-status-model-test-js"'))inserts.push(STATUS_UI);if(!s.includes('id="alyzia-push-all-public-js"'))inserts.push(PUSH_UI);if(!inserts.length)return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+inserts.join('\n')+'\n'+s.slice(i):s+inserts.join('\n')}
+ .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
+ .replace(/<style id="alyzia-startup-today-guard-css">[\s\S]*?<\/style>/g,'')
+ .replace(/<script id="alyzia-startup-today-guard-js">[\s\S]*?<\/script>/g,'')
+ .replace(/<style id="alyzia-ui-stability-css">[\s\S]*?<\/style>/g,'')
+ .replace(/<script id="alyzia-ui-stability-head-js">[\s\S]*?<\/script>/g,'')
+ .replace(/<script id="alyzia-ui-stability-nav-js">[\s\S]*?<\/script>/g,'');}
+function patchHtml(html){
+  let s=stripStatusConflicts(html);
+  if(!s.includes('id="alyzia-v2-final-first-paint-head-js"')){const h=s.indexOf('<head>');s=h>=0?s.slice(0,h+6)+FINAL_FIRST_PAINT+s.slice(h+6):FINAL_FIRST_PAINT+s}
+  const inserts=[];
+  if(!s.includes('id="alyzia-status-model-test-js"'))inserts.push(STATUS_UI);
+  if(!s.includes('id="alyzia-push-all-public-js"'))inserts.push(PUSH_UI);
+  if(!s.includes('id="alyzia-v2-final-first-paint-js"'))inserts.push(FINAL_REVEAL);
+  if(!inserts.length)return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+inserts.join('\n')+'\n'+s.slice(i):s+inserts.join('\n')
+}
 
 export default {
   async fetch(request,env,ctx){
