@@ -5,18 +5,20 @@ import {normalizeFr24EtdLocalTime} from "./etd-fr24-localtime.js";
 import {runGroundPublicFlow,groundPublicStatus} from "./ground-public-flow.js";
 import {runPublicLiveFlow,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops-public-live-flow.js";
 import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js";
+import {sanitizeTodayStatuses} from "./ops-status-sanitizer.js";
+import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
-async function runLive(env,opts){const live=await runPublicLiveFlow(env,opts);const recovery=await recoverValidatedLiveFacts(env);return {...live,recovery}}
+async function runLive(env,opts){const live=await runPublicLiveFlow(env,opts);const recovery=await recoverValidatedLiveFacts(env);const [statusFix,regFix]=await Promise.all([sanitizeTodayStatuses(env),sanitizeTodayRegistrations(env)]);return {...live,recovery,statusFix,regFix}}
 function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15===0}
 const PUSH_UI=String.raw`<script id="alyzia-push-all-public-js">(()=>{'use strict';
 window.adminPushNow=async function(){
  const btn=document.getElementById('adminPushBtn'),msg=document.getElementById('adnPushMsg');
  if(btn){btn.disabled=true;btn.textContent='⚡ SOURCES…'}if(msg)msg.textContent='STA + ETD + ATD/STATUS/ETA/ATA + GATE + TYPE/IMMAT en cours…';
  try{const r=await fetch('/api/admin/push-now',{method:'POST',cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
- const sta=j.filled??0,etd=j.etd?.updated??0,live=j.live?.updated??0,recovery=j.live?.recovery?.updated??0,ground=j.ground?.updated??0;
- if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · LIVE '+live+' · RECOVERY '+recovery+' · GATE/TYPE/IMMAT '+ground;
+ const sta=j.filled??0,etd=j.etd?.updated??0,live=j.live?.updated??0,recovery=j.live?.recovery?.updated??0,statusFix=j.live?.statusFix?.updated??0,regFix=j.live?.regFix?.updated??0,ground=j.ground?.updated??0;
+ if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · LIVE '+live+' · STATUS '+statusFix+' · IMMAT '+regFix+' · RECOVERY '+recovery+' · GATE/TYPE/IMMAT '+ground;
  await window.renderAdminDashboard?.(true);
  }catch(e){if(msg)msg.textContent='ÉCHEC : '+(e?.message||e)}finally{if(btn){btn.disabled=false;btn.textContent='⚡ PUSH'}}
 };
