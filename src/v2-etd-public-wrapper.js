@@ -4,17 +4,19 @@ import {runEtdPublicFlowSafe,etdPublicStatusSafe} from "./etd-public-runner.js";
 import {normalizeFr24EtdLocalTime} from "./etd-fr24-localtime.js";
 import {runGroundPublicFlow,groundPublicStatus} from "./ground-public-flow.js";
 import {runPublicLiveFlow,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops-public-live-flow.js";
+import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js";
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
+async function runLive(env,opts){const live=await runPublicLiveFlow(env,opts);const recovery=await recoverValidatedLiveFacts(env);return {...live,recovery}}
 function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15===0}
 const PUSH_UI=String.raw`<script id="alyzia-push-all-public-js">(()=>{'use strict';
 window.adminPushNow=async function(){
  const btn=document.getElementById('adminPushBtn'),msg=document.getElementById('adnPushMsg');
  if(btn){btn.disabled=true;btn.textContent='⚡ SOURCES…'}if(msg)msg.textContent='STA + ETD + ATD/STATUS/ETA/ATA + GATE + TYPE/IMMAT en cours…';
  try{const r=await fetch('/api/admin/push-now',{method:'POST',cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
- const sta=j.filled??0,etd=j.etd?.updated??0,live=j.live?.updated??0,ground=j.ground?.updated??0;
- if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · LIVE '+live+' · GATE/TYPE/IMMAT '+ground;
+ const sta=j.filled??0,etd=j.etd?.updated??0,live=j.live?.updated??0,recovery=j.live?.recovery?.updated??0,ground=j.ground?.updated??0;
+ if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · LIVE '+live+' · RECOVERY '+recovery+' · GATE/TYPE/IMMAT '+ground;
  await window.renderAdminDashboard?.(true);
  }catch(e){if(msg)msg.textContent='ÉCHEC : '+(e?.message||e)}finally{if(btn){btn.disabled=false;btn.textContent='⚡ PUSH'}}
 };
@@ -32,7 +34,7 @@ export default {
     }
     if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:5});
     if(url.pathname==="/api/admin/live-public-flow"){
-      try{return json(await runPublicLiveFlow(env,{limit:24,concurrency:3}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json(await runLive(env,{limit:24,concurrency:3}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/live-public-status"){
       try{return json(await publicLiveStatus(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
@@ -48,7 +50,7 @@ export default {
       try{
         const base=await app.fetch(request,env,ctx);
         let sta={};try{sta=await base.clone().json()}catch{}
-        const [etd,live,ground]=await Promise.all([runEtd(env),runPublicLiveFlow(env,{limit:36,concurrency:4}),runGroundPublicFlow(env)]);
+        const [etd,live,ground]=await Promise.all([runEtd(env),runLive(env,{limit:36,concurrency:4}),runGroundPublicFlow(env)]);
         return json({...sta,ok:base.ok&&etd.ok&&live.ok&&ground.ok,etd,live,ground});
       }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
@@ -60,7 +62,7 @@ export default {
   scheduled(controller,env,ctx){
     if(typeof app.scheduled==="function")app.scheduled(controller,env,ctx);
     ctx.waitUntil(runEtd(env).catch(()=>{}));
-    ctx.waitUntil(runPublicLiveFlow(env,{limit:12,concurrency:3}).catch(()=>{}));
+    ctx.waitUntil(runLive(env,{limit:12,concurrency:3}).catch(()=>{}));
     if(isQuarterHour(controller))ctx.waitUntil(runGroundPublicFlow(env).catch(()=>{}));
   }
 };
