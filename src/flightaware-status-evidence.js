@@ -4,30 +4,16 @@ const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const today=()=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
-function decode(raw){
-  return String(raw||"")
-    .replace(/\\u0026/gi,"&")
-    .replace(/\\u002F/gi,"/")
-    .replace(/\\u003A/gi,":")
-    .replace(/\\u003C/gi,"<")
-    .replace(/\\u003E/gi,">")
+function textOnly(html){
+  return String(html||"")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
+    .replace(/<[^>]+>/g," ")
     .replace(/&nbsp;|&#160;/gi," ")
     .replace(/&amp;/gi,"&")
     .replace(/&#39;/g,"'")
-    .replace(/&quot;/gi,'"');
-}
-
-function textOnly(html){
-  return decode(html)
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
-    .replace(/<[^>]+>/g," ")
+    .replace(/&quot;/gi,'"')
     .replace(/\s+/g," ")
     .trim();
-}
-
-function routeOk(text,f){
-  const u=upper(text);
-  return (!f.origin||u.includes(f.origin))&&(!f.destination||u.includes(f.destination));
 }
 
 function normalize(row,x){
@@ -46,21 +32,12 @@ function normalize(row,x){
   };
 }
 
-function evidenceWindow(raw,candidate){
-  const s=decode(raw),u=upper(s),keys=[upper(candidate.designator),`${upper(candidate.airline)}${upper(candidate.number)}`,`${upper(candidate.airline)} ${upper(candidate.number)}`].filter(Boolean);
-  for(const key of keys){
-    const i=u.indexOf(key);
-    if(i>=0)return s.slice(Math.max(0,i-12000),Math.min(s.length,i+24000));
-  }
-  return s.slice(0,50000);
-}
-
 function phase(text){
-  const s=upper(text).replace(/[{}\[\]",:_-]+/g," ").replace(/\s+/g," ");
-  if(/\bARRIVED AT GATE\b|\bGATE ARRIVAL\b|\bARRIVED\b|\bCOMPLETED\b/.test(s))return "ARRIVED";
-  if(/\bLANDED\b|\bTOUCHDOWN\b|\bWHEELS DOWN\b/.test(s))return "LANDED";
-  if(/\bIN AIR\b|\bAIRBORNE\b|\bIN FLIGHT\b|\bEN ROUTE\b|\bEN VOL\b|\bTOOK OFF\b|\bWHEELS UP\b/.test(s))return "AIRBORNE";
-  if(/\bDEPARTED\b|\bGATE OUT\b|\bLEFT GATE\b/.test(s))return "DEPARTED";
+  const s=upper(text);
+  if(/ARRIVED AT GATE|GATE ARRIVAL|ARRIVED\b|COMPLETED/.test(s))return "ARRIVED";
+  if(/LANDED|TOUCHDOWN|WHEELS DOWN/.test(s))return "LANDED";
+  if(/IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|EN VOL|TOOK OFF|WHEELS UP/.test(s))return "AIRBORNE";
+  if(/DEPARTED|GATE OUT|LEFT GATE/.test(s))return "DEPARTED";
   return "";
 }
 
@@ -81,18 +58,16 @@ async function fetchEvidence(f){
         }
       });
       const raw=await response.text();
-      const visible=textOnly(raw);
-      const window=evidenceWindow(raw,candidate);
-      const searchable=`${visible} ${window}`;
-      const rawUpper=upper(raw);
-      const mentions=rawUpper.includes(upper(candidate.designator))||rawUpper.includes(`${upper(candidate.airline)} ${upper(candidate.number)}`)||rawUpper.includes(`${upper(candidate.airline)}${upper(candidate.number)}`);
-      const detectedPhase=phase(searchable);
-      const routeMatched=routeOk(raw,candidate)||routeOk(searchable,candidate);
-      let status=publicPageStatus("FLIGHTAWARE",searchable,response.status,mentions,routeMatched||Boolean(detectedPhase));
-      if(response.ok&&mentions&&detectedPhase)status="OK";
+      const text=textOnly(raw);
+      const all=upper(raw+" "+text);
+      const mentions=all.includes(upper(candidate.designator))||all.includes(`${upper(candidate.airline)} ${upper(candidate.number)}`);
+      // For today's active flight, FlightAware's live page is occurrence-specific enough for STATUS.
+      // Requiring literal IATA origin/destination was rejecting valid pages that expose ICAO/city names instead.
+      const status=publicPageStatus("FLIGHTAWARE",text,response.status,mentions,true);
+      const detected=status==="OK"?phase(raw+" "+text):"";
       return {
         status,
-        phase:status==="OK"?detectedPhase:"",
+        phase:detected,
         url:response.url||url,
         httpStatus:response.status
       };
@@ -126,8 +101,8 @@ async function processCandidate(env,item,index,items){
   const ev={...(current.statusModelEvidence||{})};
   const before=JSON.stringify(ev);
 
+  ev.flightAwareCheckStatus=hit.status;
   ev.flightAwareCheckedAt=at;
-  ev.flightAwareFetchStatus=hit.status||"";
   ev.flightAwareUrl=hit.url||"";
   if(hit.phase){
     ev.flightAwarePhase=hit.phase;
