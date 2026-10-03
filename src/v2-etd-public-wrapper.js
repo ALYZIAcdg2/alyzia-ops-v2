@@ -15,6 +15,14 @@ export default {
       try{return json(await etdPublicStatus(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:5});
+    if(url.pathname==="/api/admin/push-now"&&request.method==="POST"){
+      try{
+        const base=await app.fetch(request,env,ctx);
+        let sta={};try{sta=await base.clone().json()}catch{}
+        const etd=await run(env);
+        return json({...sta,ok:base.ok&&etd.ok,etd});
+      }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
     return app.fetch(request,env,ctx);
   },
   scheduled(controller,env,ctx){
