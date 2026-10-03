@@ -7,6 +7,7 @@ import {runPublicLiveFlow,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops
 import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
+import {runFlightAwareStatusEvidence} from "./flightaware-status-evidence.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
@@ -15,15 +16,18 @@ async function runLive(env,opts){
   const live=await runPublicLiveFlow(env,opts);
   const recovery=await recoverValidatedLiveFacts(env);
   const parisAeroport=await runParisAirportStatusFlow(env);
+  const flightAwareEvidence=await runFlightAwareStatusEvidence(env,{limit:opts?.limit||36,concurrency:opts?.concurrency||4});
   const regFix=await sanitizeTodayRegistrations(env);
   const statusModel=await runStatusModelTest(env);
-  return {...live,recovery,parisAeroport,regFix,statusModel};
+  return {...live,recovery,parisAeroport,flightAwareEvidence,regFix,statusModel};
 }
 async function runGround(env){const ground=await runGroundPublicFlow(env);const regFix=await sanitizeTodayRegistrations(env);return {...ground,regFix}}
 function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15===0}
 
 const STATUS_UI=String.raw`<style id="alyzia-status-model-test-css">
 .flight-home-row .v2-status,.flight-detail-status-wrap .v2-status,.flight-head .v2-status{display:inline-flex!important}
+.flight-detail-status-wrap{display:flex!important;align-items:center;margin-top:7px;min-height:34px}.flight-detail-status-wrap .v2-status{font-size:14px!important;padding:8px 13px!important}
+@media(max-width:620px){.flight-detail-status-wrap .v2-status{font-size:12px!important;padding:7px 11px!important}}
 </style><script id="alyzia-status-model-test-js">(()=>{'use strict';
 if(window.__alyziaStatusModelTest)return;window.__alyziaStatusModelTest=true;
 const txt=v=>String(v??'').trim(),up=v=>txt(v).toUpperCase();
@@ -35,7 +39,8 @@ const label=x=>{const s=txt(x?.status)||"À L'HEURE";if(up(s)==='EN VOL'){const 
 const setBadge=(b,x)=>{if(!b||!x)return;const l=label(x),wanted='v2-status '+cls(l);if(txt(b.textContent)!==l)b.textContent=l;if(b.className!==wanted)b.className=wanted;b.style.display='inline-flex'};
 function syncList(){const list=flights();for(const row of document.querySelectorAll('#app .flight-home-row')){const i=rowIndex(row),x=Number.isInteger(i)?list[i]:null;if(x)setBadge(row.querySelector('.v2-status'),x)}}
 function current(){try{if(typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)&&typeof selected!=='undefined'&&FLIGHTS[selected])return FLIGHTS[selected]}catch{}try{if(Array.isArray(window.FLIGHTS)&&Number.isInteger(window.selected))return window.FLIGHTS[window.selected]||null}catch{}return null}
-function syncDetail(){const x=current(),head=document.querySelector('#app .flight-head');if(!x||!head)return;setBadge(head.querySelector('.flight-detail-status-wrap .v2-status')||head.querySelector('.v2-status'),x)}
+function ensureDetailBadge(head){let wrap=head.querySelector('.flight-detail-status-wrap');if(wrap)return wrap.querySelector('.v2-status');const anchor=head.querySelector('.fh-id')||head.querySelector('.flight-id-with-logo')?.parentElement||head.firstElementChild;if(!anchor)return null;wrap=document.createElement('div');wrap.className='flight-detail-status-wrap';wrap.innerHTML='<span class="v2-status alheure">À L\'HEURE</span>';anchor.appendChild(wrap);return wrap.querySelector('.v2-status')}
+function syncDetail(){const x=current(),head=document.querySelector('#app .flight-head');if(!x||!head)return;setBadge(ensureDetailBadge(head),x)}
 function key(x){return txt(x?.identity||x?.flight_id)||[up(x?.flight||x?.flight_number),txt(x?.flight_date||x?.date)].join('|')}
 function merge(incoming){const list=flights(),by=new Map(list.map(x=>[key(x),x]));for(const n of incoming){const x=by.get(key(n));if(!x)continue;for(const k of ['status','statusSource','statusReason','statusEvidence','statusArrivalUtc','statusModelEvidence','parisAeroportPhase'])if(n?.[k]!==undefined)x[k]=n[k]}}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json(),a=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];if(a.length){merge(a);syncList();syncDetail()}}catch{}}
@@ -46,10 +51,10 @@ document.readyState==='loading'?document.addEventListener('DOMContentLoaded',sta
 const PUSH_UI=String.raw`<script id="alyzia-push-all-public-js">(()=>{'use strict';
 window.adminPushNow=async function(){
  const btn=document.getElementById('adminPushBtn'),msg=document.getElementById('adnPushMsg');
- if(btn){btn.disabled=true;btn.textContent='⚡ SOURCES…'}if(msg)msg.textContent='STA + ETD + ATD/TAKEOFF/LANDING/ATA + STATUS TEST + GATE + TYPE/IMMAT en cours…';
+ if(btn){btn.disabled=true;btn.textContent='⚡ SOURCES…'}if(msg)msg.textContent='STA + ETD + ATD/TAKEOFF/LANDING/ATA + FLIGHTAWARE STATUS + GATE + TYPE/IMMAT en cours…';
  try{const r=await fetch('/api/admin/push-now',{method:'POST',cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
- const sta=j.filled??0,etd=j.etd?.updated??0,live=j.live?.updated??0,recovery=j.live?.recovery?.updated??0,paris=j.live?.parisAeroport?.updated??0,status=j.statusModel?.updated??j.live?.statusModel?.updated??0,regFix=(j.live?.regFix?.updated??0)+(j.ground?.regFix?.updated??0),ground=j.ground?.updated??0;
- if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · LIVE '+live+' · PARIS '+paris+' · STATUS TEST '+status+' · IMMAT '+regFix+' · GATE/TYPE/IMMAT '+ground+' · RECOVERY '+recovery;
+ const sta=j.filled??0,etd=j.etd?.updated??0,live=j.live?.updated??0,recovery=j.live?.recovery?.updated??0,paris=j.live?.parisAeroport?.updated??0,fa=j.live?.flightAwareEvidence?.updated??0,status=j.statusModel?.updated??j.live?.statusModel?.updated??0,regFix=(j.live?.regFix?.updated??0)+(j.ground?.regFix?.updated??0),ground=j.ground?.updated??0;
+ if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · LIVE '+live+' · PARIS '+paris+' · FA STATUS '+fa+' · STATUS TEST '+status+' · IMMAT '+regFix+' · GATE/TYPE/IMMAT '+ground+' · RECOVERY '+recovery;
  await window.renderAdminDashboard?.(true);
  }catch(e){if(msg)msg.textContent='ÉCHEC : '+(e?.message||e)}finally{if(btn){btn.disabled=false;btn.textContent='⚡ PUSH'}}
 };
