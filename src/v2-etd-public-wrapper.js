@@ -3,7 +3,7 @@ import {ETD_PUBLIC_SOURCE_ORDER} from "./etd-public-flow.js";
 import {runEtdPublicFlowSafe,etdPublicStatusSafe} from "./etd-public-runner.js";
 import {normalizeFr24EtdLocalTime} from "./etd-fr24-localtime.js";
 import {runGroundPublicFlow,groundPublicStatus} from "./ground-public-flow.js";
-import {runPublicLiveFlow,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops-public-live-flow.js";
+import {runPublicLiveFlow,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops-public-live-flow-optimized.js";
 import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js";
 import {recoverFlightAwareExactHistory} from "./flightaware-exact-history.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
@@ -13,8 +13,10 @@ import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
 async function runLive(env,opts){
-  const live=await runPublicLiveFlow(env,opts);
+  // FlightAware exact d'abord : si l'ATD/ETA/ATA est trouvé, le LIVE optimisé
+  // voit la valeur en D1 et évite les appels génériques inutiles.
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
+  const live=await runPublicLiveFlow(env,opts);
   const recovery=await recoverValidatedLiveFacts(env);
   const parisAeroport=await runParisAirportStatusFlow(env);
   const regFix=await sanitizeTodayRegistrations(env);
