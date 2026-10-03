@@ -65,6 +65,9 @@ export default {
       try{return json(await etdPublicStatusSafe(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:5});
+    if(url.pathname==="/api/admin/public-source-candidate-test"&&request.method==="GET"){
+      try{return json(await runPublicSourceCandidateTest({date:url.searchParams.get('date')||''}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
     if(url.pathname==="/api/admin/public-source-candidates"){
       if(request.method==="GET")return json({ok:true,activeCycle:false,sources:CANDIDATE_PUBLIC_SOURCES.map(({key,label})=>({key,label}))});
       if(request.method==="POST"){
