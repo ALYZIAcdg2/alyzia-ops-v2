@@ -4,11 +4,16 @@ const hhmm=v=>{const m=clean(v).match(/^(\d{1,2}):(\d{2})$/);return m?Number(m[1
 const manual=(x,field)=>upper(x?.[field+'Source']).includes('MANUAL')||Boolean(x?.manual?.[field]||x?.manualOverrides?.[field]||x?.manual_fields?.[field]);
 const trustedStatus=x=>{
   const src=upper(x?.statusSource||x?.status_source||x?.opsStatusSource||'');
-  return /PARIS_AEROPORT|PUBLIC_LIVE:(?:FLIGHTAWARE|FR24|FLIGHTSTATS|PLANEFINDER|OPENSKY|OAG)|VALIDATED_LIVE/.test(src)?upper(x?.status):'';
+  return /PARIS_AEROPORT|PUBLIC_STATUS:(?:FLIGHTAWARE|PLANEFINDER|FLIGHTSTATS)|PUBLIC_LIVE:(?:FLIGHTAWARE|FLIGHTSTATS|PLANEFINDER|OPENSKY|OAG)|VALIDATED_LIVE/.test(src)?upper(x?.status):'';
+};
+const trustedRaw=x=>{
+  const src=upper(x?.providerStatusRawSource||'');
+  if(/FR24/.test(src))return '';
+  return upper(x?.providerStatusRaw||'');
 };
 function derived(x){
   const trusted=trustedStatus(x);
-  const raw=upper([x.providerStatusRaw,x.flight_status,x.opsStatus,trusted].filter(Boolean).join(' '));
+  const raw=upper([trustedRaw(x),x.flight_status,x.opsStatus,trusted].filter(Boolean).join(' '));
   if(/CANCEL|ANNUL/.test(raw))return 'ANNULÉ';
   if(clean(x.ata||x.actualArrival||x.gateIn||x.gate_in))return 'ARRIVÉE';
   if(clean(x.landing||x.landingTime||x.landing_time||x.touchdown)||/LANDED|ATTERI|POSÉ|POSE A|POSÉ À/.test(raw))return 'ATTERI';
@@ -28,5 +33,5 @@ export async function sanitizeTodayStatuses(env){
     const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:'STATUS_SANITIZER',field:'status',from:before,to:next});x.flightInfoLog=log.slice(0,240);x.status=next;x.statusSource='STATUS_SANITIZER';x.statusUpdatedAt=at;
     await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();updated++;
   }
-  return {ok:true,date,updated};
+  return {ok:true,date,updated,fr24TrustedForStatus:false};
 }
