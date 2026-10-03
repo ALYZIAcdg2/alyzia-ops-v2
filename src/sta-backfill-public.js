@@ -1,4 +1,5 @@
 import {withIcaoFallback,matchesFlightStatsOccurrence} from "./public-flight-alias.js";
+import {fetchStaFallbacks} from "./sta-public-fallbacks.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -79,21 +80,25 @@ async function readFlightStats(flight){
     const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
       accept:"text/html,application/xhtml+xml",
       "accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
-      "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Backfill/1.0; public-web-page)"
+      "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Backfill/1.1; public-web-page)"
     }});
     const body=await r.text(),text=htmlText(body),u=upper(text);
-    if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {url,finalUrl:r.url,httpStatus:r.status,status:"BLOCKED",checkedAt};
-    if(!r.ok)return {url,finalUrl:r.url,httpStatus:r.status,status:"HTTP_ERROR",checkedAt};
-    if(/FLIGHT STATUS NOT AVAILABLE|COULD NOT BE LOCATED IN OUR SYSTEM/.test(u))return {url,finalUrl:r.url,httpStatus:r.status,status:"NOT_TRACKED",checkedAt};
-    if(!matchesFlightStatsOccurrence(text,flight))return {url,finalUrl:r.url,httpStatus:r.status,status:"OCCURRENCE_MISMATCH",checkedAt};
+    if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:"FLIGHTSTATS_PUBLIC",url,finalUrl:r.url,httpStatus:r.status,status:"BLOCKED",checkedAt};
+    if(!r.ok)return {source:"FLIGHTSTATS_PUBLIC",url,finalUrl:r.url,httpStatus:r.status,status:"HTTP_ERROR",checkedAt};
+    if(/FLIGHT STATUS NOT AVAILABLE|COULD NOT BE LOCATED IN OUR SYSTEM/.test(u))return {source:"FLIGHTSTATS_PUBLIC",url,finalUrl:r.url,httpStatus:r.status,status:"NOT_TRACKED",checkedAt};
+    if(!matchesFlightStatsOccurrence(text,flight))return {source:"FLIGHTSTATS_PUBLIC",url,finalUrl:r.url,httpStatus:r.status,status:"OCCURRENCE_MISMATCH",checkedAt};
     const sta=parseFlightStatsScheduledArrival(text);
-    return {url,finalUrl:r.url,httpStatus:r.status,status:sta?"OK":"NO_USABLE_DATA",sta,checkedAt};
+    return {source:"FLIGHTSTATS_PUBLIC",url,finalUrl:r.url,httpStatus:r.status,status:sta?"OK":"NO_USABLE_DATA",sta,checkedAt};
   }catch(e){
-    return {url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",error:String(e?.message||e).slice(0,220),checkedAt};
+    return {source:"FLIGHTSTATS_PUBLIC",url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",error:String(e?.message||e).slice(0,220),checkedAt};
   }finally{clearTimeout(timer)}
 }
 async function fetchSta(flight){
-  return withIcaoFallback(flight,flightStatsUrl,readFlightStats);
+  const primary=await withIcaoFallback(flight,flightStatsUrl,readFlightStats);
+  const attempts=[{source:"FLIGHTSTATS_PUBLIC",status:primary.status,lookupDesignator:primary.lookupDesignator||flight.designator}];
+  if(primary.status==="OK"&&/^\d{2}:\d{2}$/.test(clean(primary.sta)))return {...primary,attempts};
+  const fallback=await fetchStaFallbacks(flight);
+  return {...fallback,attempts:[...attempts,...(fallback.attempts||[])]};
 }
 async function mapLimit(items,limit,fn){
   const out=new Array(items.length);let next=0;
@@ -116,14 +121,15 @@ async function writeSta(env,flight,result){
   if(!isMissing(x.sta))return {changed:false,reason:"STA_ALREADY_PRESENT",sta:clean(x.sta)};
   const sta=clean(result?.sta);if(!/^\d{2}:\d{2}$/.test(sta))return {changed:false,reason:"NO_VALID_STA"};
   const at=result.checkedAt||new Date().toISOString();
+  const source=clean(result.source)||"PUBLIC_STA_SOURCE";
   x.sta=sta;
-  x.staSource="FLIGHTSTATS_PUBLIC";
+  x.staSource=source;
   x.staUpdatedAt=at;
-  x.staBackfill={source:"FLIGHTSTATS_PUBLIC",lookupDesignator:result.lookupDesignator||flight.designator,url:result.finalUrl||result.url||null,checkedAt:at};
+  x.staBackfill={source,lookupDesignator:result.lookupDesignator||flight.designator,url:result.finalUrl||result.url||null,checkedAt:at,attempts:result.attempts||[]};
   const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
-  log.unshift({at,source:"FLIGHTSTATS_PUBLIC",field:"sta",from:"",to:sta});x.flightInfoLog=log.slice(0,160);
+  log.unshift({at,source,field:"sta",from:"",to:sta});x.flightInfoLog=log.slice(0,160);
   await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),flight.identity).run();
-  return {changed:true,sta};
+  return {changed:true,sta,source};
 }
 async function saveLastRun(env,data){
   try{
@@ -146,13 +152,16 @@ export async function runStaBackfill(env,{limit=48,concurrency=4}={}){
   const batch=scope.missing.slice(0,Math.max(1,Math.min(96,Number(limit)||48)));
   const results=await mapLimit(batch,Math.max(1,Math.min(8,Number(concurrency)||4)),async flight=>{
     const source=await fetchSta(flight);
-    if(source.status!=="OK"||!source.sta)return {identity:flight.identity,flight:flight.designator,status:source.status,changed:false,lookupDesignator:source.lookupDesignator||flight.designator};
+    if(source.status!=="OK"||!source.sta)return {identity:flight.identity,flight:flight.designator,status:source.status,changed:false,source:source.source||null,attempts:source.attempts||[]};
     const write=await writeSta(env,flight,source);
-    return {identity:flight.identity,flight:flight.designator,status:source.status,lookupDesignator:source.lookupDesignator||flight.designator,...write};
+    return {identity:flight.identity,flight:flight.designator,status:source.status,lookupDesignator:source.lookupDesignator||flight.designator,attempts:source.attempts||[],...write};
   });
   const after=await readScope(env),filled=results.filter(r=>r.changed).length;
-  const summary={ok:true,mode:"STA_J_J1_PUBLIC_BACKFILL",date:scope.today,j1:scope.tomorrow,total:scope.flights.length,missingBefore,attempted:batch.length,filled,missingAfter:after.missing.length,complete:after.missing.length===0,checkedAt:at,statusCounts:{}};
-  for(const r of results)summary.statusCounts[r.status]=(summary.statusCounts[r.status]||0)+1;
+  const summary={ok:true,mode:"STA_J_J1_PUBLIC_BACKFILL",date:scope.today,j1:scope.tomorrow,total:scope.flights.length,missingBefore,attempted:batch.length,filled,missingAfter:after.missing.length,complete:after.missing.length===0,checkedAt:at,statusCounts:{},sourceCounts:{}};
+  for(const r of results){
+    summary.statusCounts[r.status]=(summary.statusCounts[r.status]||0)+1;
+    if(r.changed&&r.source)summary.sourceCounts[r.source]=(summary.sourceCounts[r.source]||0)+1;
+  }
   await saveLastRun(env,summary);
   return summary;
 }
