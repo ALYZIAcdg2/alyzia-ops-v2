@@ -1,4 +1,4 @@
-import {withIcaoFallback} from "./public-flight-alias.js";
+import {withIcaoFallback,flightLookupVariants} from "./public-flight-alias.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 
@@ -29,37 +29,35 @@ function to24(raw){
 function dateTokens(date){
   const [y,m,d]=String(date||"").split("-");
   const months=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-  const mon=months[Number(m)-1]||"";
-  const day=String(Number(d||0));
+  const mon=months[Number(m)-1]||"",day=String(Number(d||0));
   return [date,`${d}-${mon}-${y}`,`${day} ${mon} ${y}`,`${mon} ${day} ${y}`,`${d}/${m}/${y}`,`${m}/${d}/${y}`].filter(Boolean).map(upper);
+}
+function flightMatches(text,flight){
+  const u=upper(text);
+  return flightLookupVariants(flight).some(v=>u.includes(upper(v.designator))||u.includes(`${upper(v.airline)} ${upper(v.number)}`));
 }
 export function occurrenceMatchesStaPage(text,flight){
   const u=upper(text);
   const route=flight.origin&&flight.destination&&new RegExp(`\\b${flight.origin}\\b`).test(u)&&new RegExp(`\\b${flight.destination}\\b`).test(u);
   const dated=dateTokens(flight.date).some(t=>u.includes(t));
-  const flightMatch=u.includes(upper(flight.designator))||u.includes(`${upper(flight.airline)} ${upper(flight.number)}`);
-  return Boolean(route&&dated&&flightMatch);
+  return Boolean(route&&dated&&flightMatches(text,flight));
 }
 export function parsePublicScheduledArrival(text){
-  const t=String(text||"");
-  const time="(\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?)";
+  const t=String(text||""),time="(\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?)";
   const patterns=[
     new RegExp(`\\bScheduled\\b[\\s\\S]{0,90}?\\bArrival\\b[\\s:,-]{0,20}${time}`,"i"),
     new RegExp(`\\bArrival\\b[\\s\\S]{0,90}?\\bScheduled\\b[\\s:,-]{0,20}${time}`,"i"),
     new RegExp(`\\bScheduled arrival\\b[\\s:,-]{0,20}${time}`,"i"),
-    new RegExp(`\\bArrival time\\b[\\s\\S]{0,50}?\\bScheduled\\b[\\s:,-]{0,20}${time}`,"i")
+    new RegExp(`\\bArrival time\\b[\\s\\S]{0,50}?\\bScheduled\\b[\\s:,-]{0,20}${time}`,"i"),
+    new RegExp(`\\bSTA\\b[\\s:,-]{0,16}${time}`,"i")
   ];
   for(const p of patterns){const m=t.match(p);if(m){const v=to24(m[1]);if(v)return v}}
   return "";
 }
 async function fetchPage(name,url,flight){
-  const checkedAt=new Date().toISOString();
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
+  const checkedAt=new Date().toISOString(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
   try{
-    const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
-      accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
-      "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Fallback/1.1; public-web-page)"
-    }});
+    const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Fallback/1.2; public-web-page)"}});
     const body=await r.text(),text=htmlText(body),u=upper(text);
     if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:name,status:"BLOCKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
     if(!r.ok)return {source:name,status:"HTTP_ERROR",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
@@ -70,45 +68,47 @@ async function fetchPage(name,url,flight){
   }catch(e){return {source:name,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",url,finalUrl:url,httpStatus:0,error:String(e?.message||e).slice(0,220),checkedAt}}
   finally{clearTimeout(timer)}
 }
-function flightAwareUrl(f){return `https://www.flightaware.com/live/flight/${encodeURIComponent(f.designator)}`}
-async function flightAware(flight){return withIcaoFallback(flight,flightAwareUrl,f=>fetchPage("FLIGHTAWARE_PUBLIC",flightAwareUrl(f),f))}
+function pageReader(name,buildUrl){return flight=>withIcaoFallback(flight,buildUrl,f=>fetchPage(name,buildUrl(f),f))}
+
+const flightAware=pageReader("FLIGHTAWARE_PUBLIC",f=>`https://www.flightaware.com/live/flight/${encodeURIComponent(f.designator)}`);
+const planeFinder=pageReader("PLANEFINDER_PUBLIC",f=>`https://planefinder.net/data/flight/${encodeURIComponent(f.designator)}`);
+const skyscanner=pageReader("SKYSCANNER_PUBLIC",f=>`https://www.skyscanner.net/flight-tracker/${encodeURIComponent(f.designator.toLowerCase())}`);
+const flightView=pageReader("FLIGHTVIEW_PUBLIC",f=>`https://www.flightview.com/flight-tracker/${encodeURIComponent(f.airline)}/${encodeURIComponent(f.number)}`);
+const wego=pageReader("WEGO_PUBLIC",f=>`https://www.wego.com/schedules/${encodeURIComponent(f.designator)}?date=${encodeURIComponent(f.date)}`);
+const ixigo=pageReader("IXIGO_PUBLIC",f=>`https://www.ixigo.com/flight-status/${encodeURIComponent(f.airline.toLowerCase())}-${encodeURIComponent(f.number)}?date=${encodeURIComponent(f.date)}`);
+const kayak=pageReader("KAYAK_PUBLIC",f=>`https://www.kayak.com/tracker/${encodeURIComponent(f.designator)}`);
+const flightera=pageReader("FLIGHTERA_PUBLIC",f=>`https://www.flightera.net/en/flight/${encodeURIComponent(f.designator)}`);
+const flighty=pageReader("FLIGHTY_PUBLIC",()=>`https://flighty.com/airports/paris-charles-de-gaulle-cdg/departures`);
+const parisAeroport=pageReader("PARIS_AEROPORT_PUBLIC",()=>`https://www.parisaeroport.fr/en/passengers/flights/all-flights-departures`);
+const simpleFlying=pageReader("SIMPLEFLYING_PUBLIC",()=>`https://simpleflying.com/flight-tracker/`);
+const flightradars24fr=pageReader("FLIGHTRADARS24_FR_PUBLIC",()=>`https://flightradars24.fr/aeroport-charles-de-gaulle/depart/`);
 
 function localFromIso(iso,iata){
   const d=new Date(iso);if(!Number.isFinite(d.getTime()))return "";
   const zone=AIRPORT_TZ[upper(iata)]||"Europe/Paris";
-  try{
-    const parts=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(d).map(x=>[x.type,x.value]));
-    return `${parts.hour}:${parts.minute}`;
-  }catch{return ""}
+  try{const parts=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(d).map(x=>[x.type,x.value]));return `${parts.hour}:${parts.minute}`}catch{return ""}
 }
-function localFromUtcClock(date,clock,iata){
-  const hh=to24(clock);if(!hh)return "";
-  return localFromIso(`${date}T${hh}:00Z`,iata);
-}
+function localFromUtcClock(date,clock,iata){const hh=to24(clock);return hh?localFromIso(`${date}T${hh}:00Z`,iata):""}
 async function fr24Exact(flight){
-  const r=await fetchFr24Public(flight),c=r?.candidates||{};
-  const staIso=c?.semantic?.sta;
+  const r=await fetchFr24Public(flight),c=r?.candidates||{},staIso=c?.semantic?.sta;
   const exact=Boolean(c?.method==="PUBLIC_PLAYBACK"&&c?.occurrenceMatched&&staIso);
   return {source:"FR24_PUBLIC_EXACT",status:exact?"OK":(r?.status||"NO_USABLE_DATA"),sta:exact?localFromIso(staIso,flight.destination):"",url:r?.url,finalUrl:r?.finalUrl,httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString()};
 }
 function fr24HistoryUrl(f){return `https://www.flightradar24.com/data/flights/${encodeURIComponent(String(f.designator||"").toLowerCase())}`}
 function parseFr24HistorySta(text,flight){
-  const u=upper(text),tokens=dateTokens(flight.date);
-  let idx=-1;
+  const u=upper(text),tokens=dateTokens(flight.date);let idx=-1;
   for(const token of tokens){idx=u.indexOf(token);if(idx>=0)break}
   if(idx<0)return "";
-  const scope=text.slice(Math.max(0,idx-220),idx+720);
-  const su=upper(scope);
+  const scope=text.slice(Math.max(0,idx-220),idx+720),su=upper(scope);
   if(!new RegExp(`\\b${flight.origin}\\b`).test(su)||!new RegExp(`\\b${flight.destination}\\b`).test(su))return "";
   const m=scope.match(/\bSTA\s+(\d{1,2}:\d{2})\b/i);
   return m?localFromUtcClock(flight.date,m[1],flight.destination):"";
 }
 async function fr24History(flight){
   return withIcaoFallback(flight,fr24HistoryUrl,async f=>{
-    const url=fr24HistoryUrl(f),checkedAt=new Date().toISOString();
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
+    const url=fr24HistoryUrl(f),checkedAt=new Date().toISOString(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
     try{
-      const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FR24-Scheduled/1.0)"}});
+      const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FR24-Scheduled/1.1)"}});
       const body=await r.text(),text=htmlText(body),u=upper(text);
       if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:"FR24_PUBLIC_SCHEDULED",status:"BLOCKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
       if(!r.ok)return {source:"FR24_PUBLIC_SCHEDULED",status:"HTTP_ERROR",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
@@ -118,14 +118,19 @@ async function fr24History(flight){
     finally{clearTimeout(timer)}
   });
 }
-function flighteraUrl(f){return `https://www.flightera.net/en/flight/${encodeURIComponent(f.designator)}`}
-async function flightera(flight){return withIcaoFallback(flight,flighteraUrl,f=>fetchPage("FLIGHTERA_PUBLIC",flighteraUrl(f),f))}
+
+const READERS=[
+  flightAware,fr24Exact,fr24History,planeFinder,skyscanner,flightView,wego,ixigo,kayak,flightera,flighty,parisAeroport,flightradars24fr,simpleFlying
+];
+
+export const STA_PUBLIC_SOURCE_ORDER=[
+  "FlightStats","FlightAware","Flightradar24 exact","Flightradar24 scheduled","PlaneFinder","Skyscanner","FlightView","Wego","Ixigo","Kayak","Flightera","Flighty","Paris Aéroport","Flightradars24.fr","SimpleFlying"
+];
 
 export async function fetchStaFallbacks(flight){
   const attempts=[];
-  for(const read of [flightAware,fr24Exact,fr24History,flightera]){
-    const r=await read(flight);
-    const nested=Array.isArray(r.lookupAttempts)?r.lookupAttempts:[];
+  for(const read of READERS){
+    const r=await read(flight),nested=Array.isArray(r.lookupAttempts)?r.lookupAttempts:[];
     if(nested.length)for(const a of nested)attempts.push({source:r.source,status:a.status,lookupDesignator:a.designator,codeType:a.codeType,numberType:a.numberType});
     else attempts.push({source:r.source,status:r.status,lookupDesignator:r.lookupDesignator||flight.designator});
     if(r.status==="OK"&&/^\d{2}:\d{2}$/.test(clean(r.sta)))return {...r,attempts};
