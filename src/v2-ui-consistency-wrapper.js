@@ -26,12 +26,21 @@ const statusLabel=x=>{
 const statusClass=s=>{s=up(s);if(s.startsWith('ARRIVÉ'))return'arrive';if(s.startsWith('EN VOL'))return'envol';if(s.includes('RETARD'))return'retarde';if(s.includes('EMBAR'))return'embarquement';if(s.includes('ANNUL'))return'annule';return'programme'};
 function rowFlight(row){const direct=up(row.querySelector('.home-flight')?.textContent);if(direct)return direct;const m=up(row.textContent).match(/\b([A-Z0-9]{2,3}\d{2,4})\b/);return m?m[1]:''}
 function flightForRow(row){const f=rowFlight(row);return f?live.find(x=>keyFlight(x)===f)||null:null}
-function removeOldStatusNodes(scope){
- for(const n of scope.querySelectorAll('.v2-status,.flight-status,.home-status,.alyzia-list-status,.alyzia-status-single'))n.remove();
+function removeLegacyStatusNodes(scope,keep=null){
+ for(const n of [...scope.querySelectorAll('.v2-status,.flight-status,.home-status,.alyzia-list-status,.alyzia-status-single')])if(n!==keep)n.remove();
  for(const n of [...scope.querySelectorAll('span,div')]){
-  if(n.children.length)continue;
+  if(n===keep||n.children.length)continue;
   if(/^(PARTI|EN VOL(?:\s*·\s*RESTE\s*\d{2}:\d{2})?|ARRIVÉ|ATTERRI|RETARDÉ|EMBARQUEMENT(?: CLOS)?|À L['’]HEURE|PROGRAMMÉ|ANNULÉ)$/i.test(txt(n.textContent)))n.remove();
  }
+}
+function ensureStatus(scope,host,label){
+ let b=scope.querySelector('.alyzia-status-single');
+ if(!b){b=document.createElement('span');b.className='alyzia-status-single';host.appendChild(b)}
+ removeLegacyStatusNodes(scope,b);
+ const wanted='alyzia-status-single '+statusClass(label);
+ if(b.className!==wanted)b.className=wanted;
+ if(txt(b.textContent)!==label)b.textContent=label;
+ return b;
 }
 function dedupeHome(){
  const app=document.getElementById('app');if(!app)return null;
@@ -46,10 +55,8 @@ function syncList(){
  const page=dedupeHome();if(!page)return;
  for(const row of page.querySelectorAll('.flight-home-row')){
   const x=flightForRow(row),label=statusLabel(x);if(!x||!label)continue;
-  removeOldStatusNodes(row);
-  const b=document.createElement('span');b.className='alyzia-status-single '+statusClass(label);b.textContent=label;
   const host=row.querySelector('.home-flight-cell > div')||row.querySelector('.home-flight-cell')||row.querySelector('.home-flight')?.parentElement||row;
-  host.appendChild(b);
+  ensureStatus(row,host,label);
  }
 }
 function currentFlight(){try{if(typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)&&typeof selected!=='undefined'&&FLIGHTS[selected]){const f=keyFlight(FLIGHTS[selected]);return live.find(x=>keyFlight(x)===f)||null}}catch{}return null}
@@ -59,14 +66,19 @@ function syncDetail(){
  const label=statusLabel(x);if(!label)return;
  let wrap=head.querySelector('.flight-detail-status-wrap');
  if(!wrap){const anchor=head.querySelector('.fh-id')||head.querySelector('.flight-id-with-logo')?.parentElement||head.firstElementChild;if(!anchor)return;wrap=document.createElement('div');wrap.className='flight-detail-status-wrap';anchor.appendChild(wrap)}
- removeOldStatusNodes(wrap);
- const term=terminalOf(x);if(term){const chip=document.createElement('span');chip.className='flight-detail-terminal term-'+term.toLowerCase();chip.textContent='TERM '+term;wrap.appendChild(chip)}
- const b=document.createElement('span');b.className='alyzia-status-single '+statusClass(label);b.textContent=label;wrap.appendChild(b);
+ const terminals=[...wrap.querySelectorAll('.flight-detail-terminal')];let chip=terminals[0]||null;for(const n of terminals.slice(1))n.remove();
+ const term=terminalOf(x);
+ if(term){
+  if(!chip){chip=document.createElement('span');chip.className='flight-detail-terminal';wrap.insertBefore(chip,wrap.firstChild)}
+  const wanted='flight-detail-terminal term-'+term.toLowerCase();if(chip.className!==wanted)chip.className=wanted;
+  const text='TERM '+term;if(txt(chip.textContent)!==text)chip.textContent=text;
+ }else if(chip)chip.remove();
+ ensureStatus(wrap,wrap,label);
 }
 function apply(){dedupeHome();syncList();syncDetail()}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json();live=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];apply()}catch{}}
 let queued=false;function queue(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply()})}
-function start(){refresh();setInterval(refresh,15000);setInterval(apply,5000);const app=document.getElementById('app');if(app)new MutationObserver(queue).observe(app,{childList:true,subtree:true})}
+function start(){refresh();setInterval(refresh,15000);setInterval(apply,5000);const root=document.getElementById('app');if(root)new MutationObserver(queue).observe(root,{childList:true,subtree:true})}
 document.readyState==='loading'?document.addEventListener('DOMContentLoaded',start,{once:true}):start();
 })();</script>`;
 
