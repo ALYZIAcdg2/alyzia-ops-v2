@@ -1,10 +1,11 @@
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
-const blocked=t=>/just a moment|attention required|verify you are human|access denied|unusual traffic|cf-chl|captcha|incapsula/i.test(t);
-const textOnly=html=>String(html||"").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&#39;/g,"'").replace(/&quot;/gi,'"').replace(/\s+/g," ").trim();
+const blockedVisible=t=>/\b(just a moment|attention required|verify you are human|access denied|unusual traffic|checking your browser|enable javascript and cookies)\b/i.test(String(t||""));
+const textOnly=html=>String(html||"").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&#39;/g,"'").replace(/&quot;/gi,'"').replace(/\s+/g," ").trim();
 const first=(text,patterns)=>{for(const p of patterns){const m=String(text||"").match(p);if(m)return clean(m[1]||m[0])}return ""};
 const uniq=a=>[...new Set((a||[]).filter(Boolean))];
 const escRe=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+const abs=(base,u)=>{try{return new URL(u,base).href}catch{return clean(u)}};
 
 export const CANDIDATE_PUBLIC_SOURCES=Object.freeze([
   {key:"KUPI",label:"Kupi",url:d=>`https://www.kupi.com/en/explore/france/paris/charles-de-gaulle-airport/timetable?date=${d}&direction=departure&time=all`},
@@ -26,15 +27,12 @@ function findFlight(raw,visible,flight){
   }
   return {matched:false,variant:"",where:""};
 }
-function around(text,needle,span=2200){
-  if(!needle)return "";const s=String(text||""),i=upper(s).indexOf(upper(needle));if(i<0)return "";return s.slice(Math.max(0,i-span),Math.min(s.length,i+needle.length+span));
-}
+function around(text,needle,span=2400){if(!needle)return "";const s=String(text||""),i=upper(s).indexOf(upper(needle));if(i<0)return "";return s.slice(Math.max(0,i-span),Math.min(s.length,i+needle.length+span))}
 function discover(raw,baseUrl){
-  const scripts=uniq([...String(raw).matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi)].map(m=>m[1])).slice(0,20);
-  const absolute=uniq([...String(raw).matchAll(/https?:\\?\/\\?\/[^"'<>\s)]+/gi)].map(m=>m[0].replace(/\\\//g,"/"))).filter(u=>/api|flight|airport|status|depart|arriv|track|schedule|timetable/i.test(u));
-  const relative=uniq([...String(raw).matchAll(/["'](\/(?:api|ajax|flight|flights|airport|status|track|schedule|timetable)[^"']*)["']/gi)].map(m=>m[1]));
-  const forms=uniq([...String(raw).matchAll(/<form\b[^>]*\baction=["']([^"']+)["']/gi)].map(m=>m[1]));
-  return {scriptSrcs:scripts,endpointCandidates:uniq([...absolute,...relative,...forms]).slice(0,40),baseUrl};
+  const scripts=uniq([...String(raw).matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi)].map(m=>abs(baseUrl,m[1]))).slice(0,25);
+  const absolute=uniq([...String(raw).matchAll(/https?:\\?\/\\?\/[^"'<>\s)]+/gi)].map(m=>m[0].replace(/\\\//g,"/"))).filter(u=>/api|flight|airport|status|depart|arriv|track|schedule|timetable|widget/i.test(u));
+  const relative=uniq([...String(raw).matchAll(/["'](\/(?:api|ajax|flight|flights|airport|status|track|schedule|timetable|widget)[^"']*)["']/gi)].map(m=>abs(baseUrl,m[1])));
+  return {scriptSrcs:scripts,endpointCandidates:uniq([...absolute,...relative]).slice(0,50),baseUrl};
 }
 function extractFields(source,scope){
   const out={};
@@ -50,6 +48,7 @@ function extractFields(source,scope){
     out.eta=first(scope,[/(?:estimated landing|estimated arrival|ETA)[^0-9]{0,40}(\d{1,2}:\d{2})/i]);
   }else if(source==="FLIGHTRADAR_LIVE"){
     out.status=first(scope,[/\b(scheduled|active|landed late|landed|cancelled|canceled|unknown|departed|arrived|delayed)\b/i]);
+    out.gate=first(scope,[/\bGate\s*[:\-]?\s*([A-Z]?\d{1,3})\b/i]);
     out.time=first(scope,[/\b(\d{1,2}:\d{2})\b/]);
   }else if(source==="EASEMYTRIP"){
     out.status=first(scope,[/\b(on time|delayed|cancelled|canceled|departed|arrived|scheduled|landed)\b/i]);
@@ -60,7 +59,7 @@ function extractFields(source,scope){
 }
 function inspect(source,raw,httpStatus,{flight="",destination="",baseUrl=""}={}){
   const visible=textOnly(raw),diagnostics=discover(raw,baseUrl);
-  if(blocked(raw)||blocked(visible))return {status:"BLOCKED",fields:{},matchedFlight:false,matchedVariant:"",matchLocation:"",diagnostics};
+  if(httpStatus===403||httpStatus===429||blockedVisible(visible))return {status:"BLOCKED",fields:{},matchedFlight:false,matchedVariant:"",matchLocation:"",diagnostics};
   if(httpStatus<200||httpStatus>=300)return {status:`HTTP_${httpStatus||0}`,fields:{},matchedFlight:false,matchedVariant:"",matchLocation:"",diagnostics};
   if(!raw||raw.length<120)return {status:"NO_CONTENT",fields:{},matchedFlight:false,matchedVariant:"",matchLocation:"",diagnostics};
   const hit=findFlight(raw,visible,flight);
@@ -70,20 +69,38 @@ function inspect(source,raw,httpStatus,{flight="",destination="",baseUrl=""}={})
   const fields=extractFields(source,scope),meaningful=Object.values(fields).filter(Boolean).length;
   return {status:meaningful?"OK":"MATCH_NO_USABLE_DATA",fields,matchedFlight:hit.matched,matchedVariant:hit.variant||"",matchLocation:hit.where||"",diagnostics};
 }
-
-async function fetchOne(def,date,opts){
-  const url=def.url(date),at=new Date().toISOString(),c=new AbortController(),timer=setTimeout(()=>c.abort(),8000);
-  try{
-    const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-CandidateSourceTest/2.0)"}});
-    const raw=await r.text(),result=inspect(def.key,raw,r.status,{...opts,baseUrl:r.url||url});
-    return {source:def.key,label:def.label,url:r.url||url,httpStatus:r.status,checkedAt:at,status:result.status,matchedFlight:result.matchedFlight,matchedVariant:result.matchedVariant,matchLocation:result.matchLocation,fields:result.fields,contentLength:raw.length,diagnostics:result.diagnostics};
-  }catch(e){return {source:def.key,label:def.label,url,checkedAt:at,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,error:String(e?.message||e).slice(0,160),matchedFlight:false,matchedVariant:"",matchLocation:"",fields:{},contentLength:0,diagnostics:{scriptSrcs:[],endpointCandidates:[],baseUrl:url}}}
+async function fetchRaw(url,ua="AlyziaOpsV2-CandidateSourceTest/3.0"){
+  const at=new Date().toISOString(),c=new AbortController(),timer=setTimeout(()=>c.abort(),8000);
+  try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml,application/json,text/plain,*/*","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":`Mozilla/5.0 (compatible; ${ua})`}});const raw=await r.text();return {ok:true,r,raw,at}}
+  catch(error){return {ok:false,error,raw:"",at}}
   finally{clearTimeout(timer)}
+}
+async function secondaryProbe(def,baseRaw,baseUrl,opts){
+  const diag=discover(baseRaw,baseUrl),urls=[];
+  if(def.key==="FLIGHTRADAR_LIVE")urls.push("https://fids.flightradar.live/widgets/airport/CDG/departures");
+  if(def.key==="FLIGHT_VIZ")urls.push("https://flight-viz.com/flight_viz.js");
+  if(def.key==="KUPI"||def.key==="EASEMYTRIP")for(const u of diag.endpointCandidates){if(/api|ajax|flight|status|timetable|departure/i.test(u)&&!urls.includes(u))urls.push(u);if(urls.length>=4)break}
+  const probes=[];
+  for(const u of urls.slice(0,4)){
+    const fr=await fetchRaw(u,"AlyziaOpsV2-CandidateProbe/1.0");
+    if(!fr.ok){probes.push({url:u,status:fr.error?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,matchedFlight:false,fields:{}});continue}
+    const res=inspect(def.key,fr.raw,fr.r.status,{...opts,baseUrl:fr.r.url||u});
+    probes.push({url:fr.r.url||u,httpStatus:fr.r.status,status:res.status,matchedFlight:res.matchedFlight,matchedVariant:res.matchedVariant||"",matchLocation:res.matchLocation||"",fields:res.fields,contentLength:fr.raw.length});
+  }
+  return {diagnostics:diag,probes};
+}
+async function fetchOne(def,date,opts){
+  const url=def.url(date),fr=await fetchRaw(url);
+  if(!fr.ok)return {source:def.key,label:def.label,url,checkedAt:fr.at,status:fr.error?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,error:String(fr.error?.message||fr.error).slice(0,160),matchedFlight:false,matchedVariant:"",matchLocation:"",fields:{},contentLength:0,diagnostics:{scriptSrcs:[],endpointCandidates:[],baseUrl:url},probes:[]};
+  const result=inspect(def.key,fr.raw,fr.r.status,{...opts,baseUrl:fr.r.url||url}),secondary=await secondaryProbe(def,fr.raw,fr.r.url||url,opts);
+  let final=result;const better=secondary.probes.find(p=>p.status==="OK")||secondary.probes.find(p=>p.matchedFlight);
+  if((result.status==="ACCESS_OK_NO_FLIGHT_MATCH"||result.status==="MATCH_NO_USABLE_DATA")&&better)final={status:better.status,fields:better.fields,matchedFlight:better.matchedFlight,matchedVariant:better.matchedVariant||"",matchLocation:"SECONDARY_PROBE"};
+  return {source:def.key,label:def.label,url:fr.r.url||url,httpStatus:fr.r.status,checkedAt:fr.at,status:final.status,matchedFlight:final.matchedFlight,matchedVariant:final.matchedVariant||"",matchLocation:final.matchLocation||"",fields:final.fields,contentLength:fr.raw.length,diagnostics:secondary.diagnostics,probes:secondary.probes};
 }
 
 export async function runPublicSourceCandidateTest({date,flight,destination}={}){
   const d=clean(date)||new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const f=upper(flight).replace(/\s+/g,""),dest=upper(destination);
   const results=await Promise.all(CANDIDATE_PUBLIC_SOURCES.map(def=>fetchOne(def,d,{flight:f,destination:dest})));
-  return {ok:true,date:d,flight:f||null,destination:dest||null,mode:"ISOLATED_CANDIDATE_TEST_V2",activeCycle:false,results};
+  return {ok:true,date:d,flight:f||null,destination:dest||null,mode:"ISOLATED_CANDIDATE_TEST_V3",activeCycle:false,results};
 }
