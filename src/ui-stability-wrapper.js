@@ -12,13 +12,15 @@ html.alyzia-resume-ready #app .flight-home-row{visibility:visible!important}
   'use strict';
   const root=document.documentElement;
   if(root.classList.contains('alyzia-ui-stability-ready'))return;
-  let resumed=false;
-  try{resumed=sessionStorage.getItem('alyzia-ui-boot-seen')==='1'}catch{}
-  // A browser reload keeps sessionStorage but is a fresh load: keep the whole UI hidden until the list is final.
-  try{const nav=performance.getEntriesByType('navigation')[0];if(nav&&nav.type==='reload')resumed=false}catch{}
-  root.classList.add('alyzia-ui-stability-ready');
-  if(resumed)root.classList.add('alyzia-resume-silent');
-  else root.classList.add('alyzia-ui-stability-loading');
+
+  // IMPORTANT: never reveal a previous/cached flight list during a normal page load.
+  // sessionStorage survives reload/navigation and was making an old list visible for a
+  // few frames before /api/flights + renderHome completed. Only BFCache pageshow is
+  // allowed to resume silently; every real load stays hidden until __alyziaBootReady.
+  const resumed=false;
+  root.classList.add('alyzia-ui-stability-ready','alyzia-ui-stability-loading');
+  root.classList.remove('alyzia-resume-silent','alyzia-resume-ready');
+
   let revealed=false,fullListSeen=false,timer=null;
   const markBooted=()=>{try{sessionStorage.setItem('alyzia-ui-boot-seen','1')}catch{}};
   const reveal=()=>{
@@ -40,7 +42,7 @@ html.alyzia-resume-ready #app .flight-home-row{visibility:visible!important}
     if(full&&response?.ok&&!fullListSeen){
       // Fallback only: the real reveal comes from bootstrap's final renderHome (__alyziaBootReady).
       fullListSeen=true;clearTimeout(timer);
-      timer=setTimeout(reveal,resumed?1500:6000);   // bootstrap can still be busy after the list request; __alyziaBootReady is the real signal
+      timer=setTimeout(reveal,6000);
     }
     return response;
   };
@@ -52,8 +54,8 @@ html.alyzia-resume-ready #app .flight-home-row{visibility:visible!important}
     const app=document.getElementById('app');
     let quiet=null,obs=null;
     const done=()=>{if(obs)obs.disconnect();reveal()};
-    const start=Date.now(),MIN_HOLD=1350;   // home wrappers re-touch the list at up to +1200 ms after renderHome
-    const bump=()=>{clearTimeout(quiet);quiet=setTimeout(done,Math.max(resumed?300:350,MIN_HOLD-(Date.now()-start)))};
+    const start=Date.now(),MIN_HOLD=1350;
+    const bump=()=>{clearTimeout(quiet);quiet=setTimeout(done,Math.max(350,MIN_HOLD-(Date.now()-start)))};
     if(app&&typeof MutationObserver==='function'){
       obs=new MutationObserver(bump);
       obs.observe(app,{childList:true,subtree:true,attributes:true,characterData:true});
@@ -62,9 +64,15 @@ html.alyzia-resume-ready #app .flight-home-row{visibility:visible!important}
     timer=setTimeout(done,3000);
   };
   window.addEventListener('pageshow',e=>{
-    if(e.persisted){root.classList.remove('alyzia-ui-stability-loading','alyzia-flights-loading','alyzia-resume-silent');root.classList.add('alyzia-resume-ready')}
+    if(e.persisted){
+      // BFCache restore already contains the final rendered DOM; reveal immediately.
+      revealed=true;clearTimeout(timer);
+      root.classList.remove('alyzia-ui-stability-loading','alyzia-flights-loading','alyzia-resume-silent');
+      root.classList.add('alyzia-resume-ready');
+      setTimeout(()=>root.classList.remove('alyzia-resume-ready'),250);
+    }
   });
-  timer=setTimeout(reveal,resumed?2500:8000);
+  timer=setTimeout(reveal,8000);
 })();</script>`;
 
 const NAV_STABILITY=String.raw`<script id="alyzia-ui-stability-nav-js">(()=>{
@@ -83,7 +91,7 @@ const NAV_STABILITY=String.raw`<script id="alyzia-ui-stability-nav-js">(()=>{
   const isFlightOpenControl=el=>Boolean(el?.closest?.('#app .flight-home-row,#app [data-flight-index],#app .ops-search-flight'));
 
   document.addEventListener('click',e=>{
-    if(isFlightOpenControl(e.target)&&!detailVisible()){lastHomeScroll=window.scrollY||0;homeLockUntil=0;window.__alyziaHomeNavigationLockUntil=0}   // ouvrir un vol = intention explicite : lève le verrou de retour à la liste
+    if(isFlightOpenControl(e.target)&&!detailVisible()){lastHomeScroll=window.scrollY||0;homeLockUntil=0;window.__alyziaHomeNavigationLockUntil=0}
     if(isHomeReturnControl(e.target))lockHome();
   },true);
 
@@ -103,7 +111,7 @@ const NAV_STABILITY=String.raw`<script id="alyzia-ui-stability-nav-js">(()=>{
           if(homeLocked()&&!detailVisible())return;
           const wasDetail=detailVisible(),y=window.scrollY||0;
           const out=original.apply(this,args);
-          if(!wasDetail&&detailVisible()){window.scrollTo(0,0);requestAnimationFrame(()=>{if(detailVisible())window.scrollTo(0,0)})}   // arrivée sur une fiche : toujours en haut (la liste garde sa position)
+          if(!wasDetail&&detailVisible()){window.scrollTo(0,0);requestAnimationFrame(()=>{if(detailVisible())window.scrollTo(0,0)})}
           else if(!homeLocked())restoreDetailScroll(y);
           else if(homeLocked())restoreHomeScroll();
           return out;
