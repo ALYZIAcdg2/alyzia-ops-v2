@@ -30,8 +30,36 @@ function arrivalUtc(x,date){
   const dep=hhmm(x.takeoff||x.takeoffTime||x.takeoff_time||x.atd||x.actualDeparture||x.actual_departure||x.std);if(!dep)return null;
   const origin=upper(x.origin||x.dep||"CDG");let a=localDateTimeUtc(date,dep,origin),b=localDateTimeUtc(date,arr,dest);if(a==null||b==null)return null;while(b<a)b+=86400000;return b;
 }
-function derive(x,date){
-  const faPhase=flightAwarePhase(x),ata=fact(x,"ata",["actualArrival","actual_arrival","gateIn","gate_in"]);
+// FlightAware est lu sur la page entière : l'historique du vol (jours précédents) contient « Arrived », ce qui faisait passer à ARRIVÉ un vol encore en l'air.
+// Une phase ARRIVED / LANDED n'est donc retenue que si l'heure d'arrivée connue (ETA/STA) est atteinte ; sinon on retient AIRBORNE (si vu dans la page)
+// ou, à défaut, « en vol » par la chronologie (ATD réel depuis au moins 20 min, arrivée pas encore atteinte).
+const ARRIVED_EARLY_MS=20*60000,LANDED_EARLY_MS=35*60000,AIRBORNE_AFTER_ATD_MS=20*60000;
+function expectedArrivalMs(x,date){
+  const a=arrivalUtc(x,date);if(a!=null)return a;
+  const dur=Number(x?.duration);const dep=hhmm(x?.takeoff||x?.atd||"");
+  if(Number.isFinite(dur)&&dur>0&&dep){const t=localDateTimeUtc(date,dep,upper(x?.origin||x?.dep||"CDG"));if(t!=null)return t+dur*60000}
+  return null;
+}
+export function effectiveFlightAwarePhase(x,date,nowMs=Date.now()){
+  const ev=x?.statusModelEvidence||{};
+  const seen=new Set([...(Array.isArray(ev.flightAwarePhases)?ev.flightAwarePhases:[]),upper(ev.flightAwarePhase)].filter(Boolean));
+  if(!seen.size)return "";
+  const arr=expectedArrivalMs(x,date);
+  const arrivedOk=seen.has("ARRIVED")&&(arr==null?false:nowMs>=arr-ARRIVED_EARLY_MS);
+  const landedOk=seen.has("LANDED")&&(arr==null?false:nowMs>=arr-LANDED_EARLY_MS);
+  if(arrivedOk)return "ARRIVED";
+  if(landedOk)return "LANDED";
+  if(seen.has("AIRBORNE"))return "AIRBORNE";
+  if(seen.has("ARRIVED")||seen.has("LANDED")){
+    // Preuve d'arrivée non plausible (arrivée attendue plus tard) : on ne la croit pas sans preuve d'atterrissage ; vol parti depuis assez longtemps = en l'air.
+    const dep=hhmm(x?.takeoff||x?.atd||"");
+    if(dep){const t=localDateTimeUtc(date,dep,upper(x?.origin||x?.dep||"CDG"));if(t!=null&&nowMs>=t+AIRBORNE_AFTER_ATD_MS&&(arr==null||nowMs<arr))return "AIRBORNE"}
+    return "DEPARTED";
+  }
+  return seen.has("DEPARTED")?"DEPARTED":"";
+}
+export function derive(x,date,nowMs=Date.now()){
+  const faPhase=effectiveFlightAwarePhase(x,date,nowMs),ata=fact(x,"ata",["actualArrival","actual_arrival","gateIn","gate_in"]);
   if(ata.value)return {status:"ARRIVÉ",reason:"ATA",evidence:ata,preferred:isPreferred(ata.source,preferred.ata)};
   if(faPhase==="ARRIVED")return {status:"ARRIVÉ",reason:"FLIGHTAWARE_ARRIVED",evidence:{value:"ARRIVED",source:"FLIGHTAWARE"},preferred:true};
 
@@ -39,7 +67,7 @@ function derive(x,date){
   if(landing.value)return {status:"ATTERRI",reason:"LANDING",evidence:landing,preferred:isPreferred(landing.source,preferred.landing)};
   if(faPhase==="LANDED")return {status:"ATTERRI",reason:"FLIGHTAWARE_LANDED",evidence:{value:"LANDED",source:"FLIGHTAWARE"},preferred:true};
 
-  const takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]),phase=parisPhase(x),faAirborne=faPhase==="AIRBORNE"||upper(x?.statusModelEvidence?.airborneSource).includes("FLIGHTAWARE");
+  const takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]),phase=parisPhase(x),faAirborne=faPhase==="AIRBORNE";
   if(takeoff.value||faAirborne||phase==="EN VOL"){
     const source=faAirborne?"FLIGHTAWARE":phase==="EN VOL"?"PARIS_AEROPORT":takeoff.source;
     return {status:"EN VOL",reason:faAirborne?"AIRBORNE":takeoff.value?"TAKEOFF":"PARIS_DECOLLE",evidence:{value:takeoff.value||"AIRBORNE",source},preferred:isPreferred(source,preferred.takeoff),arrivalUtc:arrivalUtc(x,date)};
