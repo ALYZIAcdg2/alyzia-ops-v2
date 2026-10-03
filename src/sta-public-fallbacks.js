@@ -58,7 +58,7 @@ async function fetchPage(name,url,flight){
   try{
     const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{
       accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8",
-      "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Fallback/1.0; public-web-page)"
+      "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Fallback/1.1; public-web-page)"
     }});
     const body=await r.text(),text=htmlText(body),u=upper(text);
     if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:name,status:"BLOCKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
@@ -81,19 +81,53 @@ function localFromIso(iso,iata){
     return `${parts.hour}:${parts.minute}`;
   }catch{return ""}
 }
+function localFromUtcClock(date,clock,iata){
+  const hh=to24(clock);if(!hh)return "";
+  return localFromIso(`${date}T${hh}:00Z`,iata);
+}
 async function fr24Exact(flight){
   const r=await fetchFr24Public(flight),c=r?.candidates||{};
   const staIso=c?.semantic?.sta;
   const exact=Boolean(c?.method==="PUBLIC_PLAYBACK"&&c?.occurrenceMatched&&staIso);
   return {source:"FR24_PUBLIC_EXACT",status:exact?"OK":(r?.status||"NO_USABLE_DATA"),sta:exact?localFromIso(staIso,flight.destination):"",url:r?.url,finalUrl:r?.finalUrl,httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString()};
 }
+function fr24HistoryUrl(f){return `https://www.flightradar24.com/data/flights/${encodeURIComponent(String(f.designator||"").toLowerCase())}`}
+function parseFr24HistorySta(text,flight){
+  const u=upper(text),tokens=dateTokens(flight.date);
+  let idx=-1;
+  for(const token of tokens){idx=u.indexOf(token);if(idx>=0)break}
+  if(idx<0)return "";
+  const scope=text.slice(Math.max(0,idx-220),idx+720);
+  const su=upper(scope);
+  if(!new RegExp(`\\b${flight.origin}\\b`).test(su)||!new RegExp(`\\b${flight.destination}\\b`).test(su))return "";
+  const m=scope.match(/\bSTA\s+(\d{1,2}:\d{2})\b/i);
+  return m?localFromUtcClock(flight.date,m[1],flight.destination):"";
+}
+async function fr24History(flight){
+  return withIcaoFallback(flight,fr24HistoryUrl,async f=>{
+    const url=fr24HistoryUrl(f),checkedAt=new Date().toISOString();
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
+    try{
+      const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FR24-Scheduled/1.0)"}});
+      const body=await r.text(),text=htmlText(body),u=upper(text);
+      if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:"FR24_PUBLIC_SCHEDULED",status:"BLOCKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
+      if(!r.ok)return {source:"FR24_PUBLIC_SCHEDULED",status:"HTTP_ERROR",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
+      const sta=parseFr24HistorySta(text,f);
+      return {source:"FR24_PUBLIC_SCHEDULED",status:sta?"OK":"NO_USABLE_DATA",sta,url,finalUrl:r.url,httpStatus:r.status,checkedAt};
+    }catch(e){return {source:"FR24_PUBLIC_SCHEDULED",status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",url,finalUrl:url,httpStatus:0,checkedAt,error:String(e?.message||e).slice(0,220)}}
+    finally{clearTimeout(timer)}
+  });
+}
 function flighteraUrl(f){return `https://www.flightera.net/en/flight/${encodeURIComponent(f.designator)}`}
 async function flightera(flight){return withIcaoFallback(flight,flighteraUrl,f=>fetchPage("FLIGHTERA_PUBLIC",flighteraUrl(f),f))}
 
 export async function fetchStaFallbacks(flight){
   const attempts=[];
-  for(const read of [flightAware,fr24Exact,flightera]){
-    const r=await read(flight);attempts.push({source:r.source,status:r.status,lookupDesignator:r.lookupDesignator||flight.designator});
+  for(const read of [flightAware,fr24Exact,fr24History,flightera]){
+    const r=await read(flight);
+    const nested=Array.isArray(r.lookupAttempts)?r.lookupAttempts:[];
+    if(nested.length)for(const a of nested)attempts.push({source:r.source,status:a.status,lookupDesignator:a.designator,codeType:a.codeType,numberType:a.numberType});
+    else attempts.push({source:r.source,status:r.status,lookupDesignator:r.lookupDesignator||flight.designator});
     if(r.status==="OK"&&/^\d{2}:\d{2}$/.test(clean(r.sta)))return {...r,attempts};
   }
   return {source:"PUBLIC_FALLBACKS",status:"NO_USABLE_DATA",sta:"",checkedAt:new Date().toISOString(),attempts};
