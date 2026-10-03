@@ -13,20 +13,21 @@ export async function normalizeFr24EtdLocalTime(env){
   for(const row of results){
     let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
     const src=upper(x.etdSource);
-    if(!src.startsWith("PUBLIC_ETD:"))continue;
+    if(!src.includes("FR24"))continue;
     const raw=hhmm(x.etd||x.edt),std=hhmm(x.std||row.std);if(!raw||!std)continue;
-    if(x.etdTimeBasis==="CDG_LOCAL")continue;
-    const local=utcClockToParis(row.flight_date||date,raw);if(!local)continue;
-    const rawDiff=diff(raw,std),localDiff=diff(local,std);
-    const chosen=localDiff<rawDiff?local:raw;
+    const converted=utcClockToParis(row.flight_date||date,raw);if(!converted)continue;
+    const rawDiff=diff(raw,std),convertedDiff=diff(converted,std);
+    const chosen=convertedDiff<rawDiff?converted:raw;
     const at=new Date().toISOString();
     if(chosen===std){
       delete x.etd;delete x.edt;delete x.etdSource;delete x.etdUpdatedAt;
-      x.etdTimeBasis="CDG_LOCAL";x.etdRawUtc=raw;x.etdBackfill={...(x.etdBackfill||{}),checkedAt:at,status:"ETD_EQUALS_STD"};
+      x.etdTimeBasis="CDG_LOCAL";x.etdRawUtc=convertedDiff<rawDiff?raw:(x.etdRawUtc||null);
+      x.etdBackfill={...(x.etdBackfill||{}),checkedAt:at,status:"ETD_EQUALS_STD"};
       const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_ETD_TIME_NORMALIZER",field:"etd",from:raw,to:""});x.flightInfoLog=log.slice(0,200);
       await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();changed++;cleared++;continue;
     }
-    x.etdRawUtc=localDiff<rawDiff?raw:(x.etdRawUtc||null);x.etd=chosen;x.edt=chosen;x.etdTimeBasis="CDG_LOCAL";x.etdUpdatedAt=at;
+    if(chosen===raw&&x.etdTimeBasis==="CDG_LOCAL")continue;
+    x.etdRawUtc=convertedDiff<rawDiff?raw:(x.etdRawUtc||null);x.etd=chosen;x.edt=chosen;x.etdTimeBasis="CDG_LOCAL";x.etdUpdatedAt=at;
     const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];if(chosen!==raw)log.unshift({at,source:"PUBLIC_ETD_UTC_TO_CDG_LOCAL",field:"etd",from:raw,to:chosen});x.flightInfoLog=log.slice(0,200);
     await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();changed++;
   }
