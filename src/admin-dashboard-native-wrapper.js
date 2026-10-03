@@ -67,10 +67,10 @@ function quotaLimit(env,key){
   return {period:"day",limit:Number(env.OPENSKY_DAILY_LIMIT||4000),reserve:0};
 }
 async function dashboard(env){
-  const now=parisParts(),since=addDays(now.date,-1),until=addDays(now.date,2);
+  const now=parisParts(),since=addDays(now.date,-1),until=addDays(now.date,2),tomorrow=addDays(now.date,1);
   const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_date,flight_number,std,updated_at,data_json FROM flights WHERE flight_date>=? AND flight_date<=? ORDER BY flight_date,std,flight_number`).bind(since,until).all();
   const flights=results.map(parseRow).map(z=>classify(z,now));
-  const today=flights.filter(x=>x.date===now.date),future=flights.filter(x=>x.date>now.date);
+  const today=flights.filter(x=>x.date===now.date),future=flights.filter(x=>x.date===tomorrow);
   const summarize=list=>({total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="PARTIEL").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
   let quotas=[];
   try{
@@ -135,4 +135,3 @@ export default {
   },
   scheduled(controller,env,ctx){if(typeof app.scheduled==='function')return app.scheduled(controller,env,ctx)}
 };
-
