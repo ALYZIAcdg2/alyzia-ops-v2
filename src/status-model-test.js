@@ -5,19 +5,12 @@ const upper=v=>clean(v).toUpperCase();
 const today=()=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 const manual=x=>upper(x?.statusSource||x?.status_source||"").includes("MANUAL")||Boolean(x?.manual?.status||x?.manualOverrides?.status||x?.manual_fields?.status);
 const hhmm=v=>{const m=clean(v).match(/^(\d{1,2}):(\d{2})$/);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
-
-const preferred={
-  ata:["FLIGHTSTATS","FLIGHTAWARE"],
-  landing:["FLIGHTAWARE"],
-  takeoff:["FLIGHTAWARE","PARIS_AEROPORT"],
-  atd:["FLIGHTSTATS","FLIGHTAWARE"]
-};
+const mins=v=>{const t=hhmm(v);if(!t)return null;const [h,m]=t.split(":").map(Number);return h*60+m};
 
 function sourceOf(x,field){return upper(x?.[field+"Source"]||x?.[field+"_source"]||"")}
-function isPreferred(src,list){const s=upper(src);return list.some(v=>s.includes(v))}
-function fact(x,field,aliases=[]){for(const k of [field,...aliases]){const v=clean(x?.[k]);if(v)return {value:v,source:sourceOf(x,k)||sourceOf(x,field)||"UNKNOWN"}}return {value:"",source:""}}
+function fact(x,field,aliases=[]){for(const k of [field,...aliases]){const v=clean(x?.[k]);if(v)return {value:v,source:sourceOf(x,k)||sourceOf(x,field)||"V2_PUBLIC"}}return {value:"",source:""}}
 function parisPhase(x){return upper(x?.parisAeroportPhase||x?.paris_aeroport_phase||"")}
-function flightAwarePhase(x){return upper(x?.statusModelEvidence?.flightAwarePhase||"")}
+function rawSignals(x){return upper([x?.providerStatus,x?.provider_status,x?.publicStatus,x?.public_status,x?.flightStatus,x?.flight_status,x?.statusRaw,x?.status_raw,x?.fr24Status,x?.fr24_status,x?.parisAeroportRaw,x?.paris_aeroport_raw].filter(Boolean).join(" "))}
 function localDateTimeUtc(date,time,iata){
   const m=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/),t=hhmm(time);if(!m||!t)return null;
   const [h,mi]=t.split(":").map(Number);let guess=Date.UTC(+m[1],+m[2]-1,+m[3],h,mi,0);
@@ -27,89 +20,68 @@ function localDateTimeUtc(date,time,iata){
 function arrivalUtc(x,date){
   const arr=hhmm(x.eta||x.estimatedArrival||x.estimated_arrival||x.sta);if(!arr)return null;
   const dest=upper(x.destination||x.dest||"");if(!AIRPORT_TZ[dest])return null;
-  const dep=hhmm(x.takeoff||x.takeoffTime||x.takeoff_time||x.atd||x.actualDeparture||x.actual_departure||x.std);if(!dep)return null;
+  const dep=hhmm(x.atd||x.actualDeparture||x.actual_departure||x.takeoff||x.takeoffTime||x.takeoff_time||x.std);if(!dep)return null;
   const origin=upper(x.origin||x.dep||"CDG");let a=localDateTimeUtc(date,dep,origin),b=localDateTimeUtc(date,arr,dest);if(a==null||b==null)return null;while(b<a)b+=86400000;return b;
 }
-// FlightAware est lu sur la page entière : l'historique du vol (jours précédents) contient « Arrived », ce qui faisait passer à ARRIVÉ un vol encore en l'air.
-// Une phase ARRIVED / LANDED n'est donc retenue que si l'heure d'arrivée connue (ETA/STA) est atteinte ; sinon on retient AIRBORNE (si vu dans la page)
-// ou, à défaut, « en vol » par la chronologie (ATD réel depuis au moins 20 min, arrivée pas encore atteinte).
-const ARRIVED_EARLY_MS=20*60000,LANDED_EARLY_MS=35*60000,AIRBORNE_AFTER_ATD_MS=20*60000;
-function expectedArrivalMs(x,date){
-  const a=arrivalUtc(x,date);if(a!=null)return a;
-  const dur=Number(x?.duration);const dep=hhmm(x?.takeoff||x?.atd||"");
-  if(Number.isFinite(dur)&&dur>0&&dep){const t=localDateTimeUtc(date,dep,upper(x?.origin||x?.dep||"CDG"));if(t!=null)return t+dur*60000}
-  return null;
-}
-export function effectiveFlightAwarePhase(x,date,nowMs=Date.now()){
-  const ev=x?.statusModelEvidence||{};
-  const seen=new Set([...(Array.isArray(ev.flightAwarePhases)?ev.flightAwarePhases:[]),upper(ev.flightAwarePhase)].filter(Boolean));
-  if(!seen.size)return "";
-  const arr=expectedArrivalMs(x,date);
-  const arrivedOk=seen.has("ARRIVED")&&(arr==null?false:nowMs>=arr-ARRIVED_EARLY_MS);
-  const landedOk=seen.has("LANDED")&&(arr==null?false:nowMs>=arr-LANDED_EARLY_MS);
-  if(arrivedOk)return "ARRIVED";
-  if(landedOk)return "LANDED";
-  if(seen.has("AIRBORNE"))return "AIRBORNE";
-  if(seen.has("ARRIVED")||seen.has("LANDED")){
-    // Preuve d'arrivée non plausible (arrivée attendue plus tard) : on ne la croit pas sans preuve d'atterrissage ; vol parti depuis assez longtemps = en l'air.
-    const dep=hhmm(x?.takeoff||x?.atd||"");
-    if(dep){const t=localDateTimeUtc(date,dep,upper(x?.origin||x?.dep||"CDG"));if(t!=null&&nowMs>=t+AIRBORNE_AFTER_ATD_MS&&(arr==null||nowMs<arr))return "AIRBORNE"}
-    return "DEPARTED";
-  }
-  return seen.has("DEPARTED")?"DEPARTED":"";
-}
+function etaPassedBy15(x,date,nowMs){const a=arrivalUtc(x,date);return a!=null&&nowMs>=a+15*60000}
+function etdDelayed(x){const s=mins(x.std),e=mins(x.etd);if(s==null||e==null)return false;let d=e-s;if(d<-720)d+=1440;if(d>720)d-=1440;return d>=5}
+function cancelled(x){return /CANCEL|ANNUL/.test(rawSignals(x))||parisPhase(x)==="ANNULÉ"}
+function boarding(x){const p=parisPhase(x);return p==="EMBARQUEMENT"||p==="EMBARQUEMENT CLOS"||/BOARDING|EMBARQUEMENT/.test(rawSignals(x))}
+function delayed(x){return parisPhase(x)==="RETARDÉ"||/DELAY|RETARD/.test(rawSignals(x))||etdDelayed(x)}
+
 export function derive(x,date,nowMs=Date.now()){
-  const faPhase=effectiveFlightAwarePhase(x,date,nowMs),ata=fact(x,"ata",["actualArrival","actual_arrival","gateIn","gate_in"]);
-  if(ata.value)return {status:"ARRIVÉ",reason:"ATA",evidence:ata,preferred:isPreferred(ata.source,preferred.ata)};
-  if(faPhase==="ARRIVED")return {status:"ARRIVÉ",reason:"FLIGHTAWARE_ARRIVED",evidence:{value:"ARRIVED",source:"FLIGHTAWARE"},preferred:true};
+  if(cancelled(x))return {status:"ANNULÉ",reason:"CANCELLED",evidence:{value:"CANCELLED",source:"V2_PUBLIC"}};
 
-  const landing=fact(x,"landing",["landingTime","landing_time","touchdown"]);
-  if(landing.value)return {status:"ATTERRI",reason:"LANDING",evidence:landing,preferred:isPreferred(landing.source,preferred.landing)};
-  if(faPhase==="LANDED")return {status:"ATTERRI",reason:"FLIGHTAWARE_LANDED",evidence:{value:"LANDED",source:"FLIGHTAWARE"},preferred:true};
-
-  const takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]),phase=parisPhase(x),faAirborne=faPhase==="AIRBORNE";
-  if(takeoff.value||faAirborne||phase==="EN VOL"){
-    const source=faAirborne?"FLIGHTAWARE":phase==="EN VOL"?"PARIS_AEROPORT":takeoff.source;
-    return {status:"EN VOL",reason:faAirborne?"AIRBORNE":takeoff.value?"TAKEOFF":"PARIS_DECOLLE",evidence:{value:takeoff.value||"AIRBORNE",source},preferred:isPreferred(source,preferred.takeoff),arrivalUtc:arrivalUtc(x,date)};
-  }
+  const ata=fact(x,"ata",["actualArrival","actual_arrival","gateIn","gate_in"]);
+  if(ata.value)return {status:"ARRIVÉ",reason:"ATA",evidence:ata};
 
   const atd=fact(x,"atd",["actualDeparture","actual_departure","gateOut","gate_out"]);
-  if(atd.value)return {status:"PARTI",reason:"ATD",evidence:atd,preferred:isPreferred(atd.source,preferred.atd)};
+  if(atd.value&&etaPassedBy15(x,date,nowMs))return {status:"ARRIVÉ",reason:"ETA_PASSED_15",evidence:{value:x.eta||x.sta||"",source:sourceOf(x,x.eta?"eta":"sta")||"V2_PUBLIC"}};
 
-  if(phase==="EMBARQUEMENT CLOS")return {status:"EMBARQUEMENT CLOS",reason:"PARIS_AEROPORT",evidence:{value:phase,source:"PARIS_AEROPORT"},preferred:true};
-  if(phase==="EMBARQUEMENT")return {status:"EMBARQUEMENT",reason:"PARIS_AEROPORT",evidence:{value:phase,source:"PARIS_AEROPORT"},preferred:true};
-  if(phase==="RETARDÉ")return {status:"RETARDÉ",reason:"PARIS_AEROPORT",evidence:{value:phase,source:"PARIS_AEROPORT"},preferred:true};
-  return {status:"À L'HEURE",reason:"DEFAULT",evidence:{value:"",source:"ALYZIA"},preferred:true};
+  if(atd.value)return {status:"EN VOL",reason:"ATD",evidence:atd,arrivalUtc:arrivalUtc(x,date)};
+
+  const takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]);
+  if(takeoff.value)return {status:"EN VOL",reason:"TAKEOFF",evidence:takeoff,arrivalUtc:arrivalUtc(x,date)};
+
+  if(boarding(x)){
+    const p=parisPhase(x);
+    return {status:p==="EMBARQUEMENT CLOS"?"EMBARQUEMENT CLOS":"EMBARQUEMENT",reason:"BOARDING",evidence:{value:p||"BOARDING",source:p?"PARIS_AEROPORT":"V2_PUBLIC"}};
+  }
+
+  if(delayed(x))return {status:"RETARDÉ",reason:etdDelayed(x)?"ETD_DELAY":"DELAY",evidence:{value:x.etd||parisPhase(x)||"DELAY",source:sourceOf(x,"etd")||"V2_PUBLIC"}};
+
+  return {status:"PROGRAMMÉ",reason:"DEFAULT",evidence:{value:"",source:"ALYZIA"}};
 }
 
 export const STATUS_MODEL_TEST_RULES={
-  ARRIVE:{trigger:"ATA / FlightAware arrived",sources:["FlightStats","FlightAware"]},
-  ATTERRI:{trigger:"LANDING / FlightAware landed",sources:["FlightAware"]},
-  EN_VOL:{trigger:"TAKEOFF / AIRBORNE",sources:["FlightAware","Paris Aéroport"],fr24FactsAllowed:true},
-  PARTI:{trigger:"ATD",sources:["FlightStats","FlightAware"]},
-  EMBARQUEMENT_CLOS:{trigger:"Paris Aéroport",sources:["Paris Aéroport"]},
-  EMBARQUEMENT:{trigger:"Paris Aéroport",sources:["Paris Aéroport"]},
-  RETARDE:{trigger:"Paris Aéroport",sources:["Paris Aéroport"]},
-  A_L_HEURE:{trigger:"default",sources:["ALYZIA"]}
+  mode:"V1_LOGIC_V2_PUBLIC_SOURCES",
+  ARRIVE:{trigger:"ATA, ou ETA/STA dépassée de 15 min après ATD",sources:["V2 public sources"]},
+  EN_VOL:{trigger:"ATD; TAKEOFF seulement en secours si ATD absent",sources:["FlightStats","FlightAware","FR24","Paris Aéroport","autres fallbacks publics"]},
+  EMBARQUEMENT:{trigger:"signal boarding public",sources:["Paris Aéroport","V2 public sources"]},
+  RETARDE:{trigger:"retard public ou ETD >= STD + 5 min",sources:["Paris Aéroport","V2 public sources"]},
+  PROGRAMME:{trigger:"aucun événement opérationnel",sources:["ALYZIA"]},
+  APIs:false
 };
 
 export async function runStatusModelTest(env){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
   let updated=0;const items=[],at=new Date().toISOString();
-  for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(manual(x)){items.push({identity:row.identity,status:"MANUAL"});continue}
+  for(const row of results){
+    let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
+    if(manual(x)){items.push({identity:row.identity,status:"MANUAL"});continue}
     const d=derive(x,date),arrivalIso=d.arrivalUtc!=null?new Date(d.arrivalUtc).toISOString():"";
-    const before=clean(x.status),beforeArrival=clean(x.statusArrivalUtc),beforeReason=clean(x.statusReason),beforeEvidence=JSON.stringify(x.statusEvidence||{}),beforeSource=clean(x.statusSource);
-    const evidenceSource=upper(d.evidence?.source||"ALYZIA");
+    const before={status:clean(x.status),arrival:clean(x.statusArrivalUtc),reason:clean(x.statusReason),evidence:JSON.stringify(x.statusEvidence||{}),source:clean(x.statusSource)};
     x.status=d.status;
-    x.statusSource=`ALYZIA_STATUS_MODEL_TEST:${d.reason}:${evidenceSource}`;
+    x.statusSource=`ALYZIA_STATUS_V1:${d.reason}:${upper(d.evidence?.source||"ALYZIA")}`;
     x.statusReason=d.reason;
-    x.statusEvidence={...d.evidence,preferred:Boolean(d.preferred)};
+    x.statusEvidence=d.evidence||{};
     x.statusArrivalUtc=arrivalIso;
     x.statusUpdatedAt=at;
-    const changed=before!==x.status||beforeArrival!==arrivalIso||beforeReason!==d.reason||beforeEvidence!==JSON.stringify(x.statusEvidence)||beforeSource!==x.statusSource;
+    delete x.statusModelEvidence;
+    const changed=before.status!==x.status||before.arrival!==arrivalIso||before.reason!==d.reason||before.evidence!==JSON.stringify(x.statusEvidence)||before.source!==x.statusSource;
     if(changed){await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();updated++}
-    items.push({identity:row.identity,status:d.status,reason:d.reason,source:d.evidence.source||"",statusSource:x.statusSource,preferred:Boolean(d.preferred),arrivalUtc:arrivalIso||null,changed});
+    items.push({identity:row.identity,status:d.status,reason:d.reason,source:d.evidence?.source||"",statusSource:x.statusSource,arrivalUtc:arrivalIso||null,changed});
   }
-  return {ok:true,date,mode:"TEST",updated,checked:results.length,rules:STATUS_MODEL_TEST_RULES,items};
+  return {ok:true,date,mode:"V1_LOGIC_V2_PUBLIC_SOURCES",updated,checked:results.length,rules:STATUS_MODEL_TEST_RULES,items};
 }
