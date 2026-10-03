@@ -57,6 +57,18 @@ async function readScope(env){
   const today=parisDate(),tomorrow=nextDate(today),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,data_json FROM flights WHERE flight_date IN (?,?) AND airline<>'SYS' ORDER BY flight_date,std,flight_number`).bind(today,tomorrow).all();
   const flights=results.map(normalizeRow),missing=flights.filter(f=>isMissing(f.x.sta));return {today,tomorrow,flights,missing};
 }
+function staAttemptTime(flight){
+  const raw=flight?.x?.staBackfill?.checkedAt;if(!raw)return 0;
+  const t=Date.parse(raw);return Number.isFinite(t)?t:0;
+}
+function fairMissingOrder(missing){
+  return [...missing].sort((a,b)=>{
+    const ta=staAttemptTime(a),tb=staAttemptTime(b);
+    if(ta!==tb)return ta-tb;
+    if(a.date!==b.date)return String(a.date).localeCompare(String(b.date));
+    return String(a.designator).localeCompare(String(b.designator),"fr",{numeric:true});
+  });
+}
 async function readCurrent(env,identity){const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(identity).first();if(!row)return null;let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}return x}
 async function writeSta(env,flight,result){
   const x=await readCurrent(env,flight.identity);if(!x)return {changed:false,reason:"FLIGHT_DISAPPEARED"};
@@ -79,13 +91,14 @@ export async function runStaBackfill(env,{limit=48,concurrency=4}={}){
   if(!env?.OPS_DB)return {ok:false,error:"OPS_DB_NON_CONFIGURE"};
   const scope=await readScope(env),missingBefore=scope.missing.length,at=new Date().toISOString();
   if(!missingBefore){const done={ok:true,mode:"STA_J_J1_PUBLIC_BACKFILL",date:scope.today,j1:scope.tomorrow,total:scope.flights.length,missingBefore:0,attempted:0,filled:0,missingAfter:0,complete:true,checkedAt:at};await saveLastRun(env,done);return done}
-  const batch=scope.missing.slice(0,Math.max(1,Math.min(96,Number(limit)||48)));
+  const orderedMissing=fairMissingOrder(scope.missing);
+  const batch=orderedMissing.slice(0,Math.max(1,Math.min(96,Number(limit)||48)));
   const results=await mapLimit(batch,Math.max(1,Math.min(8,Number(concurrency)||4)),async flight=>{
     const source=await fetchSta(flight);
     if(source.status!=="OK"||!source.sta){await writeAttempts(env,flight,source);return {identity:flight.identity,flight:flight.designator,status:source.status,changed:false,source:source.source||null,attempts:source.attempts||[]}}
     const write=await writeSta(env,flight,source);return {identity:flight.identity,flight:flight.designator,status:source.status,lookupDesignator:source.lookupDesignator||flight.designator,attempts:source.attempts||[],...write};
   });
-  const after=await readScope(env),filled=results.filter(r=>r.changed).length,summary={ok:true,mode:"STA_J_J1_PUBLIC_BACKFILL",date:scope.today,j1:scope.tomorrow,total:scope.flights.length,missingBefore,attempted:batch.length,filled,missingAfter:after.missing.length,complete:after.missing.length===0,checkedAt:at,statusCounts:{},sourceCounts:{}};
+  const after=await readScope(env),filled=results.filter(r=>r.changed).length,summary={ok:true,mode:"STA_J_J1_PUBLIC_BACKFILL",date:scope.today,j1:scope.tomorrow,total:scope.flights.length,missingBefore,attempted:batch.length,filled,missingAfter:after.missing.length,complete:after.missing.length===0,checkedAt:at,batchFirst:batch[0]?.designator||null,batchLast:batch[batch.length-1]?.designator||null,statusCounts:{},sourceCounts:{}};
   for(const r of results){summary.statusCounts[r.status]=(summary.statusCounts[r.status]||0)+1;if(r.changed&&r.source)summary.sourceCounts[r.source]=(summary.sourceCounts[r.source]||0)+1}
   await saveLastRun(env,summary);return summary;
 }
