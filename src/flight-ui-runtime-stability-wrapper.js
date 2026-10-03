@@ -8,9 +8,8 @@ const first=(x,keys)=>{for(const k of keys){const v=txt(x?.[k]);if(v&&!/^(?:—|
 const validReg=v=>{const s=up(v);if(!s||/^(?:ON[ -]?TIME|SCHEDULED|DELAYED|DEPARTED|ARRIVED|LANDED|IN[ -]?AIR|AIRBORNE|EN[ -]?VOL|PREVU|PRÉVU|RETARDE|RETARDÉ|PARTI|N\/A|NULL|UNKNOWN)$/i.test(s))return '';return /^(?:F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|EI-[A-Z]{3}|SP-[A-Z]{3}|YU-[A-Z]{3}|LZ-[A-Z]{3}|9XR-[A-Z0-9]{2,3}|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z0-9]{3,5})$/.test(s)?s:''};
 const flights=()=>{try{return Array.isArray(FLIGHTS)?FLIGHTS:(Array.isArray(window.FLIGHTS)?window.FLIGHTS:[])}catch{return Array.isArray(window.FLIGHTS)?window.FLIGHTS:[]}};
 const rowIndex=row=>{const raw=String(row.getAttribute('onclick')||row.querySelector('[onclick]')?.getAttribute('onclick')||'');const m=raw.match(/openFlightFromHomeList\((\d+)\)/);if(m)return Number(m[1]);const d=row.getAttribute('data-flight-index')||row.querySelector('[data-flight-index]')?.getAttribute('data-flight-index');return d!==null&&d!==''?Number(d):null};
-const trustedStoredStatus=x=>{const src=up(x?.statusSource||x?.status_source||x?.opsStatusSource||'');return /PUBLIC_LIVE|FLIGHTAWARE|FR24|FLIGHTSTATS|PLANEFINDER|OPENSKY|OAG|VALIDATED_LIVE/.test(src)?txt(x?.status):''};
+const trustedStoredStatus=x=>{const src=up(x?.statusSource||x?.status_source||x?.opsStatusSource||'');return /PARIS_AEROPORT|PUBLIC_LIVE|FLIGHTAWARE|FR24|FLIGHTSTATS|PLANEFINDER|OPENSKY|OAG|VALIDATED_LIVE/.test(src)?txt(x?.status):''};
 const hh=v=>{const m=txt(v).match(/(\d{1,2}):(\d{2})/);return m?{h:Number(m[1]),m:Number(m[2])}:null};
-const minuteOfDay=v=>{const t=hh(v);return t?t.h*60+t.m:null};
 const serviceDate=x=>txt(x?.flight_date||x?.flightDate||x?.service_date_internal||x?.serviceDate||x?.date)||(()=>{try{return typeof HOME_DATE!=='undefined'?txt(HOME_DATE):''}catch{return''}})();
 const dayNumber=d=>{const m=txt(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?Math.floor(Date.UTC(Number(m[1]),Number(m[2])-1,Number(m[3]))/86400000):null};
 const tzOf=code=>{const k=up(code);try{if(typeof TZ!=='undefined'&&TZ&&Number.isFinite(Number(TZ[k])))return Number(TZ[k])}catch{}try{if(window.TZ&&Number.isFinite(Number(window.TZ[k])))return Number(window.TZ[k])}catch{}return k==='CDG'?2:null};
@@ -18,18 +17,15 @@ const absoluteUtcMinute=(date,localTime,offset)=>{const d=dayNumber(date),t=hh(l
 const arrivalUtcMinute=x=>{const date=serviceDate(x),origin=up(x?.origin||x?.dep||'CDG'),dest=up(x?.destination||x?.dest||''),dep=first(x,['takeoff','takeoffTime','takeoff_time','atd','actualDeparture','actual_departure','std']),arr=first(x,['eta','estimatedArrival','estimated_arrival','sta']);const depOff=tzOf(origin),arrOff=tzOf(dest);let a=absoluteUtcMinute(date,dep,depOff),b=absoluteUtcMinute(date,arr,arrOff);if(a==null||b==null)return null;while(b<a)b+=1440;return b};
 const nowUtcMinute=()=>Date.now()/60000;
 const fmtRemain=min=>{const n=Math.max(0,Math.ceil(min));return String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0')};
-const parisNowMinutes=()=>{const p=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)};
-const minutesSinceAtd=x=>{const a=minuteOfDay(first(x,['atd','actualDeparture','actual_departure','gateOut','gate_out']));if(a==null)return null;let d=parisNowMinutes()-a;if(d<-720)d+=1440;if(d>720)d-=1440;return d};
-const manualStatus=x=>up(x?.statusSource||x?.status_source||'').includes('MANUAL')||Boolean(x?.manual?.status||x?.manualOverrides?.status||x?.manual_fields?.status);
-const airborneEvidence=x=>{const raw=up([x?.opsStatus,x?.flight_status,x?.providerStatusRaw,trustedStoredStatus(x)].filter(Boolean).join(' '));return Boolean(first(x,['takeoff','takeoffTime','takeoff_time','airborne'])||/EN VOL|IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|TOOK OFF/.test(raw))};
-const airborneFallback=x=>{if(manualStatus(x)||!first(x,['atd','actualDeparture','actual_departure','gateOut','gate_out']))return false;if(!first(x,['eta','estimatedArrival','estimated_arrival','sta']))return false;const age=minutesSinceAtd(x);return age!=null&&age>=20};
+const airborneEvidence=x=>{const raw=up([x?.opsStatus,x?.flight_status,x?.providerStatusRaw,trustedStoredStatus(x)].filter(Boolean).join(' '));return Boolean(first(x,['takeoff','takeoffTime','takeoff_time','airborne'])||/EN VOL|IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|TOOK OFF|DÉCOLLÉ|DECOLLE/.test(raw))};
 const statusOf=x=>{if(!x)return '';
  const raw=up([x.opsStatus,x.flight_status,x.providerStatusRaw,trustedStoredStatus(x)].filter(Boolean).join(' '));
  if(/CANCEL|ANNUL/.test(raw))return 'ANNULÉ';
  if(first(x,['ata','actualArrival','actual_arrival','gateIn','gate_in']))return 'ARRIVÉ';
- if(first(x,['landing','landingTime','landing_time','touchdown'])||/LANDED|ATTERI/.test(raw))return 'ATTERI';
- if(airborneEvidence(x)||airborneFallback(x)){const arr=arrivalUtcMinute(x);if(arr!=null){const left=arr-nowUtcMinute();if(left<=-15)return 'ARRIVÉ';return 'EN VOL · RESTE '+fmtRemain(left)}return 'EN VOL'}
+ if(first(x,['landing','landingTime','landing_time','touchdown'])||/LANDED|ATTERI|POSÉ|POSE A|POSÉ À/.test(raw))return 'ATTERI';
+ if(airborneEvidence(x)){const arr=arrivalUtcMinute(x);if(arr!=null){const left=arr-nowUtcMinute();if(left<=-15)return 'ARRIVÉ';return 'EN VOL · RESTE '+fmtRemain(left)}return 'EN VOL'}
  if(first(x,['atd','actualDeparture','actual_departure','gateOut','gate_out'])||/DEPARTED|PARTI|GATE OUT/.test(raw))return 'PARTI';
+ if(/EMBARQUEMENT\s+CLOS|BOARDING\s+CLOSED|GATE\s+CLOSED/.test(raw))return 'EMBARQUEMENT CLOS';
  if(/BOARD|EMBAR/.test(raw))return 'EMBARQUEMENT';
  if(/DELAY|RETARD/.test(raw))return 'RETARDÉ';
  return ''};
