@@ -33,14 +33,14 @@ function dateTokens(date){
   const day=String(Number(d||0));
   return [date,`${d}-${mon}-${y}`,`${day} ${mon} ${y}`,`${mon} ${day} ${y}`,`${d}/${m}/${y}`,`${m}/${d}/${y}`].filter(Boolean).map(upper);
 }
-function occurrenceMatches(text,flight){
+export function occurrenceMatchesStaPage(text,flight){
   const u=upper(text);
   const route=flight.origin&&flight.destination&&new RegExp(`\\b${flight.origin}\\b`).test(u)&&new RegExp(`\\b${flight.destination}\\b`).test(u);
   const dated=dateTokens(flight.date).some(t=>u.includes(t));
   const flightMatch=u.includes(upper(flight.designator))||u.includes(`${upper(flight.airline)} ${upper(flight.number)}`);
   return Boolean(route&&dated&&flightMatch);
 }
-function parseScheduledArrival(text){
+export function parsePublicScheduledArrival(text){
   const t=String(text||"");
   const time="(\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?)";
   const patterns=[
@@ -64,8 +64,8 @@ async function fetchPage(name,url,flight){
     if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:name,status:"BLOCKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
     if(!r.ok)return {source:name,status:"HTTP_ERROR",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
     if(/FLIGHT NOT FOUND|UNKNOWN FLIGHT|NO HISTORY DATA|FLIGHT STATUS NOT AVAILABLE/.test(u))return {source:name,status:"NOT_TRACKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
-    if(!occurrenceMatches(text,flight))return {source:name,status:"OCCURRENCE_MISMATCH",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
-    const sta=parseScheduledArrival(text);
+    if(!occurrenceMatchesStaPage(text,flight))return {source:name,status:"OCCURRENCE_MISMATCH",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
+    const sta=parsePublicScheduledArrival(text);
     return {source:name,status:sta?"OK":"NO_USABLE_DATA",sta,url,finalUrl:r.url,httpStatus:r.status,checkedAt};
   }catch(e){return {source:name,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",url,finalUrl:url,httpStatus:0,error:String(e?.message||e).slice(0,220),checkedAt}}
   finally{clearTimeout(timer)}
