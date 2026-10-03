@@ -1,4 +1,4 @@
-import app from "./flight-status-authoritative-wrapper.js";
+import app from "./v2-disable-provider-observability-wrapper.js";
 
 const UI=String.raw`<script id="alyzia-flight-list-live-sync-js">(()=>{
 'use strict';
