@@ -6,6 +6,18 @@ import {runGroundPublicFlow,groundPublicStatus} from "./ground-public-flow.js";
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const flow=await runEtdPublicFlow(env);const local=await normalizeFr24EtdLocalTime(env);return {...flow,localTimeFix:local}}
 function isQuarterHour(){return new Date().getUTCMinutes()%15===0}
+const PUSH_UI=String.raw`<script id="alyzia-push-all-public-js">(()=>{'use strict';
+window.adminPushNow=async function(){
+ const btn=document.getElementById('adminPushBtn'),msg=document.getElementById('adnPushMsg');
+ if(btn){btn.disabled=true;btn.textContent='⚡ SOURCES…'}if(msg)msg.textContent='STA + ETD + GATE + TYPE/IMMAT en cours…';
+ try{const r=await fetch('/api/admin/push-now',{method:'POST',cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
+ const sta=j.filled??0,etd=j.etd?.updated??0,ground=j.ground?.updated??0;
+ if(msg)msg.textContent='✓ PUSH · STA '+sta+' · ETD '+etd+' · GATE/TYPE/IMMAT '+ground;
+ await window.renderAdminDashboard?.(true);
+ }catch(e){if(msg)msg.textContent='ÉCHEC : '+(e?.message||e)}finally{if(btn){btn.disabled=false;btn.textContent='⚡ PUSH'}}
+};
+})();</script>`;
+function patchHtml(html){const s=String(html||"");if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+s.slice(i):s+PUSH_UI}
 
 export default {
   async fetch(request,env,ctx){
@@ -31,7 +43,10 @@ export default {
         return json({...sta,ok:base.ok&&etd.ok&&ground.ok,etd,ground});
       }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
-    return app.fetch(request,env,ctx);
+    const response=await app.fetch(request,env,ctx);
+    const type=String(response.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return response;
+    const headers=new Headers(response.headers);headers.delete('content-length');headers.set('cache-control','no-store');
+    return new Response(patchHtml(await response.text()),{status:response.status,statusText:response.statusText,headers});
   },
   scheduled(controller,env,ctx){
     if(typeof app.scheduled==="function")app.scheduled(controller,env,ctx);
