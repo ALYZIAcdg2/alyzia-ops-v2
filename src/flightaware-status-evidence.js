@@ -32,14 +32,16 @@ function normalize(row,x){
   };
 }
 
-function phase(text){
-  const s=upper(text);
-  if(/ARRIVED AT GATE|GATE ARRIVAL|ARRIVED\b|COMPLETED/.test(s))return "ARRIVED";
-  if(/LANDED|TOUCHDOWN|WHEELS DOWN/.test(s))return "LANDED";
-  if(/IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|EN VOL|TOOK OFF|WHEELS UP/.test(s))return "AIRBORNE";
-  if(/DEPARTED|GATE OUT|LEFT GATE/.test(s))return "DEPARTED";
-  return "";
+// Toutes les phases mentionnées par la page (l'historique du vol en cite plusieurs) : la chronologie du vol tranche ensuite (voir status-model-test.js).
+export function phases(text){
+  const s=upper(text),out=[];
+  if(/ARRIVED AT GATE|GATE ARRIVAL|ARRIVED\b|COMPLETED/.test(s))out.push("ARRIVED");
+  if(/LANDED|TOUCHDOWN|WHEELS DOWN/.test(s))out.push("LANDED");
+  if(/IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|EN VOL|TOOK OFF|WHEELS UP/.test(s))out.push("AIRBORNE");
+  if(/DEPARTED|GATE OUT|LEFT GATE/.test(s))out.push("DEPARTED");
+  return out;
 }
+function phase(text){return phases(text)[0]||""}
 
 async function fetchEvidence(f){
   const build=c=>`https://www.flightaware.com/live/flight/${encodeURIComponent(c.designator)}`;
@@ -64,10 +66,12 @@ async function fetchEvidence(f){
       // For today's active flight, FlightAware's live page is occurrence-specific enough for STATUS.
       // Requiring literal IATA origin/destination was rejecting valid pages that expose ICAO/city names instead.
       const status=publicPageStatus("FLIGHTAWARE",text,response.status,mentions,true);
-      const detected=status==="OK"?phase(raw+" "+text):"";
+      const seenPhases=status==="OK"?phases(raw+" "+text):[];
+      const detected=seenPhases[0]||"";
       return {
         status,
         phase:detected,
+        phases:seenPhases,
         url:response.url||url,
         httpStatus:response.status
       };
@@ -75,6 +79,7 @@ async function fetchEvidence(f){
       return {
         status:error?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",
         phase:"",
+        phases:[],
         url,
         httpStatus:0
       };
@@ -104,6 +109,7 @@ async function processCandidate(env,item,index,items){
   ev.flightAwareCheckStatus=hit.status;
   ev.flightAwareCheckedAt=at;
   ev.flightAwareUrl=hit.url||"";
+  ev.flightAwarePhases=Array.isArray(hit.phases)?hit.phases:[];
   if(hit.phase){
     ev.flightAwarePhase=hit.phase;
     if(hit.phase==="AIRBORNE")ev.airborneSource="FLIGHTAWARE";
