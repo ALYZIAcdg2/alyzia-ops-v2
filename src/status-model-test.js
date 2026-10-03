@@ -71,11 +71,17 @@ export async function runStatusModelTest(env){
   let updated=0;const items=[],at=new Date().toISOString();
   for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(manual(x)){items.push({identity:row.identity,status:"MANUAL"});continue}
     const d=derive(x,date),arrivalIso=d.arrivalUtc!=null?new Date(d.arrivalUtc).toISOString():"";
-    const before=clean(x.status),beforeArrival=clean(x.statusArrivalUtc),beforeReason=clean(x.statusReason),beforeEvidence=JSON.stringify(x.statusEvidence||{});
-    x.status=d.status;x.statusSource="ALYZIA_STATUS_MODEL_TEST";x.statusReason=d.reason;x.statusEvidence={...d.evidence,preferred:Boolean(d.preferred)};x.statusArrivalUtc=arrivalIso;x.statusUpdatedAt=at;
-    const changed=before!==x.status||beforeArrival!==arrivalIso||beforeReason!==d.reason||beforeEvidence!==JSON.stringify(x.statusEvidence);
+    const before=clean(x.status),beforeArrival=clean(x.statusArrivalUtc),beforeReason=clean(x.statusReason),beforeEvidence=JSON.stringify(x.statusEvidence||{}),beforeSource=clean(x.statusSource);
+    const evidenceSource=upper(d.evidence?.source||"ALYZIA");
+    x.status=d.status;
+    x.statusSource=`ALYZIA_STATUS_MODEL_TEST:${d.reason}:${evidenceSource}`;
+    x.statusReason=d.reason;
+    x.statusEvidence={...d.evidence,preferred:Boolean(d.preferred)};
+    x.statusArrivalUtc=arrivalIso;
+    x.statusUpdatedAt=at;
+    const changed=before!==x.status||beforeArrival!==arrivalIso||beforeReason!==d.reason||beforeEvidence!==JSON.stringify(x.statusEvidence)||beforeSource!==x.statusSource;
     if(changed){await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();updated++}
-    items.push({identity:row.identity,status:d.status,reason:d.reason,source:d.evidence.source||"",preferred:Boolean(d.preferred),arrivalUtc:arrivalIso||null,changed});
+    items.push({identity:row.identity,status:d.status,reason:d.reason,source:d.evidence.source||"",statusSource:x.statusSource,preferred:Boolean(d.preferred),arrivalUtc:arrivalIso||null,changed});
   }
   return {ok:true,date,mode:"TEST",updated,checked:results.length,rules:STATUS_MODEL_TEST_RULES,items};
 }
