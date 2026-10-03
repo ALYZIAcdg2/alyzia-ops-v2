@@ -4,15 +4,23 @@ const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const today=()=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
-function textOnly(html){
-  return String(html||"")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
-    .replace(/<[^>]+>/g," ")
+function decode(raw){
+  return String(raw||"")
+    .replace(/\\u0026/gi,"&")
+    .replace(/\\u002F/gi,"/")
+    .replace(/\\u003A/gi,":")
+    .replace(/\\u003C/gi,"<")
+    .replace(/\\u003E/gi,">")
     .replace(/&nbsp;|&#160;/gi," ")
     .replace(/&amp;/gi,"&")
     .replace(/&#39;/g,"'")
-    .replace(/&quot;/gi,'"')
+    .replace(/&quot;/gi,'"');
+}
+
+function textOnly(html){
+  return decode(html)
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
+    .replace(/<[^>]+>/g," ")
     .replace(/\s+/g," ")
     .trim();
 }
@@ -38,12 +46,21 @@ function normalize(row,x){
   };
 }
 
+function evidenceWindow(raw,candidate){
+  const s=decode(raw),u=upper(s),keys=[upper(candidate.designator),`${upper(candidate.airline)}${upper(candidate.number)}`,`${upper(candidate.airline)} ${upper(candidate.number)}`].filter(Boolean);
+  for(const key of keys){
+    const i=u.indexOf(key);
+    if(i>=0)return s.slice(Math.max(0,i-12000),Math.min(s.length,i+24000));
+  }
+  return s.slice(0,50000);
+}
+
 function phase(text){
-  const s=upper(text);
-  if(/ARRIVED AT GATE|GATE ARRIVAL|ARRIVED\b|COMPLETED/.test(s))return "ARRIVED";
-  if(/LANDED|TOUCHDOWN|WHEELS DOWN/.test(s))return "LANDED";
-  if(/IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|EN VOL|TOOK OFF|WHEELS UP/.test(s))return "AIRBORNE";
-  if(/DEPARTED|GATE OUT|LEFT GATE/.test(s))return "DEPARTED";
+  const s=upper(text).replace(/[{}\[\]",:_-]+/g," ").replace(/\s+/g," ");
+  if(/\bARRIVED AT GATE\b|\bGATE ARRIVAL\b|\bARRIVED\b|\bCOMPLETED\b/.test(s))return "ARRIVED";
+  if(/\bLANDED\b|\bTOUCHDOWN\b|\bWHEELS DOWN\b/.test(s))return "LANDED";
+  if(/\bIN AIR\b|\bAIRBORNE\b|\bIN FLIGHT\b|\bEN ROUTE\b|\bEN VOL\b|\bTOOK OFF\b|\bWHEELS UP\b/.test(s))return "AIRBORNE";
+  if(/\bDEPARTED\b|\bGATE OUT\b|\bLEFT GATE\b/.test(s))return "DEPARTED";
   return "";
 }
 
@@ -60,15 +77,22 @@ async function fetchEvidence(f){
         headers:{
           accept:"text/html,application/xhtml+xml",
           "accept-language":"en-US,en;q=0.9,fr;q=0.7",
-          "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-StatusEvidence/1.1)"
+          "user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-StatusEvidence/1.2)"
         }
       });
-      const text=textOnly(await response.text());
-      const mentions=upper(text).includes(upper(candidate.designator))||upper(text).includes(`${upper(candidate.airline)} ${upper(candidate.number)}`);
-      const status=publicPageStatus("FLIGHTAWARE",text,response.status,mentions,routeOk(text,candidate));
+      const raw=await response.text();
+      const visible=textOnly(raw);
+      const window=evidenceWindow(raw,candidate);
+      const searchable=`${visible} ${window}`;
+      const rawUpper=upper(raw);
+      const mentions=rawUpper.includes(upper(candidate.designator))||rawUpper.includes(`${upper(candidate.airline)} ${upper(candidate.number)}`)||rawUpper.includes(`${upper(candidate.airline)}${upper(candidate.number)}`);
+      const detectedPhase=phase(searchable);
+      const routeMatched=routeOk(raw,candidate)||routeOk(searchable,candidate);
+      let status=publicPageStatus("FLIGHTAWARE",searchable,response.status,mentions,routeMatched||Boolean(detectedPhase));
+      if(response.ok&&mentions&&detectedPhase)status="OK";
       return {
         status,
-        phase:status==="OK"?phase(text):"",
+        phase:status==="OK"?detectedPhase:"",
         url:response.url||url,
         httpStatus:response.status
       };
@@ -91,14 +115,9 @@ async function processCandidate(env,item,index,items){
   const hit=await fetchEvidence(f);
   const at=new Date().toISOString();
 
-  if(!hit.phase){
-    items[index]={flight:f.designator,status:hit.status,phase:""};
-    return 0;
-  }
-
   const currentRow=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(row.identity).first();
   if(!currentRow){
-    items[index]={flight:f.designator,status:"DISAPPEARED",phase:hit.phase};
+    items[index]={flight:f.designator,status:"DISAPPEARED",phase:hit.phase||""};
     return 0;
   }
 
@@ -107,19 +126,22 @@ async function processCandidate(env,item,index,items){
   const ev={...(current.statusModelEvidence||{})};
   const before=JSON.stringify(ev);
 
-  ev.flightAwarePhase=hit.phase;
   ev.flightAwareCheckedAt=at;
+  ev.flightAwareFetchStatus=hit.status||"";
   ev.flightAwareUrl=hit.url||"";
-  if(hit.phase==="AIRBORNE")ev.airborneSource="FLIGHTAWARE";
-  if(hit.phase==="LANDED")ev.landingSource="FLIGHTAWARE";
-  if(hit.phase==="ARRIVED")ev.arrivalSource="FLIGHTAWARE";
+  if(hit.phase){
+    ev.flightAwarePhase=hit.phase;
+    if(hit.phase==="AIRBORNE")ev.airborneSource="FLIGHTAWARE";
+    if(hit.phase==="LANDED")ev.landingSource="FLIGHTAWARE";
+    if(hit.phase==="ARRIVED")ev.arrivalSource="FLIGHTAWARE";
+  }
 
   current.statusModelEvidence=ev;
   const changed=JSON.stringify(ev)!==before;
   if(changed){
     await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(current),row.identity).run();
   }
-  items[index]={flight:f.designator,status:hit.status,phase:hit.phase,changed};
+  items[index]={flight:f.designator,status:hit.status,phase:hit.phase||"",changed};
   return changed?1:0;
 }
 
