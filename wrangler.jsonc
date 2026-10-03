@@ -1,6 +1,6 @@
 {
   "name": "alyzia-ops-v2",
-  "main": "./src/v2-disable-provider-observability-wrapper.js",
+  "main": "./src/v2-admin-all-public-sources-wrapper.js",
   "compatibility_date": "2026-08-06",
 
   "assets": {
