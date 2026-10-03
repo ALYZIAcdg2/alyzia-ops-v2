@@ -130,11 +130,11 @@ async function fr24History(flight){
 }
 
 const READERS=[
-  flightAware,fr24Exact,fr24History,planeFinder,skyscanner,flightView,wego,ixigo,kayak,flightera,flighty,parisAeroport,flightradars24fr,simpleFlying
+  parisAeroport,flightAware,fr24Exact,fr24History,planeFinder,skyscanner,flightView,wego,ixigo,kayak,flightera,flighty,flightradars24fr,simpleFlying
 ];
 
 export const STA_PUBLIC_SOURCE_ORDER=[
-  "FlightStats","FlightAware","Flightradar24 exact","Flightradar24 scheduled","PlaneFinder","Skyscanner","FlightView","Wego","Ixigo","Kayak","Flightera","Flighty","Paris Aéroport","Flightradars24.fr","SimpleFlying"
+  "FlightStats","Paris Aéroport","FlightAware","Flightradar24 exact","Flightradar24 scheduled","PlaneFinder","Skyscanner","FlightView","Wego","Ixigo","Kayak","Flightera","Flighty","Flightradars24.fr","SimpleFlying"
 ];
 
 export async function fetchStaFallbacks(flight){
