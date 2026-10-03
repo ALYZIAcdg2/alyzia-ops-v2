@@ -1,4 +1,4 @@
-import app from "./flight-list-live-sync-wrapper.js";
+import app from "./flight-ui-runtime-stability-wrapper.js";
 import {STA_PUBLIC_SOURCE_ORDER} from "./sta-public-fallbacks.js";
 
 function json(data,status=200,headers={}){
