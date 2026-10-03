@@ -22,6 +22,7 @@ const SOURCES=[
 ];
 const FIELDS=["sta","etd","atd","takeoff","eta","landing","ata","gate","reg","aircraftActual","status"];
 const FIELD_LABEL={sta:"STA",etd:"ETD",atd:"ATD",takeoff:"TAKEOFF",eta:"ETA",landing:"LANDING",ata:"ATA",gate:"GATE",reg:"IMMAT",aircraftActual:"TYPE",status:"STATUS"};
+const FAILURE_LABEL={BLOCKED:"BLOQUÉ",TIMEOUT:"TIMEOUT",HTTP_ERROR:"HTTP",FETCH_ERROR:"RÉSEAU",NO_USABLE_DATA:"SANS DONNÉE",OCCURRENCE_MISMATCH:"MAUVAISE OCCURRENCE",NOT_TRACKED:"NON SUIVI",NO_SOURCE:"SOURCE ABSENTE",UNKNOWN:"AUTRE"};
 function parisDate(){return new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date())}
 function addDays(date,n){const d=new Date(`${date}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
 function sourceKey(v){
@@ -43,12 +44,32 @@ function sourceKey(v){
   if(s==="FR24"||s.includes("FR24")||s.includes("FLIGHTRADAR24"))return "FR24";
   return "";
 }
-function initStats(){return Object.fromEntries(SOURCES.map(s=>[s.key,{...s,attempts:0,ok:0,failed:0,icaoFallbacks:0,lastAt:"",fields:{}}]))}
+function initStats(){return Object.fromEntries(SOURCES.map(s=>[s.key,{...s,attempts:0,ok:0,failed:0,icaoFallbacks:0,lastAt:"",fields:{},failureReasons:{},httpErrors:{}}]))}
 function touch(s,at){const v=clean(at);if(v&&v>s.lastAt)s.lastAt=v}
+function failureReason(a={}){
+  const status=upper(a.status)||"UNKNOWN";
+  if(status==="OK")return "";
+  if(status==="HTTP_ERROR"&&a.httpStatus)return `HTTP_${Number(a.httpStatus)||0}`;
+  if(FAILURE_LABEL[status])return status;
+  if(status.includes("BLOCK"))return "BLOCKED";
+  if(status.includes("TIMEOUT"))return "TIMEOUT";
+  if(status.includes("MISMATCH"))return "OCCURRENCE_MISMATCH";
+  if(status.includes("NOT_TRACK"))return "NOT_TRACKED";
+  if(status.includes("NO_USABLE"))return "NO_USABLE_DATA";
+  if(status.includes("FETCH"))return "FETCH_ERROR";
+  return status||"UNKNOWN";
+}
 function addAttempt(stats,key,a={},fallbackAt=""){
   const s=stats[key];if(!s)return;
   s.attempts++;
-  if(upper(a.status)==="OK")s.ok++;else s.failed++;
+  const status=upper(a.status);
+  if(status==="OK")s.ok++;
+  else{
+    s.failed++;
+    const reason=failureReason(a)||"UNKNOWN";
+    s.failureReasons[reason]=(s.failureReasons[reason]||0)+1;
+    if(reason.startsWith("HTTP_"))s.httpErrors[reason]=(s.httpErrors[reason]||0)+1;
+  }
   if(upper(a.lookupCodeType||a.codeType)==="ICAO"||/^[A-Z]{3}\d/.test(upper(a.lookupDesignator||a.designator)))s.icaoFallbacks++;
   touch(s,a.checkedAt||fallbackAt);
 }
@@ -84,6 +105,8 @@ async function publicSourceStats(env){
       for(const a of (Array.isArray(b.attempts)?b.attempts:[]))addAttempt(stats,sourceKey(a.source),a,b.checkedAt);
       const live=x.publicLiveBackfill||{};
       for(const a of (Array.isArray(live.attempts)?live.attempts:[]))addAttempt(stats,sourceKey(a.source),a,live.checkedAt);
+      const faExact=x.flightAwareExactHistory||{};
+      for(const a of (Array.isArray(faExact.attempts)?faExact.attempts:[]))addAttempt(stats,"FLIGHTAWARE",a,faExact.checkedAt);
       const ground=x.groundPublicBackfill||x.publicGroundBackfill||x.groundBackfill||{};
       for(const a of (Array.isArray(ground.attempts)?ground.attempts:[]))addAttempt(stats,sourceKey(a.source),a,ground.checkedAt);
       const seen=new Set();
@@ -101,18 +124,24 @@ async function publicSourceStats(env){
       const phaseKey=sourceKey(x.parisAeroportPhaseSource);if(stats[phaseKey]&&clean(x.parisAeroportPhase))addField(stats,phaseKey,"status",x.parisAeroportPhaseUpdatedAt||x.parisAeroportStatusCheckedAt);
     }
   }catch(e){return {ok:false,error:"PUBLIC_SOURCE_STATS",detail:String(e?.message||e)}}
-  const sources=SOURCES.map(def=>{const s=stats[def.key],fieldTotal=Object.values(s.fields).reduce((a,b)=>a+Number(b||0),0);return {...s,fieldTotal,fieldList:Object.entries(s.fields).sort((a,b)=>b[1]-a[1]).map(([field,count])=>({field,count}))}});
+  const sources=SOURCES.map(def=>{
+    const s=stats[def.key],fieldTotal=Object.values(s.fields).reduce((a,b)=>a+Number(b||0),0);
+    const failureList=Object.entries(s.failureReasons).sort((a,b)=>b[1]-a[1]).map(([reason,count])=>({reason,label:reason.startsWith("HTTP_")?reason.replace("_"," "):(FAILURE_LABEL[reason]||reason),count}));
+    return {...s,fieldTotal,fieldList:Object.entries(s.fields).sort((a,b)=>b[1]-a[1]).map(([field,count])=>({field,count})),failureList};
+  });
   return {ok:true,date:today,j1,totalFlights,missingSta,complete:missingSta===0,lookupStrategy:"IATA_THEN_ICAO",sourceCount:SOURCES.length,sources};
 }
 
 const UI=String.raw`<style id="alyzia-admin-public-sources-css">
-#app .adn-public-sources{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+#app .adn-public-sources{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
 #app .adn-public-source{border:1px solid #e0e8f1;border-radius:12px;padding:10px;background:#fbfdff}
 #app .adn-public-source .ps-top{display:flex;justify-content:space-between;gap:8px;font-size:11px;font-weight:950}
 #app .adn-public-source .ps-role{margin-top:4px;font-size:9px;color:#71839a;font-weight:850}
 #app .adn-public-source .ps-stats{margin-top:7px;font-size:10px;color:#405b74;font-weight:850;line-height:1.5}
 #app .adn-public-source .ps-ok{color:#087443}#app .adn-public-source .ps-warn{color:#a76a00}
 #app .adn-public-source .ps-fields{margin-top:5px;color:#0a6abf;font-size:9px;font-weight:900;line-height:1.45}
+#app .adn-public-source .ps-failures{margin-top:5px;padding-top:5px;border-top:1px dashed #e3eaf2;color:#a04424;font-size:9px;font-weight:900;line-height:1.45}
+#app .adn-public-source .ps-failures.ok{color:#087443}
 #app .adn-source-note{margin:0 0 9px;font-size:10px;color:#52677d;font-weight:850}
 </style><script id="alyzia-admin-public-sources-js">(()=>{'use strict';
 if(window.__alyziaAdminPublicSources)return;window.__alyziaAdminPublicSources=true;
@@ -123,9 +152,10 @@ function fmt(v){if(!v)return '—';const d=new Date(v);return Number.isFinite(d.
 function removeProviderSections(){[...document.querySelectorAll('#app .admin-native .adn-section')].forEach(sec=>{const h=(sec.querySelector('h3')?.textContent||'').trim().toUpperCase();if(/PROVIDER|FOURNISSEUR|QUOTAS? API/.test(h)&&!h.includes('SOURCES PUBLIQUES'))sec.remove()})}
 function replacePlans(){document.querySelectorAll('#app .admin-native .adn-next-plan b').forEach(el=>{let t=el.textContent||'';if(/AIRLABS|SKYLINK|OAG|AERODATABOX|OPENSKY|QUARK|AVIATIONDATA|SERPAPI|FR24API|FR24DEP|FLIGHTRADAR|CDGBOARD|KAYAK/i.test(t)){const prefix=t.includes('·')?t.split('·')[0].trim()+' · ':'';el.textContent=prefix+'SOURCES PUBLIQUES'}});document.querySelectorAll('#app .admin-native .adn-next-plan small').forEach(el=>{if(/API|FOURNISSEUR|PROVIDER/i.test(el.textContent||''))el.textContent='RECHERCHE IATA → OACI · SOURCES PUBLIQUES'})}
 function fields(s){return (s.fieldList||[]).map(x=>esc(x.field)+' '+esc(x.count)).join(' · ')||'AUCUN CHAMP RETENU'}
+function failures(s){const a=s.failureList||[];return a.length?a.map(x=>esc(x.label)+' '+esc(x.count)).join(' · '):'AUCUN ÉCHEC'}
 function patch(data){
   removeProviderSections();const sections=[...document.querySelectorAll('#app .admin-native .adn-section')];let sec=sections.find(s=>/SOURCES PUBLIQUES|QUOTAS API/i.test(s.querySelector('h3')?.textContent||''));if(!sec&&sections.length){sec=document.createElement('div');sec.className='adn-section';sections[0].after(sec)}
-  if(sec&&data){const cards=(data.sources||[]).map(s=>'<div class="adn-public-source"><div class="ps-top"><span>'+esc(s.label)+'</span><span class="'+(s.fieldTotal?'ps-ok':'ps-warn')+'">'+esc(s.fieldTotal)+' CHAMPS</span></div><div class="ps-role">'+esc(s.role)+'</div><div class="ps-stats">TENTATIVES '+esc(s.attempts)+' · OK '+esc(s.ok)+' · ÉCHECS '+esc(s.failed)+'<br>FALLBACK OACI '+esc(s.icaoFallbacks)+' · DERNIER '+esc(fmt(s.lastAt))+'</div><div class="ps-fields">'+fields(s)+'</div></div>').join('');sec.innerHTML='<h3>SOURCES PUBLIQUES V2 · '+esc(data.sourceCount||0)+'</h3><div class="adn-source-note">TÉLÉMÉTRIE LIVE RÉELLE · STA + ETD + ATD + TAKEOFF + ETA + LANDING + ATA + GATE + TYPE + IMMAT + STATUS · IATA → OACI · J/J+1 : '+esc(data.totalFlights)+' VOLS · STA MANQUANTS : '+esc(data.missingSta)+'</div><div class="adn-public-sources">'+cards+'</div>'}
+  if(sec&&data){const cards=(data.sources||[]).map(s=>'<div class="adn-public-source"><div class="ps-top"><span>'+esc(s.label)+'</span><span class="'+(s.fieldTotal?'ps-ok':'ps-warn')+'">'+esc(s.fieldTotal)+' CHAMPS</span></div><div class="ps-role">'+esc(s.role)+'</div><div class="ps-stats">TENTATIVES '+esc(s.attempts)+' · OK '+esc(s.ok)+' · KO '+esc(s.failed)+'<br>FALLBACK OACI '+esc(s.icaoFallbacks)+' · DERNIER '+esc(fmt(s.lastAt))+'</div><div class="ps-fields">'+fields(s)+'</div><div class="ps-failures '+(s.failed?'':'ok')+'">'+failures(s)+'</div></div>').join('');sec.innerHTML='<h3>SOURCES PUBLIQUES V2 · '+esc(data.sourceCount||0)+'</h3><div class="adn-source-note">TÉLÉMÉTRIE LIVE RÉELLE · CAUSES KO : BLOQUÉ / TIMEOUT / HTTP / RÉSEAU / SANS DONNÉE / MAUVAISE OCCURRENCE / NON SUIVI · IATA → OACI · J/J+1 : '+esc(data.totalFlights)+' VOLS · STA MANQUANTS : '+esc(data.missingSta)+'</div><div class="adn-public-sources">'+cards+'</div>'}
   replacePlans();
 }
 async function refresh(){patch(await load())}
