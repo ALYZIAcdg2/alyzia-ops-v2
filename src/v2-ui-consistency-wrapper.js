@@ -5,9 +5,12 @@ const UI=String.raw`<style id="alyzia-v2-single-status-css">
 #app .alyzia-status-single.envol,#app .alyzia-status-single.arrive{background:#ddf7e9;color:#07824f}
 #app .alyzia-status-single.retarde{background:#fff0d8;color:#a85d00}
 #app .alyzia-status-single.embarquement{background:#e7f1ff;color:#075fd3}
+#app .alyzia-status-single.annule{background:#ffe4e6;color:#b42318}
 .flight-detail-status-wrap{display:flex!important;align-items:center;gap:8px;margin-top:7px;min-height:34px;flex-wrap:wrap}
 .flight-detail-status-wrap .alyzia-status-single{font-size:14px!important;padding:8px 13px!important;margin-top:0}
-@media(max-width:620px){.flight-detail-status-wrap .alyzia-status-single{font-size:12px!important;padding:7px 11px!important}}
+.flight-detail-terminal{display:inline-flex;align-items:center;padding:8px 13px;border-radius:999px;background:#eef3f8;border:1px solid #dbe5ef;color:#28425f;font:900 14px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap}
+.flight-detail-terminal.term-t1{background:#0a4aa8;border-color:#0a4aa8;color:#fff}.flight-detail-terminal.term-t2{background:#0d7a27;border-color:#0d7a27;color:#fff}.flight-detail-terminal.term-t3{background:#a80c66;border-color:#a80c66;color:#fff}
+@media(max-width:620px){.flight-detail-status-wrap .alyzia-status-single,.flight-detail-terminal{font-size:12px!important;padding:7px 11px!important}}
 </style><script id="alyzia-v2-ui-consistency-js">(()=>{'use strict';
 if(window.__alyziaV2UiConsistency)return;window.__alyziaV2UiConsistency=true;
 const txt=v=>String(v??'').trim(),up=v=>txt(v).toUpperCase();
@@ -20,14 +23,14 @@ const statusLabel=x=>{
  const n=Math.max(0,Math.ceil((t-Date.now())/60000));
  return 'EN VOL · RESTE '+String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
 };
-const statusClass=s=>{s=up(s);if(s.startsWith('ARRIVÉ'))return'arrive';if(s.startsWith('EN VOL'))return'envol';if(s.includes('RETARD'))return'retarde';if(s.includes('EMBAR'))return'embarquement';return'decolle'};
+const statusClass=s=>{s=up(s);if(s.startsWith('ARRIVÉ'))return'arrive';if(s.startsWith('EN VOL'))return'envol';if(s.includes('RETARD'))return'retarde';if(s.includes('EMBAR'))return'embarquement';if(s.includes('ANNUL'))return'annule';return'programme'};
 function rowFlight(row){const direct=up(row.querySelector('.home-flight')?.textContent);if(direct)return direct;const m=up(row.textContent).match(/\b([A-Z0-9]{2,3}\d{2,4})\b/);return m?m[1]:''}
 function flightForRow(row){const f=rowFlight(row);return f?live.find(x=>keyFlight(x)===f)||null:null}
 function removeOldStatusNodes(scope){
  for(const n of scope.querySelectorAll('.v2-status,.flight-status,.home-status,.alyzia-list-status,.alyzia-status-single'))n.remove();
  for(const n of [...scope.querySelectorAll('span,div')]){
   if(n.children.length)continue;
-  if(/^(PARTI|EN VOL(?:\s*·\s*RESTE\s*\d{2}:\d{2})?|ARRIVÉ|ATTERRI|RETARDÉ|EMBARQUEMENT(?: CLOS)?|À L['’]HEURE)$/i.test(txt(n.textContent)))n.remove();
+  if(/^(PARTI|EN VOL(?:\s*·\s*RESTE\s*\d{2}:\d{2})?|ARRIVÉ|ATTERRI|RETARDÉ|EMBARQUEMENT(?: CLOS)?|À L['’]HEURE|PROGRAMMÉ|ANNULÉ)$/i.test(txt(n.textContent)))n.remove();
  }
 }
 function dedupeHome(){
@@ -50,18 +53,20 @@ function syncList(){
  }
 }
 function currentFlight(){try{if(typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)&&typeof selected!=='undefined'&&FLIGHTS[selected]){const f=keyFlight(FLIGHTS[selected]);return live.find(x=>keyFlight(x)===f)||null}}catch{}return null}
+function terminalOf(x){const raw=txt(x?.terminal||x?.departureTerminal||x?.departure_terminal||x?.terminalOrigin||x?.originTerminal||'');if(!raw)return'';const s=up(raw).replace(/^TERMINAL\s*/,'').replace(/^TERM\s*/,'');return s.startsWith('T')?s:'T'+s}
 function syncDetail(){
  const head=document.querySelector('#app .flight-head'),x=currentFlight();if(!head||!x)return;
  const label=statusLabel(x);if(!label)return;
  let wrap=head.querySelector('.flight-detail-status-wrap');
  if(!wrap){const anchor=head.querySelector('.fh-id')||head.querySelector('.flight-id-with-logo')?.parentElement||head.firstElementChild;if(!anchor)return;wrap=document.createElement('div');wrap.className='flight-detail-status-wrap';anchor.appendChild(wrap)}
  removeOldStatusNodes(wrap);
+ const term=terminalOf(x);if(term){const chip=document.createElement('span');chip.className='flight-detail-terminal term-'+term.toLowerCase();chip.textContent='TERM '+term;wrap.appendChild(chip)}
  const b=document.createElement('span');b.className='alyzia-status-single '+statusClass(label);b.textContent=label;wrap.appendChild(b);
 }
 function apply(){dedupeHome();syncList();syncDetail()}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json();live=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];apply()}catch{}}
 let queued=false;function queue(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply()})}
-function start(){refresh();setInterval(refresh,15000);setInterval(apply,5000);const root=document.getElementById('app');if(root)new MutationObserver(queue).observe(root,{childList:true,subtree:true})}
+function start(){refresh();setInterval(refresh,15000);setInterval(apply,5000);const app=document.getElementById('app');if(app)new MutationObserver(queue).observe(app,{childList:true,subtree:true})}
 document.readyState==='loading'?document.addEventListener('DOMContentLoaded',start,{once:true}):start();
 })();</script>`;
 
@@ -69,6 +74,7 @@ function stripLegacyStatusUi(html){return String(html||'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-v2-list-authoritative-css">[\s\S]*?<\/style>/g,'')
+ .replace(/<style id="alyzia-v2-single-status-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-v2-ui-consistency-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-flight-status-authoritative-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-flight-list-live-sync-js">[\s\S]*?<\/script>/g,'')
