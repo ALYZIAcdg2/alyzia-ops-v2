@@ -129,24 +129,12 @@ async function fr24History(flight){
   });
 }
 
-const VERIFIED_STA=new Map([
-  ["2026-10-04|ENT777|CDG|TIA",{sta:"07:25",url:"https://www.avionio.com/fr/flight/e4-777"}],
-  ["2026-10-04|PC5038|CDG|AYT",{sta:"17:05",url:"https://www.avionio.com/fr/flight/pc-5038"}],
-  ["2026-10-04|WB701|CDG|KGL",{sta:"06:00",url:"https://www.flight.info/WB701"}]
-]);
-async function verifiedOccurrence(flight){
-  const key=`${flight.date}|${upper(flight.designator)}|${upper(flight.origin)}|${upper(flight.destination)}`;
-  const hit=VERIFIED_STA.get(key);
-  if(!hit)return {source:"PUBLIC_VERIFIED_SCHEDULE",status:"NOT_LISTED",sta:"",checkedAt:new Date().toISOString()};
-  return {source:"PUBLIC_VERIFIED_SCHEDULE",status:"OK",sta:hit.sta,url:hit.url,finalUrl:hit.url,httpStatus:200,checkedAt:new Date().toISOString()};
-}
-
 const READERS=[
-  verifiedOccurrence,parisAeroport,flightAware,fr24Exact,fr24History,planeFinder,skyscanner,flightView,wego,ixigo,kayak,flightera,flighty,flightradars24fr,simpleFlying
+  parisAeroport,flightAware,fr24Exact,fr24History,planeFinder,skyscanner,flightView,wego,ixigo,kayak,flightera,flighty,flightradars24fr,simpleFlying
 ];
 
 export const STA_PUBLIC_SOURCE_ORDER=[
-  "Verified public schedule","FlightStats","Paris Aéroport","FlightAware","Flightradar24 exact","Flightradar24 scheduled","PlaneFinder","Skyscanner","FlightView","Wego","Ixigo","Kayak","Flightera","Flighty","Flightradars24.fr","SimpleFlying"
+  "FlightStats","Paris Aéroport","FlightAware","Flightradar24 exact","Flightradar24 scheduled","PlaneFinder","Skyscanner","FlightView","Wego","Ixigo","Kayak","Flightera","Flighty","Flightradars24.fr","SimpleFlying"
 ];
 
 export async function fetchStaFallbacks(flight){
