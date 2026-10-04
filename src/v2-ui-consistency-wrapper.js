@@ -38,7 +38,10 @@ const txt=v=>String(v??'').trim(),up=v=>txt(v).toUpperCase(),esc=v=>txt(v).repla
 let live=[];
 const keyFlight=x=>up(x?.flight||x?.flight_number||x?.designator||'');
 const localFlight=f=>{try{return Array.isArray(window.FLIGHTS)?window.FLIGHTS.find(x=>keyFlight(x)===up(f))||null:null}catch{return null}};
-const mergedFlight=f=>{const a=localFlight(f)||{},b=live.find(x=>keyFlight(x)===up(f))||{};return {...a,...b,config:a.config||b.config||{},booked:a.booked||b.booked||{},inopSeats:a.inopSeats||b.inopSeats||[]}};
+const sameOccurrence=(a,b)=>keyFlight(a)===keyFlight(b)&&up(a.dep||a.origin)===up(b.dep||b.origin)&&up(a.dest||a.destination)===up(b.dest||b.destination);
+const sheetDate=a=>{let d=txt(a?.activeDate||a?.date||'');if(!d){try{d=txt(window.HOME_DATE)}catch{}}return d};
+// A flight number alone is not an occurrence: only take live data of the same day and route.
+const mergedFlight=f=>{const a=typeof f==='object'&&f?f:(localFlight(f)||{}),date=sheetDate(a),b=live.find(x=>sameOccurrence(x,a)&&txt(x.activeDate||x.date||'')===date)||{};return {...a,...b,date:a.date||b.date||date,activeDate:date,config:a.config||b.config||{},booked:a.booked||b.booked||{},inopSeats:a.inopSeats||b.inopSeats||[]}};
 const clock=v=>{const s=txt(v);if(!s)return'';const m=s.match(/(?:T|^)(\d{1,2}):(\d{2})/);return m?String(Number(m[1])).padStart(2,'0')+':'+m[2]:s.match(/^\d{1,2}:\d{2}$/)?s:''};
 const val=(x,...keys)=>{for(const k of keys){const v=txt(x?.[k]);if(v)return v}return''};
 function safeSchedule(x){try{return typeof window.schedule==='function'?window.schedule(x)||{}:{}}catch{return{}}}
@@ -56,8 +59,8 @@ function favorite(x){try{return typeof window.isFavoriteFlight==='function'&&win
 ${REFERENCE_LIST_RENDERER}
 function dedupeHome(){const app=document.getElementById('app');if(!app)return null;const pages=[...app.querySelectorAll('.home-page')].filter(p=>p.querySelector('.flight-home-list'));if(!pages.length)return null;const visible=pages.filter(p=>getComputedStyle(p).display!=='none'),ranked=(visible.length?visible:pages).sort((a,b)=>b.querySelectorAll('.flight-home-row').length-a.querySelectorAll('.flight-home-row').length),keep=ranked[0];for(const p of pages)if(p!==keep)p.remove();return keep}
 function syncList(){const page=dedupeHome();if(!page)return;for(const row of page.querySelectorAll('.flight-home-row')){try{renderRow(row)}catch(e){row.classList.add('ops-skip');window.__opsRowError=e;console.error('flight card',e)}}if(typeof window.__alyziaApplyHomeFilters==='function')window.__alyziaApplyHomeFilters()}
-function currentFlight(){try{if(Array.isArray(window.FLIGHTS)&&typeof window.selected!=='undefined'&&window.FLIGHTS[window.selected])return mergedFlight(keyFlight(window.FLIGHTS[window.selected]))}catch{}const n=document.querySelector('#app .flight-number');return n?mergedFlight(up(n.textContent)):null}
-function longDate(x){try{return typeof window.formatDateLong==='function'?window.formatDateLong(x.activeDate||x.date||window.HOME_DATE||''):txt(x.activeDate||x.date||'')}catch{return txt(x.activeDate||x.date||'')}}
+function currentFlight(){try{if(Array.isArray(window.FLIGHTS)&&typeof window.selected!=='undefined'&&window.FLIGHTS[window.selected])return mergedFlight(window.FLIGHTS[window.selected])}catch{}const n=document.querySelector('#app .flight-number');return n?mergedFlight(up(n.textContent)):null}
+function longDate(x){try{return typeof window.formatDateLong==='function'?window.formatDateLong(sheetDate(x)):txt(x.activeDate||x.date||'')}catch{return txt(x.activeDate||x.date||'')}}
 function duration(x){try{return typeof window.durationText==='function'?window.durationText(x.duration):txt(x.duration)}catch{return txt(x.duration)}}
 function detailActions(){return '<button class="v2x-act back" onclick="backToFlightListSamePosition()">‹ RETOUR LISTE</button><button class="v2x-act primary" onclick="openSeatmap()">▦ SEATMAP</button><button class="v2x-act warn" onclick="openInopSeat()">⚠ SEAT INOP</button><button class="v2x-act" onclick="openDetailPrepa()">▤ PRÉPA</button><button class="v2x-act" onclick="openFlightInfo()">ⓘ INFOS VOL</button><button class="v2x-act danger" onclick="openClearCurrentFlight()">⌫ VIDER</button>'}
 function detailCabin(x){let entry=null,label='VERSION CABINE À CHOISIR';try{entry=typeof sariaSelectedEntry==='function'?sariaSelectedEntry(x):null;if(entry&&typeof sariaCabinLabel==='function')label=sariaCabinLabel(x)}catch{}return {entry,label}}
