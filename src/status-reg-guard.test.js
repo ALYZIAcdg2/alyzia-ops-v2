@@ -35,3 +35,7 @@ test("a FlightStats page of a diverted flight reads DÉROUTÉ",()=>{
   const page="(SQ) Singapore Airlines 337 Flight Details Diverted to CDG Flight Diverted SQ337 Flight Departure Times Actual 00:41 Flight Arrival Times Actual 00:59";
   assert.equal(semanticText("FLIGHTSTATS",page,{designator:"SQ337",airline:"SQ",number:"337"}).status,"DÉROUTÉ");
 });
+test("a single DÉROUTÉ is not believed",()=>{
+  assert.equal(pickStatus({FLIGHTSTATS:{status:"DÉROUTÉ"},FR24:{status:"EN VOL"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"EN VOL");
+  assert.equal(pickStatus({FLIGHTSTATS:{status:"DÉROUTÉ"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"");
+});

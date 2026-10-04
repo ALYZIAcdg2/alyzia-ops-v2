@@ -87,8 +87,8 @@ function fr24Semantic(fr,f){const s=fr?.candidates?.semantic||{};return {atd:cle
 function choose(map,field,order){for(const src of order){const key=upper(src).replace(/[^A-Z0-9]/g,"");const hit=map[key]||map[src];const v=clean(hit?.[field]);if(v)return {value:v,source:key==="FLIGHTSTATSEXACT"?"FLIGHTSTATS":key}}return {value:"",source:""}}
 // A cancellation read on a web page is only believed when two sources agree: a single loose page text ("cancelled" elsewhere on the page) was wrong for AI142 / TU725.
 export function pickStatus(map,order){
-  const cancelled=Object.values(map||{}).filter(v=>clean(v?.status)==="ANNULÉ").length;
-  for(const src of order){const key=upper(src).replace(/[^A-Z0-9]/g,"");const v=clean((map[key]||map[src])?.status);if(!v)continue;if(v==="ANNULÉ"&&cancelled<2)continue;return {value:v,source:key==="FLIGHTSTATSEXACT"?"FLIGHTSTATS":key}}
+  const count=st=>Object.values(map||{}).filter(v=>clean(v?.status)===st).length,cancelled=count("ANNULÉ"),diverted=count("DÉROUTÉ");
+  for(const src of order){const key=upper(src).replace(/[^A-Z0-9]/g,"");const v=clean((map[key]||map[src])?.status);if(!v)continue;if(v==="ANNULÉ"&&cancelled<2)continue;if(v==="DÉROUTÉ"&&diverted<2)continue;return {value:v,source:key==="FLIGHTSTATSEXACT"?"FLIGHTSTATS":key}}
   return {value:"",source:""}
 }
 // "En vol / atterri / arrivé" read on a web page is only believed once the flight has a departure fact (ATD, takeoff, landing or ATA):
@@ -143,8 +143,11 @@ async function applyOne(env,row,{dryRun=false}={}){let fr24Id="";let base={};try
   // The exact FR24 occurrence found once is kept on the flight: the next runs read its playback directly.
   if(fr24Id&&!clean(current.fr24OccurrenceId)){current.fr24OccurrenceId=fr24Id;changed=true}
   if(faUrl&&clean(current.flightAwareHistoryUrl)!==faUrl){current.flightAwareHistoryUrl=faUrl;changed=true}
-  // Diverted flight: the "arrival" clocks of the page belong to the original destination (SQ337 read ATA 00:59 in Singapore time), so they are dropped.
-  const diverted=Object.values(map).some(v=>clean(v?.status)==="DÉROUTÉ");if(diverted)for(const v of Object.values(map)){if(v){delete v.ata;delete v.landing}}
+  // A diversion is only believed when two sources agree (FlightStats showed "Diverted to CDG" for SQ337 while FR24 and FlightAware had it en route to SIN).
+  const diverted=Object.values(map).filter(v=>clean(v?.status)==="DÉROUTÉ").length>=2;
+  // Contradiction: FR24 has the flight airborne (departure fact, no landing) while another source claims a landing / ATA (SQ337: FlightStats "actual arrival 00:59"). The arrival facts are dropped.
+  const fr=map.FR24||{},airborneFr24=clean(fr.status)==="EN VOL"&&(clean(fr.atd)||clean(fr.takeoff))&&!clean(fr.ata)&&!clean(fr.landing);
+  if(diverted||airborneFr24)for(const [k,v] of Object.entries(map)){if(v&&(diverted||k!=="FR24")){delete v.ata;delete v.landing}}
   const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),landing=choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),ata=choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&/^(E4|ENT)$/.test(upper(f.airline))&&landing.value)ataHit={value:addMinutes(landing.value,10),source:"DERIVED_ENT_LANDING_PLUS_10"};if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   const explicit=pickStatus(map,LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";nextStatus=diverted?"DÉROUTÉ":guardAirborneStatus(nextStatus,current);if(nextStatus&&!manual(current,"status")&&clean(current.status)!==nextStatus){current.status=nextStatus;current.statusSource=explicit.value?`PUBLIC_LIVE:${explicit.source}`:"PUBLIC_LIVE:DERIVED";current.statusUpdatedAt=at;changed=true}
