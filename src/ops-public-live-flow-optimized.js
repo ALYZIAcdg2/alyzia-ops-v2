@@ -1,6 +1,7 @@
-import {guardDepartureClock} from "./local-time-guard.js";
+import {guardDepartureClock,zoneOffsetMinutes} from "./local-time-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
-import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus} from "./public-flight-alias.js";
+import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
+import {flightAwareJsonSemantic} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {noteActualAircraft} from "./aircraft-change.js";
@@ -19,10 +20,10 @@ const EXACT_FR24={"LO334|2026-10-03":"41f2d8d9","RJ120|2026-10-03":"41f2da8b","T
 export const LIVE_PUBLIC_SOURCE_ORDER={
   atd:["FlightStats","FlightAware exact","FR24","PlaneFinder","Skyscanner"],
   status:["FR24","FlightStats","PlaneFinder","Skyscanner"],
-  eta:["FlightStats","FR24","PlaneFinder","Skyscanner"],
-  ata:["FlightStats","PlaneFinder","Skyscanner"],
-  takeoff:["FR24","PlaneFinder","FlightStats"],
-  landing:["FR24","FlightStats","PlaneFinder"],
+  eta:["FlightStats","FR24","FlightAware exact","PlaneFinder","Skyscanner"],
+  ata:["FlightStats","FlightAware exact","PlaneFinder","Skyscanner"],
+  takeoff:["FR24","FlightAware exact","PlaneFinder","FlightStats"],
+  landing:["FR24","FlightAware exact","FlightStats","PlaneFinder"],
   aircraft:["FR24","PlaneFinder","FlightStats","Skyscanner"],
   reg:["FR24","PlaneFinder","FlightStats","Skyscanner"]
 };
@@ -32,6 +33,41 @@ const FALLBACKS={
   PLANEFINDER:f=>`https://planefinder.net/data/flight/${encodeURIComponent(f.designator)}`,
   SKYSCANNER:f=>`https://www.skyscanner.net/flight-tracker/${encodeURIComponent(f.designator.toLowerCase())}`
 };
+// ---- FlightAware, generic: find the page of THIS occurrence from the flight's landing page, then read the times it embeds (JSON, any language). ----
+// Used only for a flight without any departure fact after FR24 / FlightStats. The found URL is kept on the flight (flightAwareHistoryUrl): the exact-history
+// recovery then refreshes it directly at each run. A 429 pauses every FlightAware call of this isolate for 45 min.
+let flightAwareCooldownUntil=0;
+const FA_HEADERS={accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareLive/1.0)"};
+async function faGet(url,timeout=8000){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:FA_HEADERS});return {httpStatus:r.status,raw:r.ok?await r.text():""}}catch(e){return {httpStatus:0,raw:"",error:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}finally{clearTimeout(t)}}
+export function flightAwareHistoryUrl(raw,f){
+  const src=String(raw||"").replace(/\\\//g,"/").replace(/&amp;/g,"&"),found=[];
+  for(const m of src.matchAll(/https?:\/\/[^"'<>\s]*?\/live\/flight\/[A-Z0-9]+\/history\/(\d{8})\/(\d{4})Z\/([A-Z]{4})\/([A-Z]{4})/g))found.push({url:m[0],day:m[1],hm:m[2],origin:m[3]});
+  const dep=String(f.std||"").match(/(\d{1,2}):(\d{2})/),d=String(f.date||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!dep||!d)return "";
+  const stdUtc=Date.UTC(+d[1],+d[2]-1,+d[3],+dep[1],+dep[2])/60000-zoneOffsetMinutes(f.date,AIRPORT_TZ[upper(f.origin||"CDG")]||"Europe/Paris");
+  let best="",gap=241;
+  for(const c of found){
+    if(upper(f.origin||"CDG")==="CDG"&&c.origin!=="LFPG")continue;
+    const at=Date.UTC(+c.day.slice(0,4),+c.day.slice(4,6)-1,+c.day.slice(6,8),+c.hm.slice(0,2),+c.hm.slice(2,4))/60000,diff=Math.abs(at-stdUtc);
+    if(diff<gap){gap=diff;best=c.url}
+  }
+  return best;
+}
+async function fetchFlightAwareLive(f,knownUrl){
+  if(Date.now()<flightAwareCooldownUntil)return {status:"COOLDOWN"};
+  let url=clean(knownUrl),discovered=false;
+  if(!url){
+    const designator=(flightLookupVariants({airline:f.airline,number:f.number}).find(v=>v.lookupCodeType==="ICAO"&&v.lookupNumberType==="RAW")||{}).designator||f.designator;
+    const landing=await faGet(`https://www.flightaware.com/live/flight/${encodeURIComponent(designator)}`);
+    if(landing.httpStatus===429){flightAwareCooldownUntil=Date.now()+45*60000;return {status:"HTTP_429"}}
+    url=flightAwareHistoryUrl(landing.raw,f);if(!url)return {status:landing.httpStatus===200?"NO_OCCURRENCE_URL":(landing.error||"HTTP_"+landing.httpStatus)};
+    discovered=true;
+  }
+  const page=await faGet(url);
+  if(page.httpStatus===429){flightAwareCooldownUntil=Date.now()+45*60000;return {status:"HTTP_429"}}
+  if(page.httpStatus!==200)return {status:page.error||"HTTP_"+page.httpStatus,url};
+  const semantic=flightAwareJsonSemantic(page.raw,{origin:f.origin||"CDG",destination:f.destination});
+  return {status:Object.values(semantic).some(Boolean)?"OK":"NO_PARSED_FIELDS",url,discovered,semantic};
+}
 function normalizeFlight(row,x){const airline=upper(x.airline||row.airline),designator=upper(x.flight||row.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(row.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");const id=EXACT_FR24[`${designator}|${row.flight_date}`]||clean(x.fr24OccurrenceId||x.fr24_occurrence_id);return {date:row.flight_date,airline,number,designator,origin:upper(x.origin||"CDG"),destination:upper(x.destination||x.dest||""),std:hhmm(x.std||row.std),raw:{...x,fr24OccurrenceId:id}}}
 function textOnly(h){return String(h||"").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&#39;/g,"'").replace(/&quot;/gi,'"').replace(/\s+/g," ").trim()}
 function around(text,f){const u=upper(text),keys=[upper(f.designator),`${upper(f.airline)} ${upper(f.number)}`];let i=-1;for(const k of keys){i=u.indexOf(k);if(i>=0)break}return i<0?String(text||"").slice(0,7000):String(text||"").slice(Math.max(0,i-3000),Math.min(String(text||"").length,i+9000))}
@@ -73,11 +109,20 @@ async function applyOne(env,row){let fr24Id="";let base={};try{base=JSON.parse(r
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
+  // FlightAware (generic) only when no departure fact was found at all.
+  let faUrl="";
+  if(!clean(base.atd)&&!clean(base.takeoff)&&!clean(map.FR24?.atd)&&!clean(map.FR24?.takeoff)&&!clean(map.FLIGHTSTATS?.atd)){
+    const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
+    attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
+    if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
+    if(fa?.discovered)faUrl=fa.url;
+  }
   // PlaneFinder puis Skyscanner uniquement si quelque chose reste réellement à compléter.
   for(const source of ["PLANEFINDER","SKYSCANNER"]){const found={atd:choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd).value,eta:choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta).value,ata:choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata).value,status:choose(map,"status",LIVE_PUBLIC_SOURCE_ORDER.status).value,aircraft:choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft).value,reg:choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg).value};const n=needFromCurrent(base),left=(n.atd&&!found.atd)||(n.eta&&!found.eta)||(n.ata&&!found.ata)||(n.status&&!found.status)||(n.aircraft&&!found.aircraft)||(n.reg&&!found.reg);if(!left)break;const r=await fetchHtmlSource(source,f);attempts.push(attemptOf(source,r));map[source]=r?.semantic||{}}
   const current=await readCurrent(env,row.identity);if(!current)return {flight:f.designator,status:"FLIGHT_DISAPPEARED"};let changed=false;
   // The exact FR24 occurrence found once is kept on the flight: the next runs read its playback directly.
   if(fr24Id&&!clean(current.fr24OccurrenceId)){current.fr24OccurrenceId=fr24Id;changed=true}
+  if(faUrl&&!clean(current.flightAwareHistoryUrl)){current.flightAwareHistoryUrl=faUrl;changed=true}
   const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),landing=choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),ata=choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&/^(E4|ENT)$/.test(upper(f.airline))&&landing.value)ataHit={value:addMinutes(landing.value,10),source:"DERIVED_ENT_LANDING_PLUS_10"};if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   const explicit=choose(map,"status",LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";if(nextStatus&&!manual(current,"status")&&clean(current.status)!==nextStatus){current.status=nextStatus;current.statusSource=explicit.value?`PUBLIC_LIVE:${explicit.source}`:"PUBLIC_LIVE:DERIVED";current.statusUpdatedAt=at;changed=true}
