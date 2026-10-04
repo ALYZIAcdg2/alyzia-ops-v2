@@ -270,13 +270,13 @@ function opsLoad(x){
  // Classes come from the seatmap actually selected for the flight, then the company configuration (companyClassesForFlight).
  let ks;try{ks=typeof companyClassesForFlight==='function'?companyClassesForFlight(x):classKeys(x)}catch{ks=classKeys(x)}
  if(!Array.isArray(ks)||!ks.length)ks=classKeys(x);
- // Configuration of the aircraft type (wrapped sariaSelectedEntry): its classes, and its seat counts where the flight has none of its own.
+ // Configuration of the aircraft type: classes AND seat counts come from the seatmap plan (wrapped sariaSelectedEntry); the flight's own config is only a fallback without plan.
  let planned={};
  try{const entry=typeof sariaSelectedEntry==='function'?sariaSelectedEntry(x):null;if(entry){planned=sariaClassObject(entry);if(Object.keys(planned).length&&typeof cabinOrderedClassKeys==='function')ks=cabinOrderedClassKeys(Object.keys(planned))}}catch{}
  const number=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null,PAIRS={J:'C',C:'J',Y:'M',M:'Y'};
  // A cabin stored under its twin code (J/C, Y/M) still counts for the class the seatmap uses.
  const get=(o,k)=>{if(!o||typeof o!=='object')return null;if(k in o)return number(o[k]);const twin=PAIRS[k];return twin&&twin in o&&!ks.includes(twin)?number(o[twin]):null};
- const cfgOf=k=>get(x.config,k)??(k in planned?number(planned[k]):null),fmt=o=>ks.map(k=>k+(get(o,k)??0)).join(' · ')||'—';
+ const seatmapCfg=Object.keys(planned).length>0,cfgOf=k=>seatmapCfg?(k in planned?number(planned[k]):null):get(x.config,k),fmt=o=>ks.map(k=>k+(get(o,k)??0)).join(' · ')||'—';
  const cfgKnown=ks.some(k=>cfgOf(k)!==null);
  const capacity=ks.reduce((s,k)=>s+(cfgOf(k)??0),0),booked=ks.reduce((s,k)=>s+(get(x.booked,k)??0),0),nok=(x.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length;
  return {cfg:cfgKnown?ks.map(k=>k+(cfgOf(k)??0)).join(' · '):'—',book:fmt(x.booked),avail:number(x.available)??(cfgKnown?capacity-booked-nok:'—'),nok};
