@@ -91,6 +91,14 @@ export function pickStatus(map,order){
   for(const src of order){const key=upper(src).replace(/[^A-Z0-9]/g,"");const v=clean((map[key]||map[src])?.status);if(!v)continue;if(v==="ANNULÉ"&&cancelled<2)continue;return {value:v,source:key==="FLIGHTSTATSEXACT"?"FLIGHTSTATS":key}}
   return {value:"",source:""}
 }
+// "En vol / atterri / arrivé" read on a web page is only believed once the flight has a departure fact (ATD, takeoff, landing or ATA):
+// TU723 was "EN VOL" while FlightStats said Scheduled, delayed 4h10.
+export function guardAirborneStatus(status,x){
+  if(!/^(EN VOL|ATTERI|ARRIV)/.test(upper(status)))return status;
+  if(["atd","takeoff","landing","ata"].some(k=>clean(x?.[k])))return status;
+  const kept=clean(x?.status);
+  return kept&&!/^(EN VOL|ATTERI|ARRIV)/.test(upper(kept))?kept:(clean(x?.etd||x?.edt)&&clean(x?.etd||x?.edt)!==clean(x?.std)?"RETARDÉ":"PRÉVU");
+}
 function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   // Departure clocks must be local to the origin: a UTC reading (more than 50 min before STD) is shifted, an impossible one refused.
   if(field==="atd"||field==="takeoff"){const g=guardDepartureClock(hit.value,x.std,x.activeDate||x.date,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris");if(g.status==="REJECTED")return false;if(g.status==="SHIFTED")hit={...hit,value:g.value,source:`${hit.source}+LOCALIZED`}}
@@ -137,7 +145,7 @@ async function applyOne(env,row,{dryRun=false}={}){let fr24Id="";let base={};try
   if(faUrl&&clean(current.flightAwareHistoryUrl)!==faUrl){current.flightAwareHistoryUrl=faUrl;changed=true}
   const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),landing=choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),ata=choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&/^(E4|ENT)$/.test(upper(f.airline))&&landing.value)ataHit={value:addMinutes(landing.value,10),source:"DERIVED_ENT_LANDING_PLUS_10"};if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
-  const explicit=pickStatus(map,LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";if(nextStatus&&!manual(current,"status")&&clean(current.status)!==nextStatus){current.status=nextStatus;current.statusSource=explicit.value?`PUBLIC_LIVE:${explicit.source}`:"PUBLIC_LIVE:DERIVED";current.statusUpdatedAt=at;changed=true}
+  const explicit=pickStatus(map,LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";nextStatus=guardAirborneStatus(nextStatus,current);if(nextStatus&&!manual(current,"status")&&clean(current.status)!==nextStatus){current.status=nextStatus;current.statusSource=explicit.value?`PUBLIC_LIVE:${explicit.source}`:"PUBLIC_LIVE:DERIVED";current.statusUpdatedAt=at;changed=true}
   current.publicLiveBackfill={checkedAt:at,mode:"OPTIMIZED_ACTIVE_SOURCES",attempts,fr24OccurrenceId:clean(f.raw?.fr24OccurrenceId)||null};if(changed&&!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(current),row.identity).run();
   const out={flight:f.designator,status:changed?"UPDATED":"UNCHANGED",attempts};
   if(dryRun){const keys=["atd","takeoff","eta","landing","ata","reg","status","aircraftActual","fr24OccurrenceId","flightAwareHistoryUrl"];out.dryRun=true;out.before=Object.fromEntries(keys.map(k=>[k,base[k]??null]));out.after=Object.fromEntries(keys.map(k=>[k,current[k]??null]));out.sources=Object.fromEntries(Object.entries(map).map(([k,v])=>[k,Object.fromEntries(Object.entries(v||{}).filter(([,x])=>clean(x)))]))}

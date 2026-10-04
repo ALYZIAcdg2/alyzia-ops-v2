@@ -17,3 +17,15 @@ test("ON-TIME is not a registration",()=>{
   assert.ok(!isWebWordRegistration("TS-IMX"));
   assert.ok(!isWebWordRegistration("EC-NCK"));
 });
+
+import {guardAirborneStatus} from "./ops-public-live-flow-optimized.js";
+test("EN VOL / ARRIVÉE without any departure fact is refused",()=>{
+  assert.equal(guardAirborneStatus("EN VOL",{std:"21:00",etd:"01:10",status:"RETARDÉ"}),"RETARDÉ");
+  assert.equal(guardAirborneStatus("ARRIVÉE",{std:"20:45"}),"PRÉVU");
+  assert.equal(guardAirborneStatus("EN VOL",{std:"21:00",etd:"23:10"}),"RETARDÉ");
+});
+test("EN VOL is kept when the flight has an ATD",()=>{
+  assert.equal(guardAirborneStatus("EN VOL",{atd:"21:12"}),"EN VOL");
+  assert.equal(guardAirborneStatus("ARRIVÉE",{takeoff:"12:17"}),"ARRIVÉE");
+  assert.equal(guardAirborneStatus("RETARDÉ",{}),"RETARDÉ");
+});
