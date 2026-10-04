@@ -1,4 +1,4 @@
-import {auditFlightData} from "./admin-data-audit.js";
+import {auditFlightData,listCancelled} from "./admin-data-audit.js";
 import app from "./v2-admin-all-public-sources-wrapper.js";
 import {ETD_PUBLIC_SOURCE_ORDER} from "./etd-public-flow.js";
 import {runEtdPublicFlowSafe,etdPublicStatusSafe} from "./etd-public-runner.js";
@@ -81,6 +81,9 @@ export default {
     if(url.pathname==="/api/admin/live-one"){
       // GET: what the live flow would read and write for one flight (nothing is saved). POST: applies it now, like a cron run.
       try{return json(await runLiveForFlight(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||"",dryRun:request.method!=="POST"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/cancelled"&&request.method==="GET"){
+      try{return json(await listCancelled(env,{from:url.searchParams.get("from")||"",to:url.searchParams.get("to")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/data-audit"){
       // GET: read-only audit of local clocks and flight dates (from / to = YYYY-MM-DD, default yesterday..tomorrow). POST ?repair=1: fixes dates and UTC clocks.

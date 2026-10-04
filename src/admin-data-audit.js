@@ -43,3 +43,14 @@ export async function auditFlightData(env,{from="",to="",repair=false}={}){
   const counts={};for(const i of issues)counts[i.type]=(counts[i.type]||0)+1;
   return {ok:true,from:a,to:b,checked:results.length,counts,repaired,repair,issues:issues.slice(0,300)};
 }
+
+// Read-only list of the cancelled flights (status ANNULÉ / CANCELLED) of a day range, with the source that set the status.
+export async function listCancelled(env,{from="",to=""}={}){
+  if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
+  const today=parisDate(),a=from||today,b=to||a;
+  const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_date,flight_number,std,data_json FROM flights WHERE flight_date BETWEEN ? AND ? AND airline<>'SYS' ORDER BY flight_date,std`).bind(a,b).all();
+  const flights=[];
+  for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{continue}
+    if(/CANCEL|ANNUL/.test(upper(x.status)))flights.push({date:row.flight_date,flight:row.flight_number,std:row.std,dest:x.dest||x.destination||"",status:x.status,source:clean(x.statusSource)})}
+  return {ok:true,from:a,to:b,scanned:results.length,cancelled:flights.length,flights};
+}
