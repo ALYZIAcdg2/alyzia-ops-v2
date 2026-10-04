@@ -12,14 +12,15 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .flight-home-row.ops-flight-card:hover{border-color:#9ebfe3!important;background:#fff!important;box-shadow:0 5px 18px rgba(23,60,103,.07)!important}
 #app .flight-home-row.ops-flight-card:focus-visible{outline:3px solid #4b9bef;outline-offset:3px}
 #app .flight-home-row.ops-flight-card>*{display:block!important;min-width:0!important;grid-area:auto!important;max-width:100%!important}
-#app .flight-home-row.ops-flight-card>.ops-identity{grid-area:identity!important;display:grid!important;grid-template-columns:120px minmax(0,1fr)!important;gap:18px!important;align-items:center!important}
+#app .flight-home-row.ops-flight-card>.ops-identity{grid-area:identity!important;display:block!important}
 #app .flight-home-row.ops-flight-card *{text-transform:none!important}
-#app .ops-logo{display:grid;place-items:center;width:120px;min-width:0}
-#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{display:block!important;width:120px!important;height:94px!important;max-width:120px!important;max-height:94px!important;object-fit:contain!important;object-position:center!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important;transform:none!important}
-#app .ops-logo .airline-logo-fallback{display:grid!important;place-items:center!important;font-size:24px!important;color:#345578!important}
-#app .ops-logo-symbol{display:block;width:82px!important;height:94px!important;overflow:hidden!important}
+#app .ops-logo{display:flex!important;align-items:center;justify-content:flex-start;width:auto;min-width:36px;max-width:84px;height:44px;flex:none}
+#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{display:block!important;width:auto!important;height:44px!important;max-width:84px!important;max-height:44px!important;object-fit:contain!important;object-position:center!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important;transform:none!important}
+#app .ops-logo .airline-logo-fallback{display:grid!important;place-items:center!important;font-size:20px!important;color:#345578!important}
+#app .ops-logo-symbol{display:block;width:40px!important;height:44px!important;overflow:hidden!important}
 #app .ops-flight-number{font-size:30px!important;line-height:1.15!important;font-weight:800!important;color:#071227!important;white-space:nowrap}
-#app .ops-flight-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#app .ops-flight-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#app .ops-flight-line .ops-flight-number{line-height:44px!important}
 #app .ops-status-badge{display:inline-flex;align-items:center;max-width:100%;padding:7px 10px;border-radius:7px;background:#e6f8f3;color:#008f74;font-size:12px!important;font-weight:800!important;line-height:1.25;overflow-wrap:anywhere}
 #app .ops-status-badge.retarde{background:#fff4e4;color:#a66006}
 #app .ops-status-badge.annule{background:#fff0f2;color:#bd3047}
@@ -47,9 +48,12 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-airport-meta .wx-svg{width:20px!important;height:20px!important}
 #app .ops-airport-meta .wx-line b{font-size:14px!important;color:#365472!important}
 #app .ops-airport-meta .wx-line small{font-size:10px!important;color:#60758c!important}
-#app .ops-route-line{display:flex;align-items:center;gap:8px;color:#0864ba;padding-top:2px}
-#app .ops-route-line:before,#app .ops-route-line:after{content:"";height:1.5px;background:#77b0ff;flex:1}
-#app .ops-plane-icon{width:30px;height:30px;flex:none;fill:currentColor}
+#app .ops-route-line{--p:.5;position:relative;height:30px;min-width:35px;color:#0864ba;margin-top:1px}
+#app .ops-route-track,#app .ops-route-fill{position:absolute;left:0;top:50%;height:2px;margin-top:-1px;border-radius:2px}
+#app .ops-route-track{right:0;background:repeating-linear-gradient(90deg,#9cc4f5 0 6px,transparent 6px 10px)}
+#app .ops-route-fill{width:calc(15px + (100% - 30px)*var(--p));background:#2f86e6;transition:width .8s ease}
+#app .ops-route-line.static .ops-route-fill{display:none}
+#app .ops-plane-icon{position:absolute;left:calc(15px + (100% - 30px)*var(--p));top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;fill:currentColor;background:#fff;border-radius:50%;transition:left .8s ease}
 #app .ops-times{display:grid!important;grid-template-columns:1fr 1fr!important;gap:12px!important}
 #app .ops-time-group{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:5px!important;padding:14px 12px!important;background:#f2f5f9!important;border-radius:9px!important;min-width:0!important}
 #app .ops-time{min-width:0;text-align:center}
@@ -58,6 +62,8 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-time b.ops-missing{color:#587397!important;font-weight:500!important}
 #app .ops-time b.ops-estimated{color:#d98200!important}
 #app .ops-time b.ops-estimated .ops-day{color:inherit!important}
+#app .ops-time b.ops-ontime,#app .ops-time b.ops-ontime .ops-day{color:#0a8f5a!important}
+#app .ops-time b.ops-late,#app .ops-time b.ops-late .ops-day{color:#d3213f!important}
 #app .ops-day{font-size:11px!important;font-weight:500;margin-left:2px;vertical-align:baseline;color:#183a61}
 #app .ops-status-context{display:flex;gap:4px 16px;flex-wrap:wrap;margin-top:9px;color:#4b6787;font-size:13px!important;line-height:1.4}
 #app .flight-home-row.ops-flight-card>.ops-expand{grid-area:expand!important;width:32px!important;height:44px!important;min-height:44px!important;border:0!important;border-radius:7px!important;background:transparent!important;padding:4px!important;color:#123d67!important;cursor:pointer}
@@ -79,9 +85,6 @@ body:has(#app .home-page){background:#edf4fa!important}
 @media(max-width:1199px) and (min-width:721px){
  #app .flight-home-row.ops-flight-card{grid-template-columns:minmax(260px,1fr) minmax(0,1.7fr) 28px!important;grid-template-areas:"identity journey expand" "details details details"!important;gap:16px!important;padding:20px!important}
  #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity journey expand"!important}
- #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:90px minmax(0,1fr)!important;gap:12px!important}
- #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{width:90px!important;max-width:90px!important;height:70px!important}
- #app .ops-logo-symbol{width:64px!important;height:70px!important}
  #app .ops-flight-number{font-size:25px!important}#app .ops-airline-name,#app .ops-aircraft{font-size:14px!important}
  #app .ops-airport-code{font-size:24px!important}#app .ops-route{gap:12px!important;grid-template-columns:auto 1fr auto!important}
  #app .ops-time-group{padding:12px 7px!important;gap:2px!important}#app .ops-time b{font-size:17px!important}#app .ops-time small{font-size:11px!important}
@@ -91,9 +94,8 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .flight-home-list{gap:14px!important}
  #app .flight-home-row.ops-flight-card{grid-template-columns:minmax(0,1fr) 30px!important;grid-template-areas:"identity expand" "journey journey" "details details"!important;gap:16px 8px!important;padding:16px 13px!important;min-height:0!important;border-radius:13px!important;overflow:visible!important}
  #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity expand" "journey journey"!important}
- #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:88px minmax(0,1fr)!important;gap:13px!important}
- #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{width:88px!important;max-width:88px!important;height:70px!important}
- #app .ops-logo-symbol{width:58px!important;height:70px!important}
+ #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{max-width:72px!important;height:40px!important;max-height:40px!important}
+ #app .ops-logo{height:40px}#app .ops-logo-symbol{width:36px!important;height:40px!important}#app .ops-flight-line .ops-flight-number{line-height:40px!important}
  #app .ops-flight-number{font-size:25px!important}#app .ops-airline-name,#app .ops-aircraft{font-size:14px!important;margin-top:2px}
  #app .ops-route{grid-template-columns:auto minmax(25px,1fr) auto!important;gap:10px!important;margin-bottom:13px!important}
  #app .ops-airport-code{font-size:25px!important;gap:6px}#app .ops-airport-city{font-size:14px!important}#app .ops-flag{font-size:20px}
@@ -104,7 +106,9 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .ops-extra .ops-load-info{padding:4px 4px 10px}#app .ops-extra .ops-load-info strong{font-size:20px!important}
 }
 @media(prefers-reduced-motion:reduce){#app .ops-expand svg{transition:none}}
-#app .flight-home-row.ops-flight-card[style*="display: none"]{display:none!important}
+#app .flight-home-row.ops-flight-card[style*="display: none"],#app .flight-home-row.ops-flight-card.alyzia-final-time-hidden,#app .flight-home-row.ops-flight-card.alyzia-auto-past-hidden{display:none!important}
+#app .home-print-btn{display:none!important}
+.nav-plane{display:block;margin:auto}
 @media print{#app .flight-home-row.ops-flight-card{break-inside:avoid!important}#app .ops-expand{visibility:hidden}}
 </style>`;
 
@@ -137,7 +141,15 @@ function opsFlightForRow(row){
  const date=txt(local.activeDate||local.date||''),remote=live.find(x=>keyFlight(x)===keyFlight(local)&&txt(x.activeDate||x.date||'')===date&&up(x.dep||x.origin)===up(local.dep||local.origin)&&up(x.dest||x.destination)===up(local.dest||local.destination));
  return {x:{...local,...remote,config:local.config,booked:local.booked,inopSeats:local.inopSeats},idx};
 }
-function opsTimeCell(label,value,day){const cls=!value?'ops-missing':(label==='ETD'||label==='ETA')?'ops-estimated':'';return '<div class="ops-time"><small>'+label+'</small><b class="'+cls+'">'+esc(value||'—')+(value&&day?'<span class="ops-day">'+(day>0?'+':'')+day+'</span>':'')+'</b></div>'}
+function opsClockMin(v){const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null}
+// Green = at or before schedule (STD for ETD/ATD/TO, STA for ETA/ATA/LDG). After schedule: red for actual times, orange for estimates.
+function opsTimeTone(label,value,t){
+ const sched={ETD:t.std,ATD:t.std,TO:t.std,ETA:t.sta,ATA:t.sta,LDG:t.sta}[label];if(sched===undefined)return '';
+ const a=opsClockMin(sched),b=opsClockMin(value);if(a===null||b===null)return '';
+ let d=b-a;if(d<-720)d+=1440;if(d>720)d-=1440;
+ return d<=0?'ops-ontime':(label==='ETD'||label==='ETA')?'ops-estimated':'ops-late';
+}
+function opsTimeCell(label,value,day,t){const cls=!value?'ops-missing':opsTimeTone(label,value,t||{});return '<div class="ops-time"><small>'+label+'</small><b class="'+cls+'">'+esc(value||'—')+(value&&day?'<span class="ops-day">'+(day>0?'+':'')+day+'</span>':'')+'</b></div>'}
 function opsWeather(code){let html='';try{if(typeof wxInner==='function')html=wxInner(up(code))}catch{}return '<div class="wx-line wx-mini" data-wx="'+esc(up(code))+'" aria-label="Météo '+esc(code)+'">'+html+'</div>'}
 
 function opsTimes(x){const s=safeSchedule(x),t=times(x);return {...t,sta:clock(val(x,'sta','scheduledArrival','scheduled_arrival')),eta:clock(val(x,'eta','estimatedArrival','estimated_arrival')),staDay:Number(x.staDay??s.staDay)||0,etaDay:Number(x.etaDay??s.etaDay)||0,landingDay:Number(x.landingDay)||0}}
@@ -148,6 +160,25 @@ function opsLocalUtc(date,time,code,day=0){
  for(let i=0;i<3;i++){const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:zone,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(new Date(guess)).map(p=>[p.type,p.value]));guess=base-(Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute,+p.second)-guess)}return guess;
 }
 function opsMinutes(n){const m=Math.max(0,Math.floor(n));return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m'}
+function opsDate(x){let d=txt(x.activeDate||x.date||'');if(!d){try{d=txt(HOME_DATE)}catch{}}return d}
+function opsDepartureUtc(x,t){
+ const actual=t.takeoff||t.atd;if(!actual)return null;
+ const std=opsClockMin(t.std),at=opsClockMin(actual),day=Number((t.takeoff?x.takeoffDay:x.atdDay)??(std!==null&&at!==null&&std-at>720?1:0))||0;
+ return opsLocalUtc(opsDate(x),actual,x.dep||x.origin||'CDG',day);
+}
+function opsArrivalUtc(x,t){
+ let arrival=Date.parse(txt(x.statusArrivalUtc));
+ if(!Number.isFinite(arrival))arrival=opsLocalUtc(opsDate(x),t.eta||t.sta,x.dest||x.destination,t.eta?t.etaDay:t.staDay);
+ return Number.isFinite(arrival)?arrival:null;
+}
+// Share of the flight already flown (0..1) from takeoff/ATD to ETA/STA; null when it cannot be computed.
+function opsProgress(x,t,st){
+ if(t.ata||t.landing||/^(ARRIV|ATTERR)/.test(up(st.main)))return 1;
+ const departure=opsDepartureUtc(x,t);if(departure===null)return up(st.main)==='EN VOL'?null:0;
+ let arrival=opsArrivalUtc(x,t);if(arrival===null)return null;
+ if(arrival<=departure)arrival+=86400000;
+ return Math.min(1,Math.max(0,(Date.now()-departure)/(arrival-departure)));
+}
 function opsListStatus(x,t){
  const raw=up(x.status),st=opStatus(x),date=txt(x.activeDate||x.date||''),manual=up(x.statusSource||x.status_source).includes('MANUAL');
  if(raw&&(manual||raw.includes('ANNUL')))st.main=raw;
@@ -167,25 +198,29 @@ function opsListStatus(x,t){
  return st;
 }
 function opsLoad(x){
+ // Classes come from the seatmap actually selected for the flight, then the company configuration (companyClassesForFlight).
  let ks;try{ks=typeof companyClassesForFlight==='function'?companyClassesForFlight(x):classKeys(x)}catch{ks=classKeys(x)}
- const number=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null;
- const fmt=o=>ks.map(k=>k+(number(o?.[k])??'—')).join(' · ')||'—';
- const values=ks.map(k=>[number(x.config?.[k]),number(x.booked?.[k])]),known=values.length&&values.every(v=>v.every(n=>n!==null));
- const capacity=known?values.reduce((s,v)=>s+v[0],0):null,booked=known?values.reduce((s,v)=>s+v[1],0):null,nok=(x.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length;
- return {cfg:fmt(x.config),book:fmt(x.booked),avail:number(x.available)??(known?capacity-booked-nok:'—'),nok};
+ if(!Array.isArray(ks)||!ks.length)ks=classKeys(x);
+ const number=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null,PAIRS={J:'C',C:'J',Y:'M',M:'Y'};
+ // A cabin stored under its twin code (J/C, Y/M) still counts for the class the seatmap uses.
+ const get=(o,k)=>{if(!o||typeof o!=='object')return null;if(k in o)return number(o[k]);const twin=PAIRS[k];return twin&&twin in o&&!ks.includes(twin)?number(o[twin]):null};
+ const fmt=o=>ks.map(k=>k+(get(o,k)??0)).join(' · ')||'—';
+ const cfgKnown=ks.some(k=>get(x.config,k)!==null);
+ const capacity=ks.reduce((s,k)=>s+(get(x.config,k)??0),0),booked=ks.reduce((s,k)=>s+(get(x.booked,k)??0),0),nok=(x.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length;
+ return {cfg:cfgKnown?fmt(x.config):'—',book:fmt(x.booked),avail:number(x.available)??(cfgKnown?capacity-booked-nok:'—'),nok};
 }
 function renderRow(row){
- const resolved=opsFlightForRow(row);if(!resolved)return;const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=val(x,'aircraftActual','aircraft')||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
+ const resolved=opsFlightForRow(row);if(!resolved)return;const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=val(x,'aircraftActual','aircraft')||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
  const key=[flight,x.activeDate||x.date,dep,dest].join('|'),expanded=expandedFlights.has(key),isFav=favorite(x);
  let name=x.airline;try{if(typeof airlineDisplayName==='function')name=opsTitle(airlineDisplayName(x.airline))}catch{}
  const notes=Array.isArray(x.flightNotes)?x.flightNotes.filter(n=>txt(n?.text)).length:0;
- const sig=JSON.stringify([idx,flight,name,dep,dest,t,st,ac,reg,x.gate,term,load,isFav,notes,expanded]);if(row.dataset.opsSig===sig)return;
+ const sig=JSON.stringify([idx,flight,name,dep,dest,t,st,ac,reg,x.gate,term,load,isFav,notes,expanded,progress===null?null:Math.round(progress*100)]);if(row.dataset.opsSig===sig)return;
  row.dataset.opsSig=sig;row.classList.remove('v2x-row');row.classList.add('ops-flight-card');row.setAttribute('role','button');row.tabIndex=0;row.setAttribute('aria-label','Ouvrir la fiche du vol '+flight);
  row.onkeydown=e=>{if(e.target===row&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openFlightFromHomeList(idx)}};
  let badge='';try{if(typeof prepaBadge==='function')badge=prepaBadge(x,x.activeDate||x.date)}catch{}
- row.innerHTML='<div class="ops-identity"><div class="ops-logo">'+opsAirlineLogo(x,idx)+'</div><div><div class="ops-flight-line"><span class="ops-flight-number">'+esc(flight)+'</span><span class="ops-status-badge '+st.cls+'">'+esc(st.main)+'</span></div><div class="ops-airline-name">'+esc(name)+'</div><div class="ops-aircraft"><strong class="ops-aircraft-type">'+esc(ac)+'</strong><span class="ops-aircraft-location ops-terminal" data-terminal="'+esc((up(term).match(/^T[123]/)||[])[0]||'')+'">TERMINAL <strong>'+esc(term||'—')+'</strong></span><span class="ops-aircraft-location">GATE <strong>'+esc(x.gate||'—')+'</strong></span></div><div class="ops-registration">'+esc(reg)+'</div></div></div>'+
- '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-meta"><div class="ops-airport-city">'+esc(opsCity(dep))+'</div>'+opsWeather(dep)+'</div></div><div class="ops-route-line">'+opsPlane+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-meta"><div class="ops-airport-city">'+esc(opsCity(dest))+'</div>'+opsWeather(dest)+'</div></div></div>'+
- '<div class="ops-times"><div class="ops-time-group">'+opsTimeCell('STD',t.std)+opsTimeCell('ETD',t.etd)+opsTimeCell('ATD',t.atd)+opsTimeCell('TO',t.takeoff)+'</div><div class="ops-time-group">'+opsTimeCell('STA',t.sta,t.staDay)+opsTimeCell('ETA',t.eta,t.etaDay)+opsTimeCell('LDG',t.landing,t.landingDay)+opsTimeCell('ATA',t.ata,t.ataDay)+'</div></div>'+((st.sub||st.remain)?'<div class="ops-status-context">'+(st.sub?'<span>'+esc(st.sub)+'</span>':'')+(st.remain?'<span>'+esc(st.remain)+'</span>':'')+'</div>':'')+'</div>'+
+ row.innerHTML='<div class="ops-identity"><div class="ops-flight-line"><span class="ops-logo">'+opsAirlineLogo(x,idx)+'</span><span class="ops-flight-number">'+esc(flight)+'</span><span class="ops-status-badge '+st.cls+'">'+esc(st.main)+'</span></div><div><div class="ops-airline-name">'+esc(name)+'</div><div class="ops-aircraft"><strong class="ops-aircraft-type">'+esc(ac)+'</strong><span class="ops-aircraft-location ops-terminal" data-terminal="'+esc((up(term).match(/^T[123]/)||[])[0]||'')+'">TERMINAL <strong>'+esc(term||'—')+'</strong></span><span class="ops-aircraft-location">GATE <strong>'+esc(x.gate||'—')+'</strong></span></div><div class="ops-registration">'+esc(reg)+'</div></div></div>'+
+ '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-meta"><div class="ops-airport-city">'+esc(opsCity(dep))+'</div>'+opsWeather(dep)+'</div></div><div class="ops-route-line'+(progress===null?' static':'')+'" style="--p:'+(progress===null?.5:progress.toFixed(3))+'" role="img" aria-label="'+(progress===null?'Trajet':'Progression du vol '+Math.round(progress*100)+' %')+'"><span class="ops-route-track"></span><span class="ops-route-fill"></span>'+opsPlane+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-meta"><div class="ops-airport-city">'+esc(opsCity(dest))+'</div>'+opsWeather(dest)+'</div></div></div>'+
+ '<div class="ops-times"><div class="ops-time-group">'+opsTimeCell('STD',t.std)+opsTimeCell('ETD',t.etd,0,t)+opsTimeCell('ATD',t.atd,0,t)+opsTimeCell('TO',t.takeoff,0,t)+'</div><div class="ops-time-group">'+opsTimeCell('STA',t.sta,t.staDay)+opsTimeCell('ETA',t.eta,t.etaDay,t)+opsTimeCell('LDG',t.landing,t.landingDay,t)+opsTimeCell('ATA',t.ata,t.ataDay,t)+'</div></div>'+((st.sub||st.remain)?'<div class="ops-status-context">'+(st.sub?'<span>'+esc(st.sub)+'</span>':'')+(st.remain?'<span>'+esc(st.remain)+'</span>':'')+'</div>':'')+'</div>'+
  '<button type="button" class="ops-expand" aria-label="Détails du vol '+esc(flight)+'" aria-expanded="'+expanded+'" aria-controls="ops-extra-'+idx+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></button>'+
  '<div id="ops-extra-'+idx+'" class="ops-extra"'+(expanded?'':' hidden')+'><div class="ops-load-summary"><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info">AVAILABLE <strong>'+esc(load.avail)+'</strong></span></div><div class="ops-extra-actions">'+(load.nok?'<span>INOP <strong>'+load.nok+'</strong></span>':'')+badge+
  '<button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'<button type="button" class="ops-open-detail">Ouvrir la fiche vol →</button></div></div>';

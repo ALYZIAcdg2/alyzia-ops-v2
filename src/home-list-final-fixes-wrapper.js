@@ -33,7 +33,7 @@ function rowIndex(row){const src=String(row.getAttribute('onclick')||row.querySe
 function cabinText(obj,x){if(!obj||typeof obj!=='object')return String(obj||'—');const copy={...obj};for(const [a,b] of [['J','C'],['Y','M']]){const target=pairTarget(x,a,b);if(target)delete copy[target===a?b:a]}const order=['F','J','C','S','W','E','Y','M'],keys=Object.keys(copy);return [...order.filter(k=>k in copy),...keys.filter(k=>!order.includes(k))].map(k=>k+Number(copy[k]||0)).join(' ')||'—'}
 function fixRows(){const list=flights();document.querySelectorAll('#app .flight-home-row').forEach(row=>{const i=rowIndex(row),x=i!==null?list[i]:null;if(!x)return;repairPairs(x);row.querySelectorAll('.v2-metric').forEach(m=>{const label=norm(m.querySelector('.v2-metric-label')?.textContent),v=m.querySelector('.v2-metric-value');if(!v)return;if(label==='CONFIG'){const t=cabinText(cfg(x),x);if(v.textContent!==t)v.textContent=t}if(label==='BOOKING'){const t=typeof window.__alyziaCanonBooking==='function'?window.__alyziaCanonBooking(x):cabinText(x.booked||x.booking||x.load?.booked,x);if(v.textContent!==t)v.textContent=t}})})}
 function minutes(v){const m=String(v||'').match(/(\d{1,2}):(\d{2})/);if(!m)return null;const h=Number(m[1]),mn=Number(m[2]);return h>=0&&h<24&&mn>=0&&mn<60?h*60+mn:null}
-function cellTime(row,label){for(const c of row.querySelectorAll('.v2-time-cell')){if(norm(c.querySelector('.v2-time-label')?.textContent)===label){const t=minutes(c.querySelector('.v2-time-value')?.textContent);if(t!==null)return t}}return null}
+function cellTime(row,label){for(const c of row.querySelectorAll('.ops-time')){if(norm(c.querySelector('small')?.textContent)===label){const t=minutes(c.querySelector('b')?.textContent);if(t!==null)return t}}for(const c of row.querySelectorAll('.v2-time-cell')){if(norm(c.querySelector('.v2-time-label')?.textContent)===label){const t=minutes(c.querySelector('.v2-time-value')?.textContent);if(t!==null)return t}}return null}
 // Tranche horaire = heure RÉELLE de départ : ATD, sinon ETD, sinon STD (heure programmée).
 function stdFromRow(row){const real=cellTime(row,'ATD');if(real!==null)return real;const est=cellTime(row,'ETD');if(est!==null)return est;const txt=String(row.textContent||'').replace(/\s+/g,' ');const m=txt.match(/\bSTD\s*(\d{1,2}:\d{2})\b/i);if(m)return minutes(m[1]);const i=rowIndex(row),x=i!==null?flights()[i]:null;if(x){const t=minutes(x.atd)??minutes(x.etd||x.edt)??minutes(x.std);if(t!==null)return t}return null}
 function updateVisibleFlightCount(){
@@ -61,7 +61,7 @@ function parisMinutesNow(){const p=new Intl.DateTimeFormat('fr-FR',{timeZone:'Eu
 function parisTodayISO(){return new Intl.DateTimeFormat('fr-CA',{timeZone:'Europe/Paris'}).format(new Date())}
 function homeIsToday(){try{return String(HOME_DATE)===parisTodayISO()}catch(e){return false}}
 function rowAutoPast(row,nowMin){
-  const status=norm(row.querySelector('.v2-status')?.textContent);
+  const status=norm((row.querySelector('.v2-status')||row.querySelector('.ops-status-badge'))?.textContent);
   const cancelled=status.includes('ANNUL');
   const departed=cellTime(row,'ATD')!==null||cellTime(row,'ATA')!==null||/^(ARRIV|EN VOL|DÉCOLL|DECOLL)/.test(status);
   if(!cancelled&&!departed)return false;
