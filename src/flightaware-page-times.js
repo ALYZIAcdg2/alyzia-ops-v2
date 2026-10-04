@@ -12,6 +12,13 @@ function localClock(epochSeconds,zone){
   try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone||"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(n*1000)).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return ""}
 }
 
+// The occurrence page URL out of whatever text holds it: a page full of share links also contains
+// "https://facebook.com/sharer.php?u=https://www.flightaware.com/live/flight/ENT777/history/20261004/0310Z/LFPG/LATI", which must not be taken as a URL.
+export function cleanFlightAwareUrl(value){
+  const m=String(value??"").replace(/\\\//g,"/").replace(/&amp;/g,"&").match(/https?:\/\/(?:www\.)?flightaware\.com\/live\/flight\/[A-Za-z0-9]+\/history\/\d{8}\/\d{4}Z\/[A-Z]{4}\/[A-Z]{4}/);
+  return m?m[0]:"";
+}
+
 // Returns epoch seconds per key, e.g. {atd:{scheduled,estimated,actual},takeoff:{...},landing:{...},arrival:{...}} (missing keys absent).
 export function flightAwareJsonTimes(raw){
   const src=normalize(raw),out={};
