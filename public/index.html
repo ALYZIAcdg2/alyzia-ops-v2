@@ -7333,7 +7333,7 @@ const ALYZIA_APP_BUILD='2026-08-31-129';
 <header class="topbar">
  <div class="brand"><div class="brand-logo">✈</div><span>ALYZIA OPS</span><span class="app-version-badge brand-version">V50.27</span></div>
  <nav class="nav">
-   <button class="home-nav" onclick="renderHome()" title="Accueil vols">⌂</button>
+   <button class="home-nav" onclick="renderHome()" title="Accueil vols" aria-label="Vols"><svg class="nav-plane" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg></button>
    <button onclick="renderHome()">VOLS</button><button onclick="openFlightSearch()">RECHERCHE</button><button onclick="renderPrepa()">PRÉPA</button><button onclick="renderTools()">OUTILS</button><button>ADMIN</button>
  </nav>
  <div class="top-right"><span class="clock">◷ <span id="topClock">--:--:--</span></span><button id="topSyncBtn" class="top-sync-btn" onclick="manualCloudRefreshTop()" title="Actualiser sans changer de page">↻</button><span>🔔</span><span class="avatar">●</span><span>OPS CDG⌄</span></div>
@@ -8689,7 +8689,7 @@ function renderHome(){
        <button class="day-nav-btn" onclick="changeSelectedDate(-1)">J-1</button>
        <button class="date-main-btn" onclick="openDateCalendar()">▣ ${dateLabel}</button>
        <button class="day-nav-btn" onclick="changeSelectedDate(1)">J+1</button>
-       <span id="homeVisibleFlightCount" class="flight-count-badge">${rows.length} VOL${rows.length>1?'S':''}</span><button class="home-print-btn" onclick="printFlightList()">🖨 IMPRIMER</button>
+       <span id="homeVisibleFlightCount" class="flight-count-badge">${rows.length} VOL${rows.length>1?'S':''}</span>
      </div>
    </div>
    <div class="terminal-filter-bar" title="Filtre par terminal">
@@ -24331,7 +24331,7 @@ try{
 </script>
 
 <nav class="mobile-bottom-nav" aria-label="Navigation mobile">
-  <button onclick="renderHome()" data-mobile-nav="home"><span>⌂</span><small>VOLS</small></button>
+  <button onclick="renderHome()" data-mobile-nav="home"><span><svg class="nav-plane" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg></span><small>VOLS</small></button>
   <button onclick="openFlightSearch()" data-mobile-nav="search"><span>⌕</span><small>RECHERCHE</small></button>
   <button onclick="renderPrepa()" data-mobile-nav="prepa"><span>✓</span><small>PRÉPA</small></button>
   <button onclick="renderTools()" data-mobile-nav="tools"><span>⚙</span><small>OUTILS</small></button>

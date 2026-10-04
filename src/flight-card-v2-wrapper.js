@@ -113,7 +113,8 @@ const UI=String.raw`
   function clean(){
     document.querySelectorAll('button,[role="button"]').forEach(el=>{const t=up(el.textContent).replace(/[^A-ZÀ-ÖØ-Þ]/g,'');if(t==='IMPRIMER')el.style.setProperty('display','none','important')});
     document.querySelectorAll('.topbar *,.mobile-bottom-nav *,body > div:not(#modal) *').forEach(el=>{if(el.children.length!==0||el.style.display==='none')return;const t=txt(el.textContent);if(t.length<=12&&/^V\d+(?:\.\d+)+$/i.test(t))el.style.setProperty('display','none','important')});
-    const nav=document.querySelector('.mobile-bottom-nav [data-mobile-nav="home"] span');if(nav&&nav.textContent!=='✈️')nav.textContent='✈️';
+    // The home nav icon is an inline plane SVG (see index.html); only restore it if something replaced it with text.
+    const nav=document.querySelector('.mobile-bottom-nav [data-mobile-nav="home"] span');if(nav&&!nav.querySelector('svg'))nav.innerHTML='<svg class="nav-plane" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>';
     document.querySelectorAll('.flight-home-row').forEach(r=>{try{render(r)}catch(e){}});
     // A row whose card could not be built (unknown flight...) must not stay invisible.
     document.querySelectorAll('.flight-home-row:not(.v2-ready):not([data-v2-skip])').forEach(r=>r.setAttribute('data-v2-skip','1'));
