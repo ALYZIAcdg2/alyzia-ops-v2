@@ -105,3 +105,9 @@ export function noteActualAircraft(x,rawType,source,at){
   }else if(x.aircraftChange){delete x.aircraftChange;changed=true}
   return changed;
 }
+
+// Même conversion, côté navigateur : sérialise les tables et les fonctions ci-dessus pour que les cartes et la fiche vol affichent
+// le type normalisé Seatmap (359, 77W, 32Q…) et retrouvent les plans cabine d'un type via ses codes équivalents.
+export function clientSeatmapTypeSource(){
+  return `(()=>{const clean=${clean.toString()},upper=${upper.toString()},ICAO_TO_IATA=${JSON.stringify(ICAO_TO_IATA)},CONFIG_ALIASES=${JSON.stringify(CONFIG_ALIASES)},LONG_TYPE_RULES=[${LONG_TYPE_RULES.map(([re,code])=>`[${re.toString()},${JSON.stringify(code)}]`).join(",")}];${toIata.toString()}${configCodes.toString()}return {toIata,configCodes}})()`;
+}

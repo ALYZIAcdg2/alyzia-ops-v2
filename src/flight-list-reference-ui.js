@@ -1,4 +1,6 @@
 // Flight-list presentation. The existing flight model, filters and actions remain canonical.
+import { clientSeatmapTypeSource } from "./aircraft-change.js";
+
 export const REFERENCE_LIST_STYLE = String.raw`<style id="alyzia-flight-list-reference-css">
 body:has(#app .home-page){background:#edf4fa!important}
 .page:has(.home-page){background:#edf4fa!important;min-height:calc(100vh - 60px)!important}
@@ -74,9 +76,9 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity journey expand"!important}
 #app .ops-extra strong{color:#102f50}
 #app .ops-load-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;align-items:stretch}
-#app .ops-extra .ops-load-info{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;padding:4px 8px 12px;min-width:0;min-height:78px;border-right:1px solid #e1e7ee;font-size:16px!important;font-weight:700;color:#8290a2;text-align:center}
+#app .ops-extra .ops-load-info{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;padding:4px 8px 12px;min-width:0;min-height:78px;border-right:1px solid #e1e7ee;font-size:13px!important;font-weight:700;color:#8290a2;text-align:center}
 #app .ops-extra .ops-load-info:last-child{border-right:0}
-#app .ops-extra .ops-load-info strong{font-size:22px!important;font-weight:800!important;line-height:1.4;overflow-wrap:anywhere;color:#10233f}
+#app .ops-extra .ops-load-info strong{font-size:17px!important;font-weight:800!important;line-height:1.4;overflow-wrap:anywhere;color:#10233f}
 #app .ops-extra-actions{display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap;margin-top:14px}
 #app .ops-extra .ops-open-detail{margin-left:auto;border:1px solid #c2d8ec;border-radius:8px;background:#f5faff;color:#0c559e;padding:9px 14px;font-size:13px;font-weight:700;min-height:40px}
 #app .ops-extra .home-pin{width:40px!important;height:40px!important;font-size:22px!important;display:inline-block!important}
@@ -103,18 +105,85 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .ops-flight-line{gap:7px}#app .ops-status-badge{padding:5px 8px;font-size:11px!important}
  #app .ops-aircraft{gap:4px 8px}#app .ops-aircraft-location{font-size:10px!important}#app .ops-aircraft-location strong,#app .ops-registration{font-size:14px!important}
  #app .flight-home-row.ops-flight-card>.ops-extra{gap:12px;margin-top:0;padding-top:14px}#app .ops-extra .ops-open-detail{margin-left:0;width:100%}
- #app .ops-extra .ops-load-info{padding:4px 4px 10px}#app .ops-extra .ops-load-info strong{font-size:20px!important}
+ #app .ops-extra .ops-load-info{padding:4px 4px 10px}#app .ops-extra .ops-load-info strong{font-size:16px!important}
 }
 @media(prefers-reduced-motion:reduce){#app .ops-expand svg{transition:none}}
 #app .flight-home-row.ops-flight-card[style*="display: none"],#app .flight-home-row.ops-flight-card.alyzia-final-time-hidden,#app .flight-home-row.ops-flight-card.alyzia-auto-past-hidden{display:none!important}
 #app .home-print-btn{display:none!important}
 .nav-plane{display:block;margin:auto}
+/* flight sheet header: status badge, A/C + cabin buttons, time tones */
+#app .v2x-detail-head{grid-template-columns:minmax(260px,1fr) minmax(420px,2fr)!important;grid-template-areas:"did dtimes" "did dactions"!important}
+@media(max-width:900px){#app .v2x-detail-head{grid-template-columns:1fr!important;grid-template-areas:"did" "dtimes" "dactions"!important}}
+#app .v2x-d-flightline{flex-wrap:wrap}
+#app .v2x-d-flightline .ops-status-badge{font-size:13px!important}
+#app .v2x-d-id .ops-status-context{margin-top:8px;font-size:13px!important}
+#app .v2x-chip-btn{cursor:pointer;font-family:inherit}
+#app .v2x-chip-btn:hover{border-color:#8fb8e6;background:#eef6ff}
+#app .v2x-chip-btn.missing{border-color:#efbd76;background:#fffaf2;color:#a66006}
+#app .v2x-chip-change{border-color:#efc3ca;background:#fff7f8;color:#bd3047}
+#app .v2x-d-t b.ops-ontime{color:#0a8f5a!important}
+#app .v2x-d-t b.ops-late{color:#d3213f!important}
+#app .v2x-d-t b.ops-estimated{color:#d98200!important}
 @media print{#app .flight-home-row.ops-flight-card{break-inside:avoid!important}#app .ops-expand{visibility:hidden}}
 </style>`;
 
 // Inserted inside the existing UI controller so it shares its live refresh and escaping helpers.
-export const REFERENCE_LIST_RENDERER = String.raw`
+export const REFERENCE_LIST_RENDERER = "const ALY_TYPES="+clientSeatmapTypeSource()+";\n"+String.raw`
 const expandedFlights=new Set();
+// ---- Aircraft type -> seatmap type and cabin configuration ----
+// Displayed type = type converted to the Seatmap code (359, 77W, 32Q…); the cabin configuration follows that type.
+function opsType(x){const raw=txt((x&&x.aircraftChange&&x.aircraftChange.to)||x?.aircraft||x?.aircraftActual);return raw?(ALY_TYPES.toIata(raw)||ALY_TYPES.toIata(raw.replace(/^B(?=7\d\d)/i,'Boeing '))||up(raw)):''}
+function opsSameType(a,b){const A=up(a),B=up(b);return !A||!B||ALY_TYPES.configCodes(A).includes(B)}
+function opsCatalog(){try{return typeof SARIA_CATALOG!=='undefined'&&Array.isArray(SARIA_CATALOG)?SARIA_CATALOG:[]}catch{return []}}
+// Same preference as the server auto-injection: exact flight prefix, then company-wide plan, then first by key; exact type before equivalent codes.
+function opsPickByType(x,type){
+ const al=up(x?.airline||String(x?.flight||'').replace(/\d.*$/,'')),fn=up(x?.flight);if(!al||!type)return null;
+ const key=e=>txt(e.config_key||[e.cie,e.ac,e.config].join('|'));
+ for(const code of ALY_TYPES.configCodes(type)){
+  const rows=opsCatalog().filter(e=>up(e.cie)===al&&up(e.ac)===code);if(!rows.length)continue;
+  const prefix=e=>up(key(e).split('|')[0]);
+  return rows.find(e=>fn&&prefix(e)===fn)||rows.find(e=>prefix(e)===al)||[...rows].sort((a,b)=>key(a).localeCompare(key(b)))[0];
+ }
+ return null;
+}
+(function wrapSeatmapChoice(){
+ try{
+  const base=window.sariaSelectedEntry;
+  if(typeof base==='function'&&!base.__alyType){
+   const wrapped=function(x){
+    if(x===undefined)x=typeof f==='function'?f():null;
+    const entry=base(x);if(!x)return entry;
+    // A cabin version chosen by hand always wins; otherwise the plan must belong to the flight's aircraft type.
+    if(x.cabinConfigAuto===false&&entry)return entry;
+    const type=opsType(x);if(!type||(entry&&opsSameType(entry.ac,type)))return entry;
+    return opsPickByType(x,type)||entry;
+   };
+   wrapped.__alyType=true;window.sariaSelectedEntry=wrapped;
+  }
+  // The VERSION CABINE list of a type also offers the plans filed under an equivalent code (772 -> 777, 32Q -> N32…).
+  const baseConfigs=window.sariaConfigsFor;
+  if(typeof baseConfigs==='function'&&!baseConfigs.__alyType){
+   const wrappedConfigs=function(cie,ac){const seen=new Set(),out=[];for(const code of ALY_TYPES.configCodes(up(ac))){for(const e of baseConfigs(cie,code)){if(!seen.has(e)){seen.add(e);out.push(e)}}}return out};
+   wrappedConfigs.__alyType=true;window.sariaConfigsFor=wrappedConfigs;
+  }
+  // The flight sheet follows the type too: missing classes are filled from the plan, classes of a previous type with nothing booked are dropped.
+  const baseRender=window.render;
+  if(typeof baseRender==='function'&&!baseRender.__alyType){
+   const wrappedRender=function(...args){try{opsSyncConfigToType(typeof f==='function'?f():null)}catch{}return baseRender.apply(this,args)};
+   wrappedRender.__alyType=true;window.render=wrappedRender;
+  }
+  if(typeof loadSariaCatalog==='function')loadSariaCatalog().then(()=>{try{document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}catch{}}).catch(()=>{});
+ }catch{}
+})();
+function opsSyncConfigToType(x){
+ if(!x||typeof sariaSelectedEntry!=='function'||typeof sariaClassObject!=='function')return;
+ const entry=sariaSelectedEntry(x);if(!entry)return;
+ const cfg=sariaClassObject(entry),keys=Object.keys(cfg);if(!keys.length)return;
+ x.config=x.config&&typeof x.config==='object'?x.config:{};
+ for(const k of keys)if(!(k in x.config))x.config[k]=Number(cfg[k]||0);
+ const own=x.sariaConfigKey&&typeof sariaConfigKey==='function'&&sariaConfigKey(entry)===x.sariaConfigKey;
+ if(!own&&x.cabinConfigAuto!==false)for(const k of Object.keys(x.config))if(!keys.includes(k)&&!Number(x.booked?.[k]||0))delete x.config[k];
+}
 const opsPlane='<svg class="ops-plane-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 12-7-4V3a2 2 0 0 0-4 0v5l-7 4v2l7-2v5l-2 2v2l4-1 4 1v-2l-2-2v-5l7 2z" transform="rotate(90 12 12)"/></svg>';
 const opsCountry={CDG:'FR',ORY:'FR',NCE:'FR',LIL:'FR',LRT:'FR',PUF:'FR',CHR:'FR',LIG:'FR',SYS:'FR',QIE:'FR',SIN:'SG',ICN:'KR',HND:'JP',IST:'TR',SAW:'TR',ESB:'TR',AYT:'TR',ALG:'DZ',ORN:'DZ',CZL:'DZ',AAE:'DZ',TLM:'DZ',CFK:'DZ',QSF:'DZ',BLJ:'DZ',BSK:'DZ',ELU:'DZ',DUB:'IE',SNN:'IE',NOC:'IE',TLV:'IL',LCA:'CY',TUN:'TN',DJE:'TN',MIR:'TN',TTU:'MA',CPH:'DK',ARN:'SE',SVG:'NO',OSL:'NO',LYR:'NO',FRA:'DE',LEJ:'DE',BER:'DE',WAW:'PL',KTW:'PL',PRG:'CZ',SOF:'BG',BEG:'RS',ZAD:'HR',TIA:'AL',ATH:'GR',CMN:'MA',RBA:'MA',RAK:'MA',OUD:'MA',KEF:'IS',PDL:'PT',CAI:'EG',LXR:'EG',KUL:'MY',BKK:'TH',YUL:'CA',YYZ:'CA',YQB:'CA',DEL:'IN',ABJ:'CI',KGL:'RW',AMM:'JO',KWI:'KW',BOG:'CO',GRU:'BR',MIA:'US',JFK:'US',GYD:'AZ',TBS:'GE',SEZ:'SC',CKG:'CN',SZX:'CN',XIY:'CN',BRU:'BE',MST:'NL',LBA:'GB',LGW:'GB',BQH:'GB',OPO:'PT',BCN:'ES',IBZ:'ES',ACE:'ES',FUE:'ES',MXP:'IT',VRN:'IT',PMO:'IT',SUF:'IT',BLQ:'IT',GOH:'GL',SFJ:'GL'};
 function opsTitle(value){return txt(value).toLocaleLowerCase('fr').replace(/(^|[\s-])(\p{L})/gu,(_,space,c)=>space+c.toLocaleUpperCase('fr'))}
@@ -201,16 +270,19 @@ function opsLoad(x){
  // Classes come from the seatmap actually selected for the flight, then the company configuration (companyClassesForFlight).
  let ks;try{ks=typeof companyClassesForFlight==='function'?companyClassesForFlight(x):classKeys(x)}catch{ks=classKeys(x)}
  if(!Array.isArray(ks)||!ks.length)ks=classKeys(x);
+ // Configuration of the aircraft type (wrapped sariaSelectedEntry): its classes, and its seat counts where the flight has none of its own.
+ let planned={};
+ try{const entry=typeof sariaSelectedEntry==='function'?sariaSelectedEntry(x):null;if(entry){planned=sariaClassObject(entry);if(Object.keys(planned).length&&typeof cabinOrderedClassKeys==='function')ks=cabinOrderedClassKeys(Object.keys(planned))}}catch{}
  const number=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null,PAIRS={J:'C',C:'J',Y:'M',M:'Y'};
  // A cabin stored under its twin code (J/C, Y/M) still counts for the class the seatmap uses.
  const get=(o,k)=>{if(!o||typeof o!=='object')return null;if(k in o)return number(o[k]);const twin=PAIRS[k];return twin&&twin in o&&!ks.includes(twin)?number(o[twin]):null};
- const fmt=o=>ks.map(k=>k+(get(o,k)??0)).join(' · ')||'—';
- const cfgKnown=ks.some(k=>get(x.config,k)!==null);
- const capacity=ks.reduce((s,k)=>s+(get(x.config,k)??0),0),booked=ks.reduce((s,k)=>s+(get(x.booked,k)??0),0),nok=(x.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length;
- return {cfg:cfgKnown?fmt(x.config):'—',book:fmt(x.booked),avail:number(x.available)??(cfgKnown?capacity-booked-nok:'—'),nok};
+ const cfgOf=k=>get(x.config,k)??(k in planned?number(planned[k]):null),fmt=o=>ks.map(k=>k+(get(o,k)??0)).join(' · ')||'—';
+ const cfgKnown=ks.some(k=>cfgOf(k)!==null);
+ const capacity=ks.reduce((s,k)=>s+(cfgOf(k)??0),0),booked=ks.reduce((s,k)=>s+(get(x.booked,k)??0),0),nok=(x.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length;
+ return {cfg:cfgKnown?ks.map(k=>k+(cfgOf(k)??0)).join(' · '):'—',book:fmt(x.booked),avail:number(x.available)??(cfgKnown?capacity-booked-nok:'—'),nok};
 }
 function renderRow(row){
- const resolved=opsFlightForRow(row);if(!resolved)return;const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=val(x,'aircraftActual','aircraft')||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
+ const resolved=opsFlightForRow(row);if(!resolved)return;const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=opsType(x)||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
  const key=[flight,x.activeDate||x.date,dep,dest].join('|'),expanded=expandedFlights.has(key),isFav=favorite(x);
  let name=x.airline;try{if(typeof airlineDisplayName==='function')name=opsTitle(airlineDisplayName(x.airline))}catch{}
  const notes=Array.isArray(x.flightNotes)?x.flightNotes.filter(n=>txt(n?.text)).length:0;
