@@ -39,3 +39,8 @@ test("a single DÉROUTÉ is not believed",()=>{
   assert.equal(pickStatus({FLIGHTSTATS:{status:"DÉROUTÉ"},FR24:{status:"EN VOL"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"EN VOL");
   assert.equal(pickStatus({FLIGHTSTATS:{status:"DÉROUTÉ"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"");
 });
+test("FlightStats runway actual of the departure is read as takeoff",()=>{
+  const page="Flight Gate Times 04-Oct-2026 Scheduled 22:35 CEST Actual 00:41 CEST Flight Runway Times 04-Oct-2026 Scheduled -- Actual 00:58 CEST Terminal 1 Gate 26 Arrival SIN Flight Gate Times Scheduled 17:40";
+  const r=semanticText("FLIGHTSTATS",page,{designator:"SQ337",airline:"SQ",number:"337"});
+  assert.equal(r.takeoff,"00:58");
+});
