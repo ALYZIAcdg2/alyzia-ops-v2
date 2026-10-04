@@ -114,7 +114,10 @@ async function applyOne(env,row,{dryRun=false}={}){let fr24Id="";let base={};try
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
   // FlightAware (generic) only when no departure fact was found at all.
   let faUrl="";
-  if(!clean(base.atd)&&!clean(base.takeoff)&&!clean(map.FR24?.atd)&&!clean(map.FR24?.takeoff)&&!clean(map.FLIGHTSTATS?.atd)){
+  const noDeparture=!clean(base.atd)&&!clean(base.takeoff)&&!clean(map.FR24?.atd)&&!clean(map.FR24?.takeoff)&&!clean(map.FLIGHTSTATS?.atd);
+  // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
+  const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
+  if(noDeparture||(noArrival&&clean(base.flightAwareHistoryUrl))){
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
     if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
