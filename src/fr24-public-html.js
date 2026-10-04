@@ -1,3 +1,5 @@
+import {flightLookupVariants} from "./public-flight-alias.js";
+
 const EXACT_OCCURRENCES={
   "CTM21|2026-10-01":"41ea23a2",
   "AV55|2026-10-03":"41f30e95",
@@ -14,12 +16,19 @@ export function fr24OccurrenceId(flight){
   return EXACT_OCCURRENCES[`${upper(flight?.designator)}|${clean(flight?.date)}`]||clean(flight?.raw?.fr24OccurrenceId||flight?.raw?.fr24_occurrence_id);
 }
 
+// FR24 files a flight under its IATA number (E4777) or its callsign (ENT777): try the planned designator, then the other code.
+function historyDesignators(flight){
+  const out=[upper(flight?.designator)];
+  try{for(const v of flightLookupVariants({...flight,airline:upper(flight?.airline),number:clean(flight?.number)}))if(v.lookupNumberType==="RAW"&&v.designator)out.push(upper(v.designator))}catch{}
+  return uniq(out.filter(Boolean),3);
+}
+
 export function fr24PublicUrls(flight){
   const designator=upper(flight?.designator);
   const id=fr24OccurrenceId(flight);
   const urls=[];
   if(id&&designator)urls.push(`https://www.flightradar24.com/${encodeURIComponent(designator)}/${encodeURIComponent(id)}`);
-  if(designator)urls.push(`https://www.flightradar24.com/data/flights/${encodeURIComponent(designator.toLowerCase())}`);
+  for(const d of historyDesignators(flight))urls.push(`https://www.flightradar24.com/data/flights/${encodeURIComponent(d.toLowerCase())}`);
   return {id,urls};
 }
 
@@ -109,8 +118,9 @@ function playbackCandidates(data,flight,id){
   const f=playbackFlight(data);
   if(!f)return null;
   const number=upper(nested(f,["identification","number","default"])||nested(f,["identification","callsign"]));
-  const requested=upper(flight.designator);
-  const identificationMatched=!number||number===requested||number.replace(/\s+/g,"")===requested;
+  const callsign=upper(nested(f,["identification","callsign"]));
+  const requested=new Set(historyDesignators(flight));
+  const identificationMatched=!number||requested.has(number)||requested.has(number.replace(/\s+/g,""))||(callsign&&requested.has(callsign));
   const scheduledDeparture=epoch(nested(f,["time","scheduled","departure"]));
   const estimatedDeparture=epoch(nested(f,["time","estimated","departure"]));
   const realDeparture=epoch(nested(f,["time","real","departure"]));
@@ -194,10 +204,51 @@ async function fetchPlayback(flight,id){
   }finally{clearTimeout(timer)}
 }
 
+// ---- Occurrence discovery ----
+// Without a known occurrence id, FR24's playback API cannot be queried. The history page lists the recent occurrences with their 8-hex id:
+// pick the ids written next to the flight date and destination, then confirm each by reading its playback (route + scheduled day).
+const DISCOVERY_CACHE=new Map();
+const DISCOVERY_RETRY_MS=10*60*1000;
+const DISCOVERY_MAX_PROBES=6;
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function parisDay(isoValue){const d=new Date(isoValue);if(!Number.isFinite(d.getTime()))return "";return new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(d)}
+function dateTokens(date){const [y,m,d]=clean(date).split("-");if(!y||!m||!d)return [];const mon=MONTHS[Number(m)-1]||"";return [date,`${d} ${mon} ${y}`,`${Number(d)} ${mon} ${y}`,`${mon} ${Number(d)}, ${y}`,`${d}/${m}/${y}`].map(upper)}
+export function fr24IdsFromHistory(raw,flight){
+  const src=deescape(raw),found=[];
+  for(const re of [/#([0-9a-f]{8})\b/gi,/flightId["'=:\s]+([0-9a-f]{8})\b/gi,/\/([0-9a-f]{8})(?:[?"'\/]|$)/gi])for(const m of src.matchAll(re))found.push({id:m[1].toLowerCase(),at:m.index||0});
+  const tokens=dateTokens(flight?.date),dest=upper(flight?.destination),scored=[];
+  for(const f of found){
+    if(/^20\d{6}$/.test(f.id))continue;
+    const w=upper(src.slice(Math.max(0,f.at-300),Math.min(src.length,f.at+300)));
+    scored.push({id:f.id,score:(tokens.some(t=>w.includes(t))?2:0)+(dest&&w.includes(dest)?1:0)});
+  }
+  const best=new Map();for(const f of scored)best.set(f.id,Math.max(best.get(f.id)??-1,f.score));
+  return [...best.entries()].sort((a,b)=>b[1]-a[1]).map(([id])=>id).slice(0,DISCOVERY_MAX_PROBES);
+}
+async function discoverOccurrence(flight,historyBodies){
+  const key=`${upper(flight.designator)}|${clean(flight.date)}`,cached=DISCOVERY_CACHE.get(key);
+  if(cached?.id)return {id:cached.id,playback:null,attempts:[]};
+  if(cached&&Date.now()-cached.at<DISCOVERY_RETRY_MS)return {id:"",playback:null,attempts:[],status:"DISCOVERY_RECENTLY_FAILED"};
+  const attempts=[],seen=new Set();
+  for(const body of historyBodies){
+    for(const id of fr24IdsFromHistory(body,flight)){
+      if(seen.has(id))continue;seen.add(id);
+      const playback=await fetchPlayback(flight,id),s=playback?.candidates?.semantic||{};
+      const routeOk=(!flight.origin||upper(s.origin)===upper(flight.origin))&&(!flight.destination||upper(s.destination)===upper(flight.destination));
+      const dayOk=s.std&&parisDay(s.std)===clean(flight.date);
+      attempts.push({id,status:playback?.status||"",routeOk:Boolean(routeOk),dayOk:Boolean(dayOk)});
+      if(playback?.status==="OK"&&routeOk&&dayOk){DISCOVERY_CACHE.set(key,{id,at:Date.now()});return {id,playback,attempts}}
+    }
+  }
+  DISCOVERY_CACHE.set(key,{id:"",at:Date.now()});
+  return {id:"",playback:null,attempts,status:seen.size?"NO_MATCHING_OCCURRENCE":"NO_IDS"};
+}
+
 export async function fetchFr24Public(flight){
-  const {id,urls}=fr24PublicUrls(flight);
+  let {id,urls}=fr24PublicUrls(flight);
+  if(!id){const known=DISCOVERY_CACHE.get(`${upper(flight?.designator)}|${clean(flight?.date)}`);if(known?.id)id=known.id}
   const checkedAt=new Date().toISOString();
-  const attempts=[];
+  const attempts=[],historyBodies=[];let firstUsable=null;
   if(id){
     const playback=await fetchPlayback(flight,id);
     attempts.push({url:playback.url,finalUrl:playback.finalUrl,httpStatus:playback.httpStatus,status:playback.status,candidates:playback.candidates,error:playback.error});
@@ -217,12 +268,25 @@ export async function fetchFr24Public(flight){
       const usable=r.ok&&candidates.flightMatched&&exactOk&&candidates.useful>0;
       const attempt={url,finalUrl:r.url,httpStatus:r.status,status:usable?"OK":"HTML_NO_USABLE_DATA",ok:r.ok,candidates};
       attempts.push(attempt);
+      if(!id&&body)historyBodies.push(body);
       if(usable){
-        return {name:"FR24",url,status:"OK",httpStatus:r.status,finalUrl:r.url,mentionsFlight:true,candidates:{...candidates,method:"PUBLIC_HTML",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
+        const htmlResult={name:"FR24",url,status:"OK",httpStatus:r.status,finalUrl:r.url,mentionsFlight:true,candidates:{...candidates,method:"PUBLIC_HTML",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
+        // Without an occurrence id the page only gives loose times: keep it as a fallback and look for the exact occurrence first.
+        if(id)return htmlResult;
+        if(!firstUsable)firstUsable=htmlResult;
       }
     }catch(e){attempts.push({url,finalUrl:url,httpStatus:0,status:e?.name==="AbortError"?"HTML_TIMEOUT":"HTML_FETCH_ERROR",error:String(e?.message||e).slice(0,200)});
     }finally{clearTimeout(timer)}
   }
+  if(!id&&historyBodies.length){
+    const found=await discoverOccurrence(flight,historyBodies);
+    if(found.id){
+      const playback=found.playback||await fetchPlayback(flight,found.id);
+      if(playback?.status==="OK")return {name:"FR24",url:playback.url,status:"OK",httpStatus:playback.httpStatus,finalUrl:playback.finalUrl,mentionsFlight:true,candidates:{...playback.candidates,fr24OccurrenceId:found.id,method:"PUBLIC_PLAYBACK_DISCOVERED",attempts:found.attempts},checkedAt};
+    }
+    if(!firstUsable)attempts.push({url:urls[0]||"",httpStatus:0,status:found.status||"DISCOVERY_FAILED",candidates:null});
+  }
+  if(firstUsable)return firstUsable;
   const best=[...attempts].sort((a,b)=>(b.candidates?.useful||0)-(a.candidates?.useful||0))[0];
   const playbackAttempt=attempts.find(a=>String(a.status||"").startsWith("PLAYBACK_"));
   const reason=playbackAttempt?.status||((id&&!best?.candidates?.occurrenceMatched)?"EXACT_OCCURRENCE_NOT_EXTRACTED":"FR24_NO_USABLE_DATA");

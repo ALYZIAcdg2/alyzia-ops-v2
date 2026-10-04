@@ -108,7 +108,7 @@ export default {
     if(typeof app.scheduled==="function")app.scheduled(controller,env,ctx);
     ctx.waitUntil((async()=>{
       await runEtd(env).catch(()=>{});
-      await runLive(env,{limit:12,concurrency:3}).catch(()=>{});
+      await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
       if(isQuarterHour(controller))await runGround(env).catch(()=>{});
       await runStatusModelTest(env).catch(()=>{});
     })());
