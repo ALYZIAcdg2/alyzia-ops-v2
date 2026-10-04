@@ -1,3 +1,4 @@
+import {flightAwareJsonSemantic} from "./flightaware-page-times.js";
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
@@ -42,7 +43,7 @@ export async function recoverFlightAwareExactHistory(env){
     try{
       const c=new AbortController(),timer=setTimeout(()=>c.abort(),8000);let r,raw="";try{r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareExact/1.1)"}});raw=await r.text()}finally{clearTimeout(timer)}
       const text=textOnly(raw);attempt={source:"FLIGHTAWARE",status:blocked(text)?"BLOCKED":r.ok?"OK":"HTTP_ERROR",httpStatus:r.status,checkedAt:at,url:r.url||url,lookupCodeType:"ICAO",lookupDesignator:(url.match(/\/flight\/([^/]+)/i)||[])[1]||""};
-      if(attempt.status==="OK"){success++;const s=semantic(text);let changed=false;for(const field of ["atd","takeoff","eta","landing","ata","reg"]){if(setField(x,field,s[field],at))changed=true}if(s.aircraft&&!manual(x,"aircraft")&&upper(x.aircraftActual||x.aircraft)!==s.aircraft){x.aircraftActual=s.aircraft;x.aircraftActualSource="PUBLIC_LIVE:FLIGHTAWARE_EXACT";x.aircraftActualUpdatedAt=at;changed=true}if(changed){updated++;flights.push(designator(row,x))}}
+      if(attempt.status==="OK"){success++;const s=semantic(text),js=flightAwareJsonSemantic(raw,{origin:x.origin||"CDG",destination:x.destination||x.dest||""});for(const k of ["atd","takeoff","eta","landing","ata"])if(!s[k]&&js[k])s[k]=js[k];let changed=false;for(const field of ["atd","takeoff","eta","landing","ata","reg"]){if(setField(x,field,s[field],at))changed=true}if(s.aircraft&&!manual(x,"aircraft")&&upper(x.aircraftActual||x.aircraft)!==s.aircraft){x.aircraftActual=s.aircraft;x.aircraftActualSource="PUBLIC_LIVE:FLIGHTAWARE_EXACT";x.aircraftActualUpdatedAt=at;changed=true}if(changed){updated++;flights.push(designator(row,x))}}
     }catch(e){attempt={source:"FLIGHTAWARE",status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",checkedAt:at,url,error:String(e?.message||e).slice(0,140)}}
     mergeTelemetry(x,attempt,at);try{await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run()}catch{}
   }
