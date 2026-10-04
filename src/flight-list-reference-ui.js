@@ -175,10 +175,25 @@ function opsPickByType(x,type){
   if(typeof loadSariaCatalog==='function')loadSariaCatalog().then(()=>{try{document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}catch{}}).catch(()=>{});
  }catch{}
 })();
+// Seat counts per class of a plan: its classes, else the plan label ("8C174Y", "189Y"), else the total as economy.
+function opsPlanClasses(entry){
+ let o={};try{o=sariaClassObject(entry)}catch{}
+ if(Object.keys(o).some(k=>Number(o[k])>0))return o;
+ o={};String(entry?.config||entry?.configuration||'').toUpperCase().replace(/(\d+)\s*([A-Z])/g,(_,n,k)=>{o[k]=(o[k]||0)+Number(n)});
+ if(!Object.keys(o).length&&Number(entry?.total)>0)o={Y:Number(entry.total)};
+ return o;
+}
+// The catalog is marked loaded even when its request failed: retry (at most every 20 s) while it is still empty.
+let opsCatalogTry=0;
+function opsEnsureCatalog(){
+ if(opsCatalog().length||Date.now()-opsCatalogTry<20000||typeof loadSariaCatalog!=='function')return;
+ opsCatalogTry=Date.now();
+ loadSariaCatalog(true).then(()=>{if(opsCatalog().length)document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}).catch(()=>{});
+}
 function opsSyncConfigToType(x){
  if(!x||typeof sariaSelectedEntry!=='function'||typeof sariaClassObject!=='function')return;
  const entry=sariaSelectedEntry(x);if(!entry)return;
- const cfg=sariaClassObject(entry),keys=Object.keys(cfg);if(!keys.length)return;
+ const cfg=opsPlanClasses(entry),keys=Object.keys(cfg);if(!keys.length)return;
  x.config=x.config&&typeof x.config==='object'?x.config:{};
  for(const k of keys)if(!(k in x.config))x.config[k]=Number(cfg[k]||0);
  const own=x.sariaConfigKey&&typeof sariaConfigKey==='function'&&sariaConfigKey(entry)===x.sariaConfigKey;
@@ -272,16 +287,17 @@ function opsLoad(x){
  if(!Array.isArray(ks)||!ks.length)ks=classKeys(x);
  // Configuration of the aircraft type: classes AND seat counts come from the seatmap plan (wrapped sariaSelectedEntry); the flight's own config is only a fallback without plan.
  let planned={};
- try{const entry=typeof sariaSelectedEntry==='function'?sariaSelectedEntry(x):null;if(entry){planned=sariaClassObject(entry);if(Object.keys(planned).length&&typeof cabinOrderedClassKeys==='function')ks=cabinOrderedClassKeys(Object.keys(planned))}}catch{}
+ try{const entry=typeof sariaSelectedEntry==='function'?sariaSelectedEntry(x):null;if(entry){planned=opsPlanClasses(entry);if(Object.keys(planned).length&&typeof cabinOrderedClassKeys==='function')ks=cabinOrderedClassKeys(Object.keys(planned))}}catch{}
  const number=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v))?Number(v):null,PAIRS={J:'C',C:'J',Y:'M',M:'Y'};
  // A cabin stored under its twin code (J/C, Y/M) still counts for the class the seatmap uses.
  const get=(o,k)=>{if(!o||typeof o!=='object')return null;if(k in o)return number(o[k]);const twin=PAIRS[k];return twin&&twin in o&&!ks.includes(twin)?number(o[twin]):null};
  const seatmapCfg=Object.keys(planned).length>0,cfgOf=k=>seatmapCfg?(k in planned?number(planned[k]):null):get(x.config,k),fmt=o=>ks.map(k=>k+(get(o,k)??0)).join(' · ')||'—';
- const cfgKnown=ks.some(k=>cfgOf(k)!==null);
+ const cfgKnown=ks.some(k=>seatmapCfg?cfgOf(k)!==null:(cfgOf(k)||0)>0);
  const capacity=ks.reduce((s,k)=>s+(cfgOf(k)??0),0),booked=ks.reduce((s,k)=>s+(get(x.booked,k)??0),0),nok=(x.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length;
  return {cfg:cfgKnown?ks.map(k=>k+(cfgOf(k)??0)).join(' · '):'—',book:fmt(x.booked),avail:number(x.available)??(cfgKnown?capacity-booked-nok:'—'),nok};
 }
 function renderRow(row){
+ opsEnsureCatalog();
  const resolved=opsFlightForRow(row);if(!resolved)return;const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=opsType(x)||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
  const key=[flight,x.activeDate||x.date,dep,dest].join('|'),expanded=expandedFlights.has(key),isFav=favorite(x);
  let name=x.airline;try{if(typeof airlineDisplayName==='function')name=opsTitle(airlineDisplayName(x.airline))}catch{}
