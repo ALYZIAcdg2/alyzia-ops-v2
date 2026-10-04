@@ -129,3 +129,43 @@ test("pickSlots keeps a quarter of the slots (at least one) for the second tier 
   assert.deepEqual(pickSlots(sorted,8).map(x=>x.id),["a1","a2","a3","a4","a5","a6","s1","s2"]);
   assert.deepEqual(pickSlots([z("a",1),z("b",1)],4).map(x=>x.id),["a","b"]);
 });
+
+test("FlightAware generic: the occurrence page is found from the landing page, its JSON times fill takeoff / landing, the URL is kept",async()=>{
+  const {flightAwareHistoryUrl}=await import("./ops-public-live-flow-optimized.js");
+  const [y,m,d]=today.split("-"),day=`${y}${m}${d}`;
+  // a flight at 05:00 Paris = 03:00 UTC (summer); two occurrences listed: the day before and the day itself
+  const page=`<a href="https://www.flightaware.com/live/flight/ENT777/history/${String(Number(day)-1)}/0310Z/LFPG/LATI">x</a><a href="https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI">y</a><a href="https://www.flightaware.com/live/flight/ENT777/history/${day}/1810Z/LFPG/LATI">z</a>`;
+  const offset=Number(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
+  const stdLocal=offset===2?"05:00":"04:00"; // 03:00 UTC in both cases
+  assert.equal(flightAwareHistoryUrl(page,{date:today,std:stdLocal,origin:"CDG"}),`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
+  assert.equal(flightAwareHistoryUrl("<html>nothing</html>",{date:today,std:stdLocal,origin:"CDG"}),"");
+});
+
+test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24 and FlightStats give nothing",async()=>{
+  const flight={airline:"ENT",flight:"ENT777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA"};
+  let update=null;
+  const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
+    async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"ENT777",airline:"ENT",std:"05:00",data_json:JSON.stringify(flight)}]}},
+    async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
+    async run(){return {}}}},batch:async()=>[]}};
+  const [y,m,d]=today.split("-"),day=`${y}${m}${d}`;
+  const at=(h,mi)=>Date.UTC(+y,+m-1,+d,h,mi)/1000;
+  // the real FlightAware keys (from the deployed diagnostic), 05:38 / 07:45 local = 03:38 / 05:45 UTC in summer time
+  const json=`"takeoffTimes":{"scheduled":${at(3,10)},"estimated":${at(3,38)},"actual":${at(3,38)}},"landingTimes":{"scheduled":${at(5,15)},"estimated":${at(5,45)},"actual":${at(5,45)}},"gateDepartureTimes":{"scheduled":${at(3,0)},"estimated":null,"actual":null},"gateArrivalTimes":{"scheduled":${at(5,30)},"estimated":null,"actual":null}`;
+  const offset=Number(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
+  if(offset!==2)return; // fixtures are written for summer time
+  const real=globalThis.fetch;
+  globalThis.fetch=async(url)=>{url=String(url);
+    if(url.endsWith("/live/flight/ENT777"))return new Response(`<a href="https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI">x</a>`,{headers:{"content-type":"text/html"}});
+    if(url.includes(`/history/${day}/0310Z/LFPG/LATI`))return new Response(`<html><script>var d={${json}}</script></html>`,{headers:{"content-type":"text/html"}});
+    return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
+  try{
+    await runPublicLiveFlow(env,{limit:1,concurrency:1});
+    assert.ok(update,"the flight was saved");
+    assert.equal(update.takeoff,"05:38");
+    assert.equal(update.landing,"07:45");
+    assert.equal(update.ata,"07:55");
+    assert.equal(update.status,"ARRIVÉE");
+    assert.equal(update.flightAwareHistoryUrl,`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
+  }finally{globalThis.fetch=real}
+});

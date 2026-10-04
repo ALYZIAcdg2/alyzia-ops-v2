@@ -16,7 +16,7 @@ const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'
 const missing=v=>!v||v==='—'||v==='-'||v==='N/A';
 const fmt=d=>d&&Number.isFinite(d.getTime())?d.toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
 const fmtLong=d=>d&&Number.isFinite(d.getTime())?d.toLocaleString('fr-FR'):'—';
-function nextFive(d=new Date()){const x=new Date(d);x.setSeconds(0,0);const m=x.getMinutes();x.setMinutes(m+(5-m%5||5));return x}
+function nextFive(d=new Date()){const x=new Date(d);x.setSeconds(0,0);const m=x.getMinutes();x.setMinutes(m+(2-m%2||2));return x}
 function ceilFive(d){return nextFive(new Date(d.getTime()-1))}
 function atLocal(date,hhmm='00:00'){const [h,m]=String(hhmm||'00:00').split(':').map(Number);const d=new Date(date+'T00:00:00');d.setHours(Number.isFinite(h)?h:0,Number.isFinite(m)?m:0,0,0);return d}
 function stateText(tr){return String(tr.cells?.[11]?.textContent||'').trim().toUpperCase()}

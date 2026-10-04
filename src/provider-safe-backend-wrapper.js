@@ -220,7 +220,7 @@ async function runSafeOag(env){
 async function quotaStatus(env){
   const now=parisNow(),u=await usage(env),limit=Number(env.OAG_QUOTA_LIMIT||1000);
   const plan=quotaPlan({date:now.date,minutes:now.minutes,dayCalls:u.day,monthCalls:u.month,limit});
-  return {ok:true,provider:"OAG",date:now.date,period:now.date.slice(0,7),usage:u,plan,cron:"*/5 * * * *",maxFlightsPerRun:2};
+  return {ok:true,provider:"OAG",date:now.date,period:now.date.slice(0,7),usage:u,plan,cron:"*/2 * * * *",maxFlightsPerRun:2};
 }
 
 export default {
