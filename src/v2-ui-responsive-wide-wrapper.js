@@ -1,4 +1,4 @@
-import app from "./v2-ui-peau-neuve-wrapper.js";
+import app from "./v2-ui-legibility-wrapper.js";
 
 const WIDE=String.raw`<style id="alyzia-v2-responsive-wide-css">
 /* Responsive wide pass — mobile/tablet/desktop use available width without squeezing operational times. */
@@ -17,13 +17,10 @@ const WIDE=String.raw`<style id="alyzia-v2-responsive-wide-css">
   .v2x-t small{font-size:9px!important}.v2x-t b{font-size:20px!important;margin-top:6px!important;letter-spacing:-.02em}
   .v2x-statusbox{width:100%!important;padding:7px 9px!important;min-height:42px!important;grid-template-columns:auto 1fr!important}.v2x-status-main{font-size:13px!important}.v2x-status-sub{font-size:9.5px!important}.v2x-status-remain{font-size:8.5px!important}
   .v2x-pin,.v2x-open{width:38px!important;height:38px!important;min-height:38px!important;font-size:20px!important}.v2x-actions{right:8px!important;top:8px!important}
-
-  /* Legacy row fallback: remove the oversized empty shell while the modern renderer replaces it. */
   #app .flight-home-row:not(.v2x-row){width:100%!important;margin:0!important;min-height:0!important;height:auto!important;padding:9px 8px!important}
   #app .flight-home-row:not(.v2x-row) .home-flight{font-size:22px!important}
   #app .flight-home-row:not(.v2x-row) .home-route{font-size:19px!important}
   #app .flight-home-row:not(.v2x-row) .home-time{font-size:18px!important}
-
   .v2x-detail-head{width:100%!important;margin-left:0!important;margin-right:0!important;padding:9px 8px!important;gap:7px!important}
   .v2x-d-id{width:100%!important}.v2x-d-flight{font-size:35px!important}.v2x-d-route{font-size:23px!important}.v2x-d-meta{font-size:9px!important}
   .v2x-d-infochips .v2x-chip{font-size:10px!important;min-height:27px!important}
@@ -34,14 +31,12 @@ const WIDE=String.raw`<style id="alyzia-v2-responsive-wide-css">
   .v2x-d-t small{font-size:8.5px!important}.v2x-d-t b{font-size:17px!important;margin-top:6px!important;letter-spacing:-.02em}
   .v2x-d-actions{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important}.v2x-act{font-size:9px!important;min-height:38px!important}
 }
-
 @media(min-width:721px) and (max-width:1200px){
   .page{padding-left:8px!important;padding-right:8px!important}
   #app .flight-home-row.v2x-row{width:100%!important;grid-template-columns:minmax(230px,.9fr) minmax(180px,.75fr) minmax(360px,1.65fr) minmax(145px,.6fr)!important;grid-template-areas:"identity route times status"!important;padding:13px 12px!important;gap:10px!important}
   .v2x-actions{right:10px!important;top:10px!important}.v2x-id{padding-right:76px!important}.v2x-times{grid-template-columns:1fr 1fr!important;gap:8px!important}.v2x-timegroup{min-height:82px!important;padding:10px 7px!important}.v2x-t small{font-size:9px!important}.v2x-t b{font-size:18px!important}.v2x-statusbox{min-height:82px!important}
   .v2x-detail-head{grid-template-columns:minmax(250px,.9fr) minmax(470px,1.8fr) minmax(150px,.58fr)!important;grid-template-areas:"did dtimes dstatus" "did dactions dactions"!important}.v2x-d-times{grid-template-columns:1fr 1fr!important}.v2x-d-t b{font-size:18px!important}
 }
-
 @media(min-width:1201px){
   .page{max-width:1800px!important}
   #app .flight-home-row.v2x-row{grid-template-columns:minmax(215px,.95fr) minmax(175px,.8fr) minmax(480px,2.25fr) minmax(175px,.72fr) 78px!important;gap:14px!important}
