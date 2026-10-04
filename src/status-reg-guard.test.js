@@ -29,3 +29,9 @@ test("EN VOL is kept when the flight has an ATD",()=>{
   assert.equal(guardAirborneStatus("ARRIVÉE",{takeoff:"12:17"}),"ARRIVÉE");
   assert.equal(guardAirborneStatus("RETARDÉ",{}),"RETARDÉ");
 });
+
+import {semanticText} from "./ops-public-live-flow-optimized.js";
+test("a FlightStats page of a diverted flight reads DÉROUTÉ",()=>{
+  const page="(SQ) Singapore Airlines 337 Flight Details Diverted to CDG Flight Diverted SQ337 Flight Departure Times Actual 00:41 Flight Arrival Times Actual 00:59";
+  assert.equal(semanticText("FLIGHTSTATS",page,{designator:"SQ337",airline:"SQ",number:"337"}).status,"DÉROUTÉ");
+});
