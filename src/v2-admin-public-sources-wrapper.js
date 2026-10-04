@@ -143,10 +143,20 @@ const UI=String.raw`<style id="alyzia-admin-public-sources-css">
 #app .adn-public-source .ps-failures{margin-top:5px;padding-top:5px;border-top:1px dashed #e3eaf2;color:#a04424;font-size:9px;font-weight:900;line-height:1.45}
 #app .adn-public-source .ps-failures.ok{color:#087443}
 #app .adn-source-note{margin:0 0 9px;font-size:10px;color:#52677d;font-weight:850}
+#app .ps-table-wrap{overflow:auto;border:1px solid #e0e8f1;border-radius:12px}
+#app .ps-table{width:100%;border-collapse:collapse;font-size:11px;min-width:640px}
+#app .ps-table th{position:sticky;top:0;background:#f4f8fc;color:#4a6078;font-size:9px;font-weight:950;text-align:left;padding:8px 10px;white-space:nowrap}
+#app .ps-table td{padding:8px 10px;border-top:1px solid #edf2f7;vertical-align:top;color:#27425e;font-weight:800}
+#app .ps-table .ps-name b{display:block;font-size:12px;color:#10304f}#app .ps-table .ps-name small{display:block;margin-top:2px;font-size:9px;color:#71839a;font-weight:800}
+#app .ps-table .ps-num{text-align:right;font-variant-numeric:tabular-nums}
+#app .ps-table .ps-ok{color:#087443}#app .ps-table .ps-warn{color:#a04424}
+#app .ps-table .ps-fields{color:#0a6abf;font-size:10px}#app .ps-table .ps-fail{color:#a04424;font-size:10px}#app .ps-table .ps-last{white-space:nowrap;color:#52677d}
+#app .ps-table tr.ps-unused td{opacity:.55}
+#app .ps-toggle{margin-top:8px;border:1px solid #cfdbe8;background:#f3f7fb;color:#4a6078;border-radius:999px;padding:7px 12px;font-size:10px;font-weight:900;line-height:1.2;font-family:inherit;cursor:pointer}
 </style><script id="alyzia-admin-public-sources-js">(()=>{'use strict';
 if(window.__alyziaAdminPublicSources)return;window.__alyziaAdminPublicSources=true;
 const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
-let cache=null;
+let cache=null,showUnused=false;
 async function load(){try{const r=await fetch('/api/admin/public-sources',{cache:'no-store'});const d=await r.json();if(r.ok&&d?.ok)cache=d}catch{}return cache}
 function fmt(v){if(!v)return '—';const d=new Date(v);return Number.isFinite(d.getTime())?d.toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}
 function removeProviderSections(){[...document.querySelectorAll('#app .admin-native .adn-section')].forEach(sec=>{const h=(sec.querySelector('h3')?.textContent||'').trim().toUpperCase();if(/PROVIDER|FOURNISSEUR|QUOTAS? API/.test(h)&&!h.includes('SOURCES PUBLIQUES'))sec.remove()})}
@@ -155,7 +165,14 @@ function fields(s){return (s.fieldList||[]).map(x=>esc(x.field)+' '+esc(x.count)
 function failures(s){const a=s.failureList||[];return a.length?a.map(x=>esc(x.label)+' '+esc(x.count)).join(' · '):'AUCUN ÉCHEC'}
 function patch(data){
   removeProviderSections();const sections=[...document.querySelectorAll('#app .admin-native .adn-section')];let sec=sections.find(s=>/SOURCES PUBLIQUES|QUOTAS API/i.test(s.querySelector('h3')?.textContent||''));if(!sec&&sections.length){sec=document.createElement('div');sec.className='adn-section';sections[0].after(sec)}
-  if(sec&&data){const cards=(data.sources||[]).map(s=>'<div class="adn-public-source"><div class="ps-top"><span>'+esc(s.label)+'</span><span class="'+(s.fieldTotal?'ps-ok':'ps-warn')+'">'+esc(s.fieldTotal)+' CHAMPS</span></div><div class="ps-role">'+esc(s.role)+'</div><div class="ps-stats">TENTATIVES '+esc(s.attempts)+' · OK '+esc(s.ok)+' · KO '+esc(s.failed)+'<br>FALLBACK OACI '+esc(s.icaoFallbacks)+' · DERNIER '+esc(fmt(s.lastAt))+'</div><div class="ps-fields">'+fields(s)+'</div><div class="ps-failures '+(s.failed?'':'ok')+'">'+failures(s)+'</div></div>').join('');sec.innerHTML='<h3>SOURCES PUBLIQUES V2 · '+esc(data.sourceCount||0)+'</h3><div class="adn-source-note">TÉLÉMÉTRIE LIVE RÉELLE · CAUSES KO : BLOQUÉ / TIMEOUT / HTTP / RÉSEAU / SANS DONNÉE / MAUVAISE OCCURRENCE / NON SUIVI · IATA → OACI · J/J+1 : '+esc(data.totalFlights)+' VOLS · STA MANQUANTS : '+esc(data.missingSta)+'</div><div class="adn-public-sources">'+cards+'</div>'}
+  if(sec&&data){
+   // A source that never produced a field nor a successful read is hidden (counted in the footer, one click to show them).
+   const all=data.sources||[],useful=all.filter(s=>Number(s.fieldTotal)>0||Number(s.ok)>0).sort((a,b)=>Number(b.fieldTotal)-Number(a.fieldTotal)||Number(b.ok)-Number(a.ok)),unused=all.filter(s=>!useful.includes(s)),shown=showUnused?[...useful,...unused]:useful;
+   const row=s=>'<tr class="'+(Number(s.fieldTotal)>0||Number(s.ok)>0?'':'ps-unused')+'"><td class="ps-name"><b>'+esc(s.label)+'</b><small>'+esc(s.role)+'</small></td><td class="ps-num ps-ok">'+esc(s.ok)+'</td><td class="ps-num">'+esc(s.attempts)+'</td><td class="ps-num '+(s.failed?'ps-warn':'')+'">'+esc(s.failed)+'</td><td class="ps-fields">'+esc((s.fieldList||[]).map(x=>x.field+' '+x.count).join(' · ')||'—')+'</td><td class="ps-fail">'+((s.failureList||[]).slice(0,2).map(x=>esc(x.label)+' '+esc(x.count)).join(' · ')||'—')+'</td><td class="ps-last">'+esc(fmt(s.lastAt))+'</td></tr>';
+   const foot=unused.length?'<button type="button" class="ps-toggle" id="psToggle">'+(showUnused?'MASQUER':'AFFICHER')+' LES '+unused.length+' SOURCE'+(unused.length>1?'S':'')+' SANS APPORT</button>':'';
+   sec.innerHTML='<h3>SOURCES PUBLIQUES · '+useful.length+' ACTIVE'+(useful.length>1?'S':'')+'</h3><div class="adn-source-note">J/J+1 : '+esc(data.totalFlights)+' VOLS · STA MANQUANTS : '+esc(data.missingSta)+' · IATA → OACI</div><div class="ps-table-wrap"><table class="ps-table"><thead><tr><th>SOURCE</th><th>OK</th><th>TENT.</th><th>KO</th><th>CHAMPS RETENUS</th><th>ÉCHECS</th><th>DERNIER</th></tr></thead><tbody>'+(shown.map(row).join('')||'<tr><td colspan="7">AUCUNE SOURCE ACTIVE</td></tr>')+'</tbody></table></div>'+foot;
+   const t=sec.querySelector('#psToggle');if(t)t.onclick=()=>{showUnused=!showUnused;patch(cache)};
+  }
   replacePlans();
 }
 async function refresh(){patch(await load())}

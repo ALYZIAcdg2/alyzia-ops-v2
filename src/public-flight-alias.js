@@ -9,8 +9,13 @@ const ICAO_ALIASES={
   TK:["THY"],TP:["TAP"],TU:["TAR"],TW:["TWB"],UA:["UAL"],UU:["REU"],
   // AJet is a special case: FlightStats exposes AJA while FlightAware uses TKJ callsigns.
   VF:["AJA","TKJ"],
-  WB:["RWD"],WY:["OMA"]
+  WB:["RWD"],WY:["OMA"],
+  // Companies of the seatmap catalogue that had no ICAO alias (public trackers then only got the IATA designator).
+  "3O":["MAC"],A9:["TGZ"],AH:["DAH"],EI:["EIN"],FB:["LZB"],FI:["ICE"],HM:["SEY"],HU:["CHH"],IZ:["AIZ"],J2:["AHY"],JU:["ASL"],KK:["KKK"],
+  LO:["LOT"],LS:["EXS"],LY:["ELY"],NO:["NOS"],PC:["PGT"],S4:["RZO"],SB:["ACI"],TS:["TSC"]
 };
+// Flights planned under their ICAO code (ENT777): public trackers list them under the IATA code (E4777).
+const IATA_FROM_ICAO=Object.freeze(Object.fromEntries(Object.entries(ICAO_ALIASES).flatMap(([iata,codes])=>codes.map(c=>[c,iata]))));
 export const PUBLIC_AIRLINE_ICAO=Object.freeze(Object.fromEntries(Object.entries(ICAO_ALIASES).map(([iata,codes])=>[iata,codes[0]])));
 export const PUBLIC_AIRLINE_ALIASES=Object.freeze(Object.fromEntries(Object.entries(ICAO_ALIASES).map(([iata,codes])=>[iata,Object.freeze([...codes])])));
 
@@ -28,9 +33,11 @@ export function publicFlightNumberVariants(number){
   return [...new Set(out)];
 }
 export function flightLookupVariants(flight){
-  const iata=upper(flight?.airline),numbers=publicFlightNumberVariants(flight?.number),out=[];
+  const planned=upper(flight?.airline),fromIcao=!ICAO_ALIASES[planned]?IATA_FROM_ICAO[planned]:"",iata=fromIcao||planned,numbers=publicFlightNumberVariants(flight?.number),out=[];
+  if(fromIcao)for(const number of numbers)out.push({...flight,airline:planned,number,designator:`${planned}${number}`,lookupIata:fromIcao,lookupIcao:planned,lookupCodeType:"ICAO",lookupNumberType:number===upper(flight?.number)?"RAW":"PADDED"});
   for(const number of numbers)out.push({...flight,airline:iata,number,designator:`${iata}${number}`,lookupCodeType:"IATA",lookupNumberType:number===upper(flight?.number)?"RAW":"PADDED"});
   for(const icao of ICAO_ALIASES[iata]||[]){
+    if(fromIcao&&icao===planned)continue;
     for(const number of numbers)out.push({...flight,airline:icao,number,designator:`${icao}${number}`,lookupIata:iata,lookupIcao:icao,lookupCodeType:"ICAO",lookupNumberType:number===upper(flight?.number)?"RAW":"PADDED"});
   }
   return out;
