@@ -204,6 +204,34 @@ async function fetchPlayback(flight,id){
   }finally{clearTimeout(timer)}
 }
 
+// ---- History row ----
+// The history page itself lists each occurrence with its registration, STD, ATD, STA and "Landed hh:mm" (local times). Read the row of the
+// flight date (and destination) so ATD / landing are available even when the playback API is not.
+const HISTORY_DATE=/\b\d{1,2} [A-Z][a-z]{2} \d{4}\b/g;
+export function fr24HistoryRow(raw,flight){
+  const text=textOnly(deescape(raw)),up=upper(text);
+  let idx=-1,len=0;
+  for(const t of dateTokens(flight?.date)){const i=up.indexOf(t);if(i>=0&&(idx<0||i<idx)){idx=i;len=t.length}}
+  if(idx<0)return null;
+  HISTORY_DATE.lastIndex=idx+len;const next=HISTORY_DATE.exec(text);
+  const row=text.slice(idx,next?next.index:idx+500),before=text.slice(Math.max(0,idx-60),idx);
+  const dest=upper(flight?.destination);
+  if(dest&&!upper(row).includes(`(${dest})`))return null;
+  const time=re=>{const m=row.match(re);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
+  const std=time(/\bSTD\s*(\d{1,2}):(\d{2})/i),atd=time(/\bATD\s*(\d{1,2}):(\d{2})/i),sta=time(/\bSTA\s*(\d{1,2}):(\d{2})/i),landing=time(/\b(?:Landed|Arrived)\s*(\d{1,2}):(\d{2})/i);
+  const reg=[...before.matchAll(/\b([A-Z0-9]{1,2}-[A-Z0-9]{3,5})\b/g)].map(m=>upper(m[1])).pop()||"";
+  if(!atd&&!landing&&!std)return null;
+  return {std,atd,sta,landing,reg};
+}
+function withHistoryRow(result,bodies,flight){
+  if(!result||!bodies.length)return result;
+  let row=null;for(const b of bodies){row=fr24HistoryRow(b,flight);if(row)break}
+  if(!row)return result;
+  const semantic={...(result.candidates?.semantic||{}),atdClock:row.atd||"",landingClock:row.landing||"",staClock:row.sta||"",historyReg:row.reg||""};
+  const statuses=result.candidates?.statuses?.length?result.candidates.statuses:(row.landing?["LANDED"]:row.atd?["DEPARTED"]:[]);
+  return {...result,candidates:{...(result.candidates||{}),semantic:{...semantic,status:semantic.status||(row.landing?"Landed":row.atd?"Departed":null),reg:semantic.reg||row.reg||null},statuses,historyRow:row}};
+}
+
 // ---- Occurrence discovery ----
 // Without a known occurrence id, FR24's playback API cannot be queried. The history page lists the recent occurrences with their 8-hex id:
 // pick the ids written next to the flight date and destination, then confirm each by reading its playback (route + scheduled day).
@@ -245,10 +273,16 @@ async function discoverOccurrence(flight,historyBodies){
 }
 
 export async function fetchFr24Public(flight){
+  const historyBodies=[];
+  const result=await fetchFr24PublicCore(flight,historyBodies);
+  return withHistoryRow(result,historyBodies,flight);
+}
+
+async function fetchFr24PublicCore(flight,historyBodies){
   let {id,urls}=fr24PublicUrls(flight);
   if(!id){const known=DISCOVERY_CACHE.get(`${upper(flight?.designator)}|${clean(flight?.date)}`);if(known?.id)id=known.id}
   const checkedAt=new Date().toISOString();
-  const attempts=[],historyBodies=[];let firstUsable=null;
+  const attempts=[];let firstUsable=null;
   if(id){
     const playback=await fetchPlayback(flight,id);
     attempts.push({url:playback.url,finalUrl:playback.finalUrl,httpStatus:playback.httpStatus,status:playback.status,candidates:playback.candidates,error:playback.error});
@@ -268,7 +302,7 @@ export async function fetchFr24Public(flight){
       const usable=r.ok&&candidates.flightMatched&&exactOk&&candidates.useful>0;
       const attempt={url,finalUrl:r.url,httpStatus:r.status,status:usable?"OK":"HTML_NO_USABLE_DATA",ok:r.ok,candidates};
       attempts.push(attempt);
-      if(!id&&body)historyBodies.push(body);
+      if(body)historyBodies.push(body);
       if(usable){
         const htmlResult={name:"FR24",url,status:"OK",httpStatus:r.status,finalUrl:r.url,mentionsFlight:true,candidates:{...candidates,method:"PUBLIC_HTML",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,occurrenceMatched:a.candidates?.occurrenceMatched||false,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
         // Without an occurrence id the page only gives loose times: keep it as a fallback and look for the exact occurrence first.
