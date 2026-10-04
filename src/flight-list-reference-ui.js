@@ -108,6 +108,7 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .ops-extra .ops-load-info{padding:4px 4px 10px}#app .ops-extra .ops-load-info strong{font-size:16px!important}
 }
 @media(prefers-reduced-motion:reduce){#app .ops-expand svg{transition:none}}
+#app .flight-home-row:not(.ops-flight-card):not(.ops-skip){visibility:hidden!important}
 #app .flight-home-row.ops-flight-card[style*="display: none"],#app .flight-home-row.ops-flight-card.alyzia-final-time-hidden,#app .flight-home-row.ops-flight-card.alyzia-auto-past-hidden{display:none!important}
 #app .home-print-btn{display:none!important}
 .nav-plane{display:block;margin:auto}
@@ -172,7 +173,7 @@ function opsPickByType(x,type){
    const wrappedRender=function(...args){try{opsSyncConfigToType(typeof f==='function'?f():null)}catch{}return baseRender.apply(this,args)};
    wrappedRender.__alyType=true;window.render=wrappedRender;
   }
-  if(typeof loadSariaCatalog==='function')loadSariaCatalog().then(()=>{try{document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}catch{}}).catch(()=>{});
+  if(typeof loadSariaCatalog==='function')loadSariaCatalog().then(()=>{}).catch(()=>{});
  }catch{}
 })();
 // Seat counts per class of a plan: its classes, else the plan label ("8C174Y", "189Y"), else the total as economy.
@@ -192,7 +193,7 @@ function opsFetchPlans(x,type){
   fetch(opsApiUrl('/api/cabin/configs?airline='+encodeURIComponent(al)+'&aircraft='+encodeURIComponent(code)),{cache:'no-store',headers:{Accept:'application/json'}}).then(r=>r.json()).then(j=>{
    const rows=(j&&j.ok&&Array.isArray(j.configs)?j.configs:[]).map(cabinEntryFromApi),known=new Set(opsCatalog().map(e=>txt(e.config_key)));
    const fresh=rows.filter(e=>!known.has(txt(e.config_key)));
-   if(fresh.length){opsCatalog().push(...fresh);document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}
+   if(fresh.length)opsCatalog().push(...fresh);
   }).catch(()=>opsPlanFetches.delete(key));
  }
 }
@@ -201,7 +202,7 @@ let opsCatalogTry=0;
 function opsEnsureCatalog(){
  if(opsCatalog().length||Date.now()-opsCatalogTry<20000||typeof loadSariaCatalog!=='function')return;
  opsCatalogTry=Date.now();
- loadSariaCatalog(true).then(()=>{if(opsCatalog().length)document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}).catch(()=>{});
+ loadSariaCatalog(true).catch(()=>{});
 }
 function opsSyncConfigToType(x){
  if(!x||typeof sariaSelectedEntry!=='function'||typeof sariaClassObject!=='function')return;
@@ -311,7 +312,7 @@ function opsLoad(x){
 }
 function renderRow(row){
  opsEnsureCatalog();
- const resolved=opsFlightForRow(row);if(!resolved)return;const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=opsType(x)||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
+ const resolved=opsFlightForRow(row);if(!resolved){row.classList.add('ops-skip');return}row.classList.remove('ops-skip');const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=opsType(x)||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
  const key=[flight,x.activeDate||x.date,dep,dest].join('|'),expanded=expandedFlights.has(key),isFav=favorite(x);
  let name=x.airline;try{if(typeof airlineDisplayName==='function')name=opsTitle(airlineDisplayName(x.airline))}catch{}
  const notes=Array.isArray(x.flightNotes)?x.flightNotes.filter(n=>txt(n?.text)).length:0;
