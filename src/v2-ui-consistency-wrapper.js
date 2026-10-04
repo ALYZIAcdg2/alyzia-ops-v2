@@ -82,7 +82,10 @@ function stripLegacyStatusUi(html){return String(html||'')
  .replace(/<script id="alyzia-flight-list-live-sync-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-active-card-ops-fix">[\s\S]*?<\/script>/g,'');}
-function patch(html){let s=stripLegacyStatusUi(html).replace('<h1>VOLS AU DÉPART CDG</h1>','<h1>LISTE DES VOLS</h1>');const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+UI+'\n'+s.slice(i):s+UI}
+function patch(html){let s=stripLegacyStatusUi(html)
+ .replace(/<div><h1>(?:VOLS AU DÉPART CDG|LISTE DES VOLS)<\/h1><p>[^<]*<\/p><\/div>/g,'')
+ .replace(/<span class="app-version-badge brand-version">[^<]*<\/span>/g,'');
+ const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+UI+'\n'+s.slice(i):s+UI}
 
 export default {
  async fetch(request,env,ctx){const r=await app.fetch(request,env,ctx);const type=String(r.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return r;const h=new Headers(r.headers);h.delete('content-length');h.set('cache-control','no-store');return new Response(patch(await r.text()),{status:r.status,statusText:r.statusText,headers:h})},
