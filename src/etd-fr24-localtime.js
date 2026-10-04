@@ -14,6 +14,8 @@ export async function normalizeFr24EtdLocalTime(env){
     let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
     const src=upper(x.etdSource);
     if(!src.includes("FR24"))continue;
+    // Already read as a local clock (written by the public ETD flow, which converts FR24 text from UTC): nothing to guess.
+    if(clean(x.etdTimeBasis)==="CDG_LOCAL"&&!x.etdRawUtc)continue;
     const raw=hhmm(x.etd||x.edt),std=hhmm(x.std||row.std);if(!raw||!std)continue;
     const converted=utcClockToParis(row.flight_date||date,raw);if(!converted)continue;
     const rawDiff=diff(raw,std),convertedDiff=diff(converted,std);

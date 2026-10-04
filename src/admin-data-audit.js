@@ -35,7 +35,7 @@ export async function auditFlightData(env,{from="",to="",repair=false}={}){
       let changed=false;const at=new Date().toISOString(),log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
       for(const f of found){
         if(f.type==="DATE"){x[f.field]=row.flight_date;changed=true;log.unshift({at,source:"DATA_AUDIT",field:f.field,from:f.value,to:row.flight_date})}
-        if(f.type==="UTC"&&!manual(x,f.field)){x[f.field]=f.expected;if(f.field==="etd")x.edt=f.expected;x[f.field+"TimeBasis"]="LOCAL";changed=true;log.unshift({at,source:"DATA_AUDIT",field:f.field,from:f.value,to:f.expected})}
+        if(f.type==="UTC"&&!manual(x,f.field)){x[f.field]=f.expected;if(f.field==="etd")x.edt=f.expected;x[f.field+"TimeBasis"]="CDG_LOCAL";changed=true;log.unshift({at,source:"DATA_AUDIT",field:f.field,from:f.value,to:f.expected})}
       }
       if(changed){x.flightInfoLog=log.slice(0,240);await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run();repaired++}
     }
