@@ -13,12 +13,12 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .flight-home-row.ops-flight-card:hover{border-color:#9ebfe3!important;background:#fff!important;box-shadow:0 5px 18px rgba(23,60,103,.07)!important}
 #app .flight-home-row.ops-flight-card:focus-visible{outline:3px solid #4b9bef;outline-offset:3px}
 #app .flight-home-row.ops-flight-card>*{display:block!important;min-width:0!important;grid-area:auto!important;max-width:100%!important}
-#app .flight-home-row.ops-flight-card>.ops-identity{grid-area:identity!important;display:grid!important;grid-template-columns:82px minmax(0,1fr)!important;gap:18px!important;align-items:center!important}
+#app .flight-home-row.ops-flight-card>.ops-identity{grid-area:identity!important;display:grid!important;grid-template-columns:120px minmax(0,1fr)!important;gap:18px!important;align-items:center!important}
 #app .flight-home-row.ops-flight-card *{text-transform:none!important}
-#app .ops-logo{display:grid;place-items:center;width:82px;min-width:0}
-#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback,#app .ops-logo-symbol{display:block!important;width:82px!important;height:94px!important;max-width:82px!important;max-height:94px!important;object-fit:contain!important;object-position:center!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important}
+#app .ops-logo{display:grid;place-items:center;width:120px;min-width:0}
+#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{display:block!important;width:120px!important;height:94px!important;max-width:120px!important;max-height:94px!important;object-fit:contain!important;object-position:center!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important;transform:none!important}
 #app .ops-logo .airline-logo-fallback{display:grid!important;place-items:center!important;font-size:24px!important;color:#345578!important}
-#app .ops-logo-symbol{overflow:hidden!important}
+#app .ops-logo-symbol{display:block;width:82px!important;height:94px!important;overflow:hidden!important}
 #app .ops-flight-number{font-size:30px!important;line-height:1.15!important;font-weight:800!important;color:#071227!important;white-space:nowrap}
 #app .ops-flight-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 #app .ops-status-badge{display:inline-flex;align-items:center;max-width:100%;padding:7px 10px;border-radius:7px;background:#e6f8f3;color:#008f74;font-size:12px!important;font-weight:800!important;line-height:1.25;overflow-wrap:anywhere}
@@ -30,6 +30,10 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-aircraft{display:flex;align-items:baseline;gap:8px 12px;flex-wrap:wrap;font-size:17px!important;line-height:1.4!important;margin-top:4px;color:#294666;overflow-wrap:anywhere}
 #app .ops-aircraft-location{display:inline-flex;align-items:baseline;gap:5px;font-size:11px!important;color:#60758c}
 #app .ops-aircraft-location strong{font-size:15px!important;color:#183a5c}
+#app .ops-terminal[data-terminal="T1"]{color:#3064be!important}
+#app .ops-terminal[data-terminal="T2"]{color:#2a8d40!important}
+#app .ops-terminal[data-terminal="T3"]{color:#af2c80!important}
+#app .ops-terminal strong{color:inherit!important}
 #app .ops-registration{font-size:16px!important;line-height:1.4;margin-top:2px;color:#294666}
 #app .flight-home-row.ops-flight-card>.ops-journey{grid-area:journey!important}
 #app .ops-route{display:grid!important;grid-template-columns:minmax(86px,auto) minmax(35px,1fr) minmax(140px,auto)!important;gap:18px!important;align-items:start!important;margin-bottom:12px!important}
@@ -37,6 +41,12 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-flag{font-size:24px;line-height:1;display:inline-flex}
 #app .ops-flag svg{width:30px;height:20px;border:1px solid #e0e5eb;border-radius:2px}
 #app .ops-airport-city{font-size:16px!important;line-height:1.3;margin-top:3px;color:#294666;overflow-wrap:anywhere;text-transform:none!important}
+#app .ops-airport-meta{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap}
+#app .ops-airport-meta .wx-line{margin:3px 0 0!important;min-height:0!important;font-size:12px!important}
+#app .ops-airport-meta .wx-i{display:inline-flex;align-items:center;gap:4px!important}
+#app .ops-airport-meta .wx-svg{width:20px!important;height:20px!important}
+#app .ops-airport-meta .wx-line b{font-size:14px!important;color:#365472!important}
+#app .ops-airport-meta .wx-line small{font-size:10px!important;color:#60758c!important}
 #app .ops-route-line{display:flex;align-items:center;gap:8px;color:#0864ba;padding-top:2px}
 #app .ops-route-line:before,#app .ops-route-line:after{content:"";height:1.5px;background:#77b0ff;flex:1}
 #app .ops-plane-icon{width:30px;height:30px;flex:none;fill:currentColor}
@@ -46,17 +56,22 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-time small{display:block!important;font-size:13px!important;font-weight:500!important;color:#496386!important;line-height:1.25!important}
 #app .ops-time b{display:block!important;margin-top:7px!important;font-size:18px!important;font-weight:750!important;line-height:1.2!important;color:#071227!important;white-space:nowrap!important}
 #app .ops-time b.ops-missing{color:#587397!important;font-weight:500!important}
+#app .ops-time b.ops-estimated{color:#d98200!important}
+#app .ops-time b.ops-estimated .ops-day{color:inherit!important}
 #app .ops-day{font-size:11px!important;font-weight:500;margin-left:2px;vertical-align:baseline;color:#183a61}
 #app .ops-status-context{display:flex;gap:4px 16px;flex-wrap:wrap;margin-top:9px;color:#4b6787;font-size:13px!important;line-height:1.4}
 #app .flight-home-row.ops-flight-card>.ops-expand{grid-area:expand!important;width:32px!important;height:44px!important;min-height:44px!important;border:0!important;border-radius:7px!important;background:transparent!important;padding:4px!important;color:#123d67!important;cursor:pointer}
 #app .ops-expand svg{width:22px;height:22px;transition:transform .15s}
 #app .ops-expand[aria-expanded="true"] svg{transform:rotate(180deg)}
-#app .flight-home-row.ops-flight-card>.ops-extra{grid-area:details!important;display:flex!important;align-items:center;gap:10px 20px;flex-wrap:wrap;padding-top:18px;margin-top:18px;border-top:1px solid #e4edf5;color:#365472;font-size:13px}
+#app .flight-home-row.ops-flight-card>.ops-extra{grid-area:details!important;display:block!important;padding-top:18px;margin-top:18px;border-top:1px solid #e4edf5;color:#365472;font-size:13px}
 #app .flight-home-row.ops-flight-card>.ops-extra[hidden]{display:none!important}
 #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity journey expand"!important}
 #app .ops-extra strong{color:#102f50}
-#app .ops-extra .ops-load-info{display:inline-flex;align-items:baseline;gap:8px;font-size:16px!important;flex-wrap:wrap}
-#app .ops-extra .ops-load-info strong{font-size:18px!important;font-weight:800!important}
+#app .ops-load-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;align-items:stretch}
+#app .ops-extra .ops-load-info{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;padding:4px 8px 12px;min-width:0;min-height:78px;border-right:1px solid #e1e7ee;font-size:16px!important;font-weight:700;color:#8290a2;text-align:center}
+#app .ops-extra .ops-load-info:last-child{border-right:0}
+#app .ops-extra .ops-load-info strong{font-size:22px!important;font-weight:800!important;line-height:1.4;overflow-wrap:anywhere;color:#10233f}
+#app .ops-extra-actions{display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap;margin-top:14px}
 #app .ops-extra .ops-open-detail{margin-left:auto;border:1px solid #c2d8ec;border-radius:8px;background:#f5faff;color:#0c559e;padding:9px 14px;font-size:13px;font-weight:700;min-height:40px}
 #app .ops-extra .home-pin{width:40px!important;height:40px!important;font-size:22px!important;display:inline-block!important}
 #app .ops-extra .home-pin.active{color:#c58900!important}
@@ -64,8 +79,9 @@ body:has(#app .home-page){background:#edf4fa!important}
 @media(max-width:1199px) and (min-width:721px){
  #app .flight-home-row.ops-flight-card{grid-template-columns:minmax(260px,1fr) minmax(0,1.7fr) 28px!important;grid-template-areas:"identity journey expand" "details details details"!important;gap:16px!important;padding:20px!important}
  #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity journey expand"!important}
- #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:56px minmax(0,1fr)!important;gap:12px!important}
- #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback,#app .ops-logo-symbol{width:56px!important;max-width:56px!important;height:68px!important}
+ #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:90px minmax(0,1fr)!important;gap:12px!important}
+ #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{width:90px!important;max-width:90px!important;height:70px!important}
+ #app .ops-logo-symbol{width:64px!important;height:70px!important}
  #app .ops-flight-number{font-size:25px!important}#app .ops-airline-name,#app .ops-aircraft{font-size:14px!important}
  #app .ops-airport-code{font-size:24px!important}#app .ops-route{gap:12px!important;grid-template-columns:auto 1fr auto!important}
  #app .ops-time-group{padding:12px 7px!important;gap:2px!important}#app .ops-time b{font-size:17px!important}#app .ops-time small{font-size:11px!important}
@@ -75,8 +91,9 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .home-hero h1{font-size:21px!important;padding:9px 14px!important}#app .flight-home-list{gap:14px!important}
  #app .flight-home-row.ops-flight-card{grid-template-columns:minmax(0,1fr) 30px!important;grid-template-areas:"identity expand" "journey journey" "details details"!important;gap:16px 8px!important;padding:16px 13px!important;min-height:0!important;border-radius:13px!important;overflow:visible!important}
  #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity expand" "journey journey"!important}
- #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:52px minmax(0,1fr)!important;gap:13px!important}
- #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback,#app .ops-logo-symbol{width:52px!important;max-width:52px!important;height:62px!important}
+ #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:88px minmax(0,1fr)!important;gap:13px!important}
+ #app .ops-logo,#app .ops-logo .airline-logo,#app .ops-logo .airline-logo-fallback{width:88px!important;max-width:88px!important;height:70px!important}
+ #app .ops-logo-symbol{width:58px!important;height:70px!important}
  #app .ops-flight-number{font-size:25px!important}#app .ops-airline-name,#app .ops-aircraft{font-size:14px!important;margin-top:2px}
  #app .ops-route{grid-template-columns:auto minmax(25px,1fr) auto!important;gap:10px!important;margin-bottom:13px!important}
  #app .ops-airport-code{font-size:25px!important;gap:6px}#app .ops-airport-city{font-size:14px!important}#app .ops-flag{font-size:20px}
@@ -84,6 +101,7 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .ops-flight-line{gap:7px}#app .ops-status-badge{padding:5px 8px;font-size:11px!important}
  #app .ops-aircraft{gap:4px 8px}#app .ops-aircraft-location{font-size:10px!important}#app .ops-aircraft-location strong,#app .ops-registration{font-size:14px!important}
  #app .flight-home-row.ops-flight-card>.ops-extra{gap:12px;margin-top:0;padding-top:14px}#app .ops-extra .ops-open-detail{margin-left:0;width:100%}
+ #app .ops-extra .ops-load-info{padding:4px 4px 10px}#app .ops-extra .ops-load-info strong{font-size:20px!important}
 }
 @media(prefers-reduced-motion:reduce){#app .ops-expand svg{transition:none}}
 #app .flight-home-row.ops-flight-card[style*="display: none"]{display:none!important}
@@ -98,7 +116,7 @@ const opsCountry={CDG:'FR',ORY:'FR',NCE:'FR',LIL:'FR',LRT:'FR',PUF:'FR',CHR:'FR'
 function opsTitle(value){return txt(value).toLocaleLowerCase('fr').replace(/(^|[\s-])(\p{L})/gu,(_,space,c)=>space+c.toLocaleUpperCase('fr'))}
 function opsCity(code){try{return opsTitle((typeof CITY!=='undefined'&&CITY[code])||city(code))}catch{return code||''}}
 function opsAirlineLogo(x,idx){
- const marks={SQ:{view:'397 0 83 112',width:480,height:112},OZ:{view:'363 29 90 91',width:480,height:173}},mark=marks[up(x.airline)];
+ const marks={SQ:{view:'397 0 83 112',width:480,height:112},OZ:{view:'363 29 90 91',width:480,height:173},TU:{view:'28 46 183 146',width:240,height:240},TB:{view:'50 30 215 172',width:314,height:202}},mark=marks[up(x.airline)];
  try{const uri=typeof AIRLINE_LOGOS!=='undefined'?AIRLINE_LOGOS[up(x.airline)]:null;if(mark&&uri){const id='ops-logo-clip-'+idx,clip=up(x.airline)==='OZ';return '<svg class="ops-logo-symbol" viewBox="'+mark.view+'" role="img" aria-label="'+esc(x.airline)+'">'+(clip?'<defs><clipPath id="'+id+'"><path d="M363 29h90v91h-60V89h-30z"/></clipPath></defs>':'')+'<image href="'+esc(uri)+'" width="'+mark.width+'" height="'+mark.height+'"'+(clip?' clip-path="url(#'+id+')"':'')+'/></svg>'}}catch{}return airlineLogoHtml(x);
 }
 function opsFlag(code){
@@ -119,7 +137,9 @@ function opsFlightForRow(row){
  const date=txt(local.activeDate||local.date||''),remote=live.find(x=>keyFlight(x)===keyFlight(local)&&txt(x.activeDate||x.date||'')===date&&up(x.dep||x.origin)===up(local.dep||local.origin)&&up(x.dest||x.destination)===up(local.dest||local.destination));
  return {x:{...local,...remote,config:local.config,booked:local.booked,inopSeats:local.inopSeats},idx};
 }
-function opsTimeCell(label,value,day){return '<div class="ops-time"><small>'+label+'</small><b'+(!value?' class="ops-missing"':'')+'>'+esc(value||'—')+(value&&day?'<span class="ops-day">'+(day>0?'+':'')+day+'</span>':'')+'</b></div>'}
+function opsTimeCell(label,value,day){const cls=!value?'ops-missing':(label==='ETD'||label==='ETA')?'ops-estimated':'';return '<div class="ops-time"><small>'+label+'</small><b class="'+cls+'">'+esc(value||'—')+(value&&day?'<span class="ops-day">'+(day>0?'+':'')+day+'</span>':'')+'</b></div>'}
+function opsWeather(code){let html='';try{if(typeof wxInner==='function')html=wxInner(up(code))}catch{}return '<div class="wx-line wx-mini" data-wx="'+esc(up(code))+'" aria-label="Météo '+esc(code)+'">'+html+'</div>'}
+
 function opsTimes(x){const s=safeSchedule(x),t=times(x);return {...t,sta:clock(val(x,'sta','scheduledArrival','scheduled_arrival')),eta:clock(val(x,'eta','estimatedArrival','estimated_arrival')),staDay:Number(x.staDay??s.staDay)||0,etaDay:Number(x.etaDay??s.etaDay)||0,landingDay:Number(x.landingDay)||0}}
 function opsLocalUtc(date,time,code,day=0){
  const m=txt(date).match(/^(\d{4})-(\d{2})-(\d{2})$/),c=clock(time);if(!m||!c)return null;
@@ -142,6 +162,8 @@ function opsListStatus(x,t){
   if(!Number.isFinite(arrival))arrival=opsLocalUtc(date,t.eta||t.sta,x.dest||x.destination,t.eta?t.etaDay:t.staDay);
   if(Number.isFinite(arrival)&&arrival>Date.now())st.remain='Arrivée dans '+opsMinutes(Math.ceil((arrival-Date.now())/60000));
  }
+ if(/^ETD\b/i.test(st.sub))st.sub='';
+ if(/^(PROGRAMM[ÉE]|PR[ÉE]VU)$/.test(up(st.main)))st.main='À L’HEURE';
  return st;
 }
 function opsLoad(x){
@@ -161,12 +183,12 @@ function renderRow(row){
  row.dataset.opsSig=sig;row.classList.remove('v2x-row');row.classList.add('ops-flight-card');row.setAttribute('role','button');row.tabIndex=0;row.setAttribute('aria-label','Ouvrir la fiche du vol '+flight);
  row.onkeydown=e=>{if(e.target===row&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openFlightFromHomeList(idx)}};
  let badge='';try{if(typeof prepaBadge==='function')badge=prepaBadge(x,x.activeDate||x.date)}catch{}
- row.innerHTML='<div class="ops-identity"><div class="ops-logo">'+opsAirlineLogo(x,idx)+'</div><div><div class="ops-flight-line"><span class="ops-flight-number">'+esc(flight)+'</span><span class="ops-status-badge '+st.cls+'">'+esc(st.main)+'</span></div><div class="ops-airline-name">'+esc(name)+'</div><div class="ops-aircraft"><span>'+esc(ac)+'</span><span class="ops-aircraft-location">TERMINAL <strong>'+esc(term||'—')+'</strong></span><span class="ops-aircraft-location">GATE <strong>'+esc(x.gate||'—')+'</strong></span></div><div class="ops-registration">'+esc(reg)+'</div></div></div>'+
- '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-city">'+esc(opsCity(dep))+'</div></div><div class="ops-route-line">'+opsPlane+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-city">'+esc(opsCity(dest))+'</div></div></div>'+
+ row.innerHTML='<div class="ops-identity"><div class="ops-logo">'+opsAirlineLogo(x,idx)+'</div><div><div class="ops-flight-line"><span class="ops-flight-number">'+esc(flight)+'</span><span class="ops-status-badge '+st.cls+'">'+esc(st.main)+'</span></div><div class="ops-airline-name">'+esc(name)+'</div><div class="ops-aircraft"><span>'+esc(ac)+'</span><span class="ops-aircraft-location ops-terminal" data-terminal="'+esc((up(term).match(/^T[123]/)||[])[0]||'')+'">TERMINAL <strong>'+esc(term||'—')+'</strong></span><span class="ops-aircraft-location">GATE <strong>'+esc(x.gate||'—')+'</strong></span></div><div class="ops-registration">'+esc(reg)+'</div></div></div>'+
+ '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-meta"><div class="ops-airport-city">'+esc(opsCity(dep))+'</div>'+opsWeather(dep)+'</div></div><div class="ops-route-line">'+opsPlane+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-meta"><div class="ops-airport-city">'+esc(opsCity(dest))+'</div>'+opsWeather(dest)+'</div></div></div>'+
  '<div class="ops-times"><div class="ops-time-group">'+opsTimeCell('STD',t.std)+opsTimeCell('ETD',t.etd)+opsTimeCell('ATD',t.atd)+opsTimeCell('TO',t.takeoff)+'</div><div class="ops-time-group">'+opsTimeCell('STA',t.sta,t.staDay)+opsTimeCell('ETA',t.eta,t.etaDay)+opsTimeCell('LDG',t.landing,t.landingDay)+opsTimeCell('ATA',t.ata,t.ataDay)+'</div></div>'+((st.sub||st.remain)?'<div class="ops-status-context">'+(st.sub?'<span>'+esc(st.sub)+'</span>':'')+(st.remain?'<span>'+esc(st.remain)+'</span>':'')+'</div>':'')+'</div>'+
  '<button type="button" class="ops-expand" aria-label="Détails du vol '+esc(flight)+'" aria-expanded="'+expanded+'" aria-controls="ops-extra-'+idx+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></button>'+
- '<div id="ops-extra-'+idx+'" class="ops-extra"'+(expanded?'':' hidden')+'><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info">AVAILABLE <strong>'+esc(load.avail)+'</strong></span>'+(load.nok?'<span>INOP <strong>'+load.nok+'</strong></span>':'')+badge+
- '<button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'<button type="button" class="ops-open-detail">Ouvrir la fiche vol →</button></div>';
+ '<div id="ops-extra-'+idx+'" class="ops-extra"'+(expanded?'':' hidden')+'><div class="ops-load-summary"><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info">AVAILABLE <strong>'+esc(load.avail)+'</strong></span></div><div class="ops-extra-actions">'+(load.nok?'<span>INOP <strong>'+load.nok+'</strong></span>':'')+badge+
+ '<button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'<button type="button" class="ops-open-detail">Ouvrir la fiche vol →</button></div></div>';
  row.querySelector('.ops-expand').onclick=e=>{e.stopPropagation();if(expandedFlights.has(key))expandedFlights.delete(key);else expandedFlights.add(key);renderRow(row)};
  row.querySelector('.home-pin').onclick=e=>{e.stopPropagation();toggleFavoriteFlight(idx)};
  row.querySelector('.ops-open-detail').onclick=e=>{e.stopPropagation();openFlightFromHomeList(idx)};
