@@ -98,6 +98,8 @@ function syncPastChip(total){
   chip.classList.toggle('on',showPast);
 }
 setInterval(()=>{if(!document.hidden)applyAutoPast()},60000);
+// Called synchronously by the card renderer right after it rebuilds rows, so a fresh list never paints past / out-of-slice flights before they are hidden.
+window.__alyziaApplyHomeFilters=()=>{try{applyFinalTimeFilter();applyAutoPast()}catch(e){}};
 function ensure(){fixRows();ensureClear();ensureTime();applyFinalTimeFilter();applyAutoPast()}
 function scheduleFixes(){[0,40,120,260,600].forEach(ms=>setTimeout(ensure,ms))}
 const baseHome=window.renderHome;if(typeof baseHome==='function')window.renderHome=function(...args){for(const x of flights())repairPairs(x);const r=baseHome.apply(this,args);try{ensure();updateVisibleFlightCount()}catch{}scheduleFixes();scheduleVisibleFlightCount();return r};

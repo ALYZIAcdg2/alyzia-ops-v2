@@ -68,7 +68,7 @@ const LONG_TYPE_RULES=[
 const STRICT=[["738","73H","73W","73J","7S8"],["320","32A"],["321","32S","32B"],["7M8","38M"],["763","76W"],["32Q","N32"]];
 // Codes sous lesquels le catalogue cabines peut ranger le même appareil (ex. LY enregistre son 777-200 en « 777 » alors que le type réel remonte « 772 »).
 const CONFIG_ALIASES={"772":["777"],"777":["772"],"32Q":["N32"],"N32":["32Q"],"321":["32B","32S"],"32B":["321"],"32S":["321"],"763":["76W"],"76W":["763"],"738":["73H","7S8"],"73H":["738"],"7S8":["738"],"7M8":["38M"],"38M":["7M8"],"320":["32A"],"32A":["320"]};
-export function configCodes(code){const c=upper(code);return c?[c,...(CONFIG_ALIASES[c]||[])]:[]}
+export function configCodes(code){const c=upper(code);return c?[...new Set([c,...(CONFIG_ALIASES[c]||[]),...STRICT.filter(g=>g.includes(c)).flat()])]:[]}
 
 export function toIata(raw){
   const v=upper(raw);if(!v)return "";
@@ -104,4 +104,10 @@ export function noteActualAircraft(x,rawType,source,at){
       const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source,field:"aircraftChange",from:imported,to:actual,raw});x.flightInfoLog=log.slice(0,160)}
   }else if(x.aircraftChange){delete x.aircraftChange;changed=true}
   return changed;
+}
+
+// Même conversion, côté navigateur : sérialise les tables et les fonctions ci-dessus pour que les cartes et la fiche vol affichent
+// le type normalisé Seatmap (359, 77W, 32Q…) et retrouvent les plans cabine d'un type via ses codes équivalents.
+export function clientSeatmapTypeSource(){
+  return `(()=>{const clean=${clean.toString()},upper=${upper.toString()},ICAO_TO_IATA=${JSON.stringify(ICAO_TO_IATA)},CONFIG_ALIASES=${JSON.stringify(CONFIG_ALIASES)},STRICT=${JSON.stringify(STRICT)},LONG_TYPE_RULES=[${LONG_TYPE_RULES.map(([re,code])=>`[${re.toString()},${JSON.stringify(code)}]`).join(",")}];${toIata.toString()}${configCodes.toString()}return {toIata,configCodes}})()`;
 }
