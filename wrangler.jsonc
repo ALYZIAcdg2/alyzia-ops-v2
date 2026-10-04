@@ -1,6 +1,6 @@
 {
   "name": "alyzia-ops-v2",
-  "main": "./src/v2-ui-consistency-wrapper.js",
+  "main": "./src/v2-ui-peau-neuve-wrapper.js",
   "compatibility_date": "2026-08-06",
 
   "assets": {
