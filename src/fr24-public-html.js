@@ -227,7 +227,7 @@ export function fr24HistoryRow(raw,flight){
 
 // The Worker receives the page rendered in UTC (a browser shows it in its own time zone: STD 05:00 in Paris is 03:00 on the page read by the Worker).
 // Convert to airport-local clocks: ATD in the origin zone, STA and landing in the destination zone. If the page STD already equals the flight's STD, it is local.
-function utcToLocal(hhmm,date,zone){
+export function utcToLocal(hhmm,date,zone){
   const m=clean(hhmm).match(/^(\d{2}):(\d{2})$/),d=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m||!d||!zone)return hhmm;
   const at=new Date(Date.UTC(+d[1],+d[2]-1,+d[3],+m[1],+m[2]));
   try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(at).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return hhmm}

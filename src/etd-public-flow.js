@@ -1,6 +1,6 @@
 import {guardDepartureClock} from "./local-time-guard.js";
 import {withIcaoFallback} from "./public-flight-alias.js";
-import {fetchFr24Public} from "./fr24-public-html.js";
+import {fetchFr24Public,utcToLocal} from "./fr24-public-html.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 
 const clean=v=>String(v??"").trim();
@@ -17,13 +17,16 @@ function occurrenceMatch(text,f){const u=upper(text);return (u.includes(upper(f.
 async function page(name,url,f){const c=new AbortController(),timer=setTimeout(()=>c.abort(),6000);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-ETD/1.1)"}});const text=textOnly(await r.text());if(!r.ok)return {source:name,status:"HTTP_ERROR"};if(!occurrenceMatch(text,f))return {source:name,status:"OCCURRENCE_MISMATCH"};const etd=estimatedDeparture(text);return {source:name,status:etd?"OK":"NO_ETD",etd}}catch(e){return {source:name,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}finally{clearTimeout(timer)}}
 function reader(name,build){return f=>withIcaoFallback(f,build,x=>page(name,build(x),x))}
 
+// FR24 pages read by the Worker are rendered in UTC: a time found in their text is UTC, converted here to the local clock of the origin.
+const localFromUtcText=(clock,f)=>{const c=hhmm(clock);return c?utcToLocal(c,f.date,AIRPORT_TZ[upper(f.origin)]||"Europe/Paris"):""};
 async function fr24(f){
   const r=await fetchFr24Public(f);
   const semanticIso=r?.candidates?.semantic?.etd;
   let etd=semanticIso?localFromIso(semanticIso,f.origin):"";
-  if(!etd)etd=estimatedDeparture(r?.candidates?.excerpt||"");
+  if(!etd)etd=localFromUtcText(estimatedDeparture(r?.candidates?.excerpt||""),f);
   if(etd&&!sameClock(etd,f.std))return {source:"FR24",status:"OK",etd};
   const history=await page("FR24",`https://www.flightradar24.com/data/flights/${encodeURIComponent(f.designator.toLowerCase())}`,f);
+  if(history.status==="OK")history.etd=localFromUtcText(history.etd,f);
   if(history.status==="OK"&&!sameClock(history.etd,f.std))return history;
   const status=(etd&&sameClock(etd,f.std))||(history.status==="OK"&&sameClock(history.etd,f.std))?"ETD_EQUALS_STD":history.status;
   return {source:"FR24",status,etd:""};
@@ -67,7 +70,7 @@ async function apply(env,row){
   {const g=guardDepartureClock(hit.etd,f.std,f.date,AIRPORT_TZ[upper(f.origin)]||"Europe/Paris");if(g.status==="REJECTED")return {flight:f.designator,status:"ETD_NOT_LOCAL",etd:hit.etd};hit.etd=g.value}
   if(sameClock(hit.etd,f.std))return {flight:f.designator,status:"ETD_EQUALS_STD"};
   const at=new Date().toISOString(),from=hhmm(current.etd||current.edt);
-  current.etd=hit.etd;current.edt=hit.etd;current.etdSource=`PUBLIC_ETD:${hit.source}`;current.etdUpdatedAt=at;current.etdBackfill={checkedAt:at,status:"OK",source:hit.source,attempts:hit.attempts||[]};
+  current.etd=hit.etd;current.edt=hit.etd;current.etdSource=`PUBLIC_ETD:${hit.source}`;current.etdUpdatedAt=at;current.etdTimeBasis="CDG_LOCAL";current.etdBackfill={checkedAt:at,status:"OK",source:hit.source,attempts:hit.attempts||[]};
   const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:`PUBLIC_ETD:${hit.source}`,field:"etd",from,to:hit.etd});current.flightInfoLog=log.slice(0,200);
   await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(current),row.identity).run();
   return {flight:f.designator,status:from===hit.etd?"UNCHANGED":"UPDATED",etd:hit.etd,source:hit.source};
