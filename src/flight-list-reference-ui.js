@@ -156,7 +156,7 @@ function opsPickByType(x,type){
     // A cabin version chosen by hand always wins; otherwise the plan must belong to the flight's aircraft type.
     if(x.cabinConfigAuto===false&&entry)return entry;
     const type=opsType(x);if(!type||(entry&&opsSameType(entry.ac,type)))return entry;
-    return opsPickByType(x,type)||entry;
+    const picked=opsPickByType(x,type);if(!picked)opsFetchPlans(x,type);return picked||entry;
    };
    wrapped.__alyType=true;window.sariaSelectedEntry=wrapped;
   }
@@ -182,6 +182,19 @@ function opsPlanClasses(entry){
  o={};String(entry?.config||entry?.configuration||'').toUpperCase().replace(/(\d+)\s*([A-Z])/g,(_,n,k)=>{o[k]=(o[k]||0)+Number(n)});
  if(!Object.keys(o).length&&Number(entry?.total)>0)o={Y:Number(entry.total)};
  return o;
+}
+// Same query as OUTILS / SEATMAP and PLAN CABINE (/api/cabin/configs?airline&aircraft), once per airline+type, when the catalog has no plan for the flight's type.
+const opsPlanFetches=new Set();
+function opsFetchPlans(x,type){
+ const al=up(x?.airline||String(x?.flight||'').replace(/\d.*$/,''));if(!al||!type||typeof fetch!=='function'||typeof cabinEntryFromApi!=='function'||typeof opsApiUrl!=='function')return;
+ for(const code of ALY_TYPES.configCodes(type)){
+  const key=al+'|'+code;if(opsPlanFetches.has(key))continue;opsPlanFetches.add(key);
+  fetch(opsApiUrl('/api/cabin/configs?airline='+encodeURIComponent(al)+'&aircraft='+encodeURIComponent(code)),{cache:'no-store',headers:{Accept:'application/json'}}).then(r=>r.json()).then(j=>{
+   const rows=(j&&j.ok&&Array.isArray(j.configs)?j.configs:[]).map(cabinEntryFromApi),known=new Set(opsCatalog().map(e=>txt(e.config_key)));
+   const fresh=rows.filter(e=>!known.has(txt(e.config_key)));
+   if(fresh.length){opsCatalog().push(...fresh);document.querySelectorAll('#app .flight-home-row').forEach(r=>delete r.dataset.opsSig)}
+  }).catch(()=>opsPlanFetches.delete(key));
+ }
 }
 // The catalog is marked loaded even when its request failed: retry (at most every 20 s) while it is still empty.
 let opsCatalogTry=0;
