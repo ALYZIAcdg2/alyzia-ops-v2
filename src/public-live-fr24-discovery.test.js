@@ -61,3 +61,25 @@ test("without playback, the FR24 history row alone gives ENT777 its ATD, landing
     assert.equal(update.status,"ARRIVÉE");
   }finally{globalThis.fetch=real}
 });
+
+test("a UTC history page (as received by the Worker) is converted to local times before filling ENT777",async()=>{
+  const flight={airline:"ENT",flight:"ENT777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA"};
+  let update=null;
+  const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
+    async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"ENT777",airline:"ENT",std:"05:00",data_json:JSON.stringify(flight)}]}},
+    async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
+    async run(){return {}}}},batch:async()=>[]}};
+  const [y,m,d]=today.split("-"),mon=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m)-1];
+  // 05:00 Paris = 03:00 UTC in summer time; the test only runs in the CEST period
+  const offset=(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
+  if(offset!==2)return;
+  const history=`<html><tr><td>SP-ESB</td><td>${d} ${mon} ${y}</td><td>Landed 05:45</td><td>STD 03:00</td><td>ATD 03:37</td><td>STA 05:25</td><td>FROM Paris (CDG)</td><td>TO Tirana (TIA)</td></tr></html>`;
+  const real=globalThis.fetch;
+  globalThis.fetch=async(url)=>String(url).includes("/data/flights/e4777")?new Response(history,{headers:{"content-type":"text/html"}}):new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}});
+  try{
+    await runPublicLiveFlow(env,{limit:1,concurrency:1});
+    assert.equal(update.atd,"05:37");
+    assert.equal(update.landing,"07:45");
+    assert.equal(update.ata,"07:55");
+  }finally{globalThis.fetch=real}
+});
