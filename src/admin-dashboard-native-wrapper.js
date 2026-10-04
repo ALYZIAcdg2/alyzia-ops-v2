@@ -36,7 +36,9 @@ export function classify({row,x},now){
   }else if(today){
     // Reference departure time: ETD when announced, else STD. "À CONTRÔLER" only once it has passed without ATD;
     // a flight whose STD (or ETD) is still ahead is never flagged, even without ETD.
-    const expected=minute(etd)??stdMin;
+    let expected=minute(etd)??stdMin;
+    // ETD after midnight for an evening STD (e.g. STD 22:35, ETD 00:56) is on the next day: not passed yet.
+    if(expected!==null&&stdMin!==null&&expected+720<stdMin)expected+=1440;
     if(expected!==null&&nowMin!==null&&nowMin>expected){
       missing.push("ATD");
       state="À CONTRÔLER";
