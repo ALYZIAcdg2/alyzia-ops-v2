@@ -169,3 +169,26 @@ test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24
     assert.equal(update.flightAwareHistoryUrl,`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
   }finally{globalThis.fetch=real}
 });
+
+test("runLiveForFlight: dry run shows what would be written for ENT777 without saving it; POST mode saves",async()=>{
+  const {runLiveForFlight}=await import("./ops-public-live-flow-optimized.js");
+  const flight={airline:"ENT",flight:"ENT777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA"};
+  let saved=0;
+  const env={OPS_DB:{prepare(sql){return {bind(){return this},
+    async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"ENT777",airline:"ENT",std:"05:00",data_json:JSON.stringify(flight)}]}},
+    async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
+    async run(){if(sql.startsWith("UPDATE flights"))saved++;return {}}}},batch:async()=>[]}};
+  const [y,m,d]=today.split("-"),mon=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m)-1];
+  const history=`<html><tr><td>SP-ESB</td><td>${d} ${mon} ${y}</td><td>Landed 07:45</td><td>STD 05:00</td><td>ATD 05:37</td><td>STA 07:25</td><td>FROM Paris (CDG)</td><td>TO Tirana (TIA)</td></tr></html>`;
+  const real=globalThis.fetch;
+  globalThis.fetch=async(url)=>String(url).includes("/data/flights/e4777")?new Response(history,{headers:{"content-type":"text/html"}}):new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}});
+  try{
+    const dry=await runLiveForFlight(env,{flight:"ent777",dryRun:true});
+    assert.equal(dry.ok,true);assert.equal(dry.candidates,1);assert.equal(dry.rank,1);assert.equal(dry.inNextRun,true);
+    assert.equal(dry.result.dryRun,true);assert.equal(dry.result.after.atd,"05:37");assert.equal(dry.result.before.atd,null);assert.equal(dry.result.sources.FR24.atd,"05:37");
+    assert.equal(saved,0,"a dry run saves nothing");
+    const live=await runLiveForFlight(env,{flight:"ENT777",dryRun:false});
+    assert.equal(live.result.status,"UPDATED");assert.equal(saved,1);
+    assert.equal((await runLiveForFlight(env,{flight:"NOPE1",dryRun:true})).error,"FLIGHT_NOT_FOUND");
+  }finally{globalThis.fetch=real}
+});
