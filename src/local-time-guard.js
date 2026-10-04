@@ -1,0 +1,24 @@
+// Every clock stored on a flight is the LOCAL time of its airport (departure facts: origin, arrival facts: destination).
+// Some public pages are rendered in UTC for the Worker (FR24 history, playback…). A departure clock more than 50 min BEFORE the planned STD is not a real
+// departure: it is the UTC reading of the page. Shift it by the local offset of the airport when that gives a plausible departure, otherwise refuse it.
+const clean=v=>String(v??"").trim();
+const clockMinutes=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null};
+const clockText=min=>{const v=((Math.round(min)%1440)+1440)%1440;return `${String(Math.floor(v/60)).padStart(2,"0")}:${String(v%60).padStart(2,"0")}`};
+const signedGap=(a,b)=>{let d=a-b;if(d>720)d-=1440;if(d<-720)d+=1440;return d};
+
+export function zoneOffsetMinutes(date,zone="Europe/Paris"){
+  const m=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return 0;
+  const at=new Date(Date.UTC(+m[1],+m[2]-1,+m[3],12));
+  try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(at).map(x=>[x.type,x.value]));return (Number(p.hour)*60+Number(p.minute))-12*60}catch{return 0}
+}
+
+// -> {value, status}: status "OK" (kept), "SHIFTED" (UTC reading converted to local), "REJECTED" (not a plausible departure), "UNCHECKED" (no STD to compare with).
+export function guardDepartureClock(value,std,date,zone="Europe/Paris"){
+  const v=clockMinutes(value),s=clockMinutes(std);
+  if(v===null)return {value:clean(value),status:"UNCHECKED"};
+  if(s===null)return {value:clockText(v),status:"UNCHECKED"};
+  if(signedGap(v,s)>-50)return {value:clockText(v),status:"OK"};
+  const shifted=v+zoneOffsetMinutes(date,zone),gap=signedGap(shifted,s);
+  if(gap>=-30&&gap<=240)return {value:clockText(shifted),status:"SHIFTED"};
+  return {value:"",status:"REJECTED"};
+}

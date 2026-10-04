@@ -1,3 +1,4 @@
+import {guardDepartureClock} from "./local-time-guard.js";
 import {withIcaoFallback} from "./public-flight-alias.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
@@ -62,6 +63,8 @@ async function apply(env,row){
     await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(current),row.identity).run();
     return {flight:f.designator,status:hit.status,attempts:hit.attempts||[]};
   }
+  // Local clock of the origin: a public page rendered in UTC gives an ETD hours before the STD.
+  {const g=guardDepartureClock(hit.etd,f.std,f.date,AIRPORT_TZ[upper(f.origin)]||"Europe/Paris");if(g.status==="REJECTED")return {flight:f.designator,status:"ETD_NOT_LOCAL",etd:hit.etd};hit.etd=g.value}
   if(sameClock(hit.etd,f.std))return {flight:f.designator,status:"ETD_EQUALS_STD"};
   const at=new Date().toISOString(),from=hhmm(current.etd||current.edt);
   current.etd=hit.etd;current.edt=hit.etd;current.etdSource=`PUBLIC_ETD:${hit.source}`;current.etdUpdatedAt=at;current.etdBackfill={checkedAt:at,status:"OK",source:hit.source,attempts:hit.attempts||[]};
@@ -81,4 +84,4 @@ export async function runEtdPublicFlow(env,{concurrency=6}={}){
   await saveLastRun(env,summary);return {...summary,results:out};
 }
 
-export async function etdPublicStatus(env){let last=null;try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_etd_public_last'`).first();if(r?.v)last=JSON.parse(r.v)}catch{}return {ok:true,cadenceMinutes:5,sources:ETD_PUBLIC_SOURCE_ORDER,lastRun:last}}
+export async function etdPublicStatus(env){let last=null;try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_etd_public_last'`).first();if(r?.v)last=JSON.parse(r.v)}catch{}return {ok:true,cadenceMinutes:2,sources:ETD_PUBLIC_SOURCE_ORDER,lastRun:last}}

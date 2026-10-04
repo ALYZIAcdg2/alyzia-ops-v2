@@ -366,7 +366,7 @@ export default {
       ok:true,
       oagConfigured:Boolean(env.OAG_API_KEY),
       aeroDataBoxConfigured:Boolean(env.AERODATABOX_API_KEY),
-      cron:"*/5 * * * *",
+      cron:"*/2 * * * *",
       oagBudgetPerTick:3
     });
 

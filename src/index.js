@@ -7711,7 +7711,8 @@ function lot3MergeOperationalInfo(existing,row){
   const info=result.operationalInfo||{};
   const x=existing && typeof existing==="object"?{...existing}:{};
 
-  if(info.date)x.date=info.date;
+  // The date of an existing flight is its identity: an operational info of another day (a 1 Oct JFE read for the 4 Oct flight) must not rewrite it.
+  if(info.date&&!String(x.date||"").trim())x.date=info.date;
   if(info.dep)x.dep=info.dep;
   if(info.dest)x.dest=info.dest;
   if(info.std)x.std=info.std;

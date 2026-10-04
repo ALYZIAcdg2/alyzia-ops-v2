@@ -38,4 +38,4 @@ export async function runEtdPublicFlowSafe(env,{concurrency=6}={}){
   const out=await mapLimit(candidates,Math.max(1,Math.min(8,Number(concurrency)||6)),r=>apply(env,r));
   const summary={ok:true,date,startedAt,finishedAt:new Date().toISOString(),total:results.length,checked:candidates.length,updated:out.filter(x=>x.status==="UPDATED").length,unchanged:out.filter(x=>x.status==="UNCHANGED").length,stoppedAtd:results.length-candidates.length,statusCounts:{}};for(const r of out)summary.statusCounts[r.status]=(summary.statusCounts[r.status]||0)+1;await saveLastRun(env,summary);return {...summary,results:out}
 }
-export async function etdPublicStatusSafe(env){let last=null;try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_etd_public_last'`).first();if(r?.v)last=JSON.parse(r.v)}catch{}return {ok:true,cadenceMinutes:5,sources:ETD_PUBLIC_SOURCE_ORDER,lastRun:last}}
+export async function etdPublicStatusSafe(env){let last=null;try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_etd_public_last'`).first();if(r?.v)last=JSON.parse(r.v)}catch{}return {ok:true,cadenceMinutes:2,sources:ETD_PUBLIC_SOURCE_ORDER,lastRun:last}}

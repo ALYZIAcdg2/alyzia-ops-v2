@@ -1,3 +1,4 @@
+import {auditFlightData} from "./admin-data-audit.js";
 import app from "./v2-admin-all-public-sources-wrapper.js";
 import {ETD_PUBLIC_SOURCE_ORDER} from "./etd-public-flow.js";
 import {runEtdPublicFlowSafe,etdPublicStatusSafe} from "./etd-public-runner.js";
@@ -31,7 +32,19 @@ async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=t
   const statusModel=await runStatusModelTest(env);
   return {etd,live,ground,statusModel};
 }
-function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15===0}
+const CRON_LOCK_MS=100000;
+async function acquireCronLock(env){
+  try{
+    await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();
+    const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_cron_lock'`).first();
+    if(Date.now()-(Number(r?.v)||0)<CRON_LOCK_MS)return false;
+    await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_cron_lock',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(String(Date.now())).run();
+    return true;
+  }catch{return true}
+}
+async function releaseCronLock(env){try{await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_cron_lock','0') ON CONFLICT(k) DO UPDATE SET v='0'`).run()}catch{}}
+// The cron fires on even minutes only: the quarter-hour window is minutes 0-1 of each quarter (0, 16, 30, 46), so it is hit exactly once per quarter.
+function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15<2}
 
 const PUSH_UI=String.raw`<script id="alyzia-push-all-public-js">(()=>{'use strict';
 window.adminPushNow=async function(){
@@ -65,7 +78,11 @@ export default {
     if(url.pathname==="/api/admin/etd-public-status"){
       try{return json(await etdPublicStatusSafe(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
-    if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:5});
+    if(url.pathname==="/api/admin/data-audit"){
+      // GET: read-only audit of local clocks and flight dates (from / to = YYYY-MM-DD, default yesterday..tomorrow). POST ?repair=1: fixes dates and UTC clocks.
+      try{return json(await auditFlightData(env,{from:url.searchParams.get("from")||"",to:url.searchParams.get("to")||"",repair:request.method==="POST"&&url.searchParams.get("repair")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:2});
     if(url.pathname==="/api/admin/core-source-diagnostic"&&request.method==="GET"){
       try{return json(await runCoreSourceDiagnosticTest({date:url.searchParams.get('date')||'',flight:url.searchParams.get('flight')||'',origin:url.searchParams.get('origin')||'CDG',destination:url.searchParams.get('destination')||''}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
@@ -84,7 +101,7 @@ export default {
     if(url.pathname==="/api/admin/live-public-status"){
       try{return json(await publicLiveStatus(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
-    if(url.pathname==="/api/admin/live-public-sources")return json({ok:true,sources:{...LIVE_PUBLIC_SOURCE_ORDER,statusModel:STATUS_MODEL_TEST_RULES},statusMode:'V1_LOGIC_V2_PUBLIC_SOURCES',apis:false,cadenceMinutes:5});
+    if(url.pathname==="/api/admin/live-public-sources")return json({ok:true,sources:{...LIVE_PUBLIC_SOURCE_ORDER,statusModel:STATUS_MODEL_TEST_RULES},statusMode:'V1_LOGIC_V2_PUBLIC_SOURCES',apis:false,cadenceMinutes:2});
     if(url.pathname==="/api/admin/status-model-test"){
       try{return json(await runStatusModelTest(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
@@ -107,10 +124,15 @@ export default {
   scheduled(controller,env,ctx){
     if(typeof app.scheduled==="function")app.scheduled(controller,env,ctx);
     ctx.waitUntil((async()=>{
-      await runEtd(env).catch(()=>{});
-      await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
-      if(isQuarterHour(controller))await runGround(env).catch(()=>{});
-      await runStatusModelTest(env).catch(()=>{});
+      // The cron runs every 2 minutes: a run still in progress (lock younger than 100 s) is not doubled.
+      if(!(await acquireCronLock(env)))return;
+      try{
+        // Live facts (ATD, takeoff, landing…) first: they are the most time-critical; the ETD pass over every flight can be long.
+        await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
+        await runEtd(env).catch(()=>{});
+        if(isQuarterHour(controller))await runGround(env).catch(()=>{});
+        await runStatusModelTest(env).catch(()=>{});
+      }finally{await releaseCronLock(env)}
     })());
   }
 };
