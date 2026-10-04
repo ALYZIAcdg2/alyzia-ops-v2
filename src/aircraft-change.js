@@ -106,8 +106,12 @@ export function noteActualAircraft(x,rawType,source,at){
   return changed;
 }
 
-// Même conversion, côté navigateur : sérialise les tables et les fonctions ci-dessus pour que les cartes et la fiche vol affichent
-// le type normalisé Seatmap (359, 77W, 32Q…) et retrouvent les plans cabine d'un type via ses codes équivalents.
+// Même conversion, côté navigateur : les tables sont sérialisées en JSON et les fonctions sont écrites en toutes lettres.
+// Ne jamais utiliser Function.prototype.toString() ici : le bundler du Worker renomme les identifiants (clean -> clean2…) et le code
+// sérialisé référencerait alors des noms qui n'existent pas dans le navigateur.
 export function clientSeatmapTypeSource(){
-  return `(()=>{const clean=${clean.toString()},upper=${upper.toString()},ICAO_TO_IATA=${JSON.stringify(ICAO_TO_IATA)},CONFIG_ALIASES=${JSON.stringify(CONFIG_ALIASES)},STRICT=${JSON.stringify(STRICT)},LONG_TYPE_RULES=[${LONG_TYPE_RULES.map(([re,code])=>`[${re.toString()},${JSON.stringify(code)}]`).join(",")}];${toIata.toString()}${configCodes.toString()}return {toIata,configCodes}})()`;
+  return String.raw`(()=>{const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase(),ICAO_TO_IATA=${JSON.stringify(ICAO_TO_IATA)},CONFIG_ALIASES=${JSON.stringify(CONFIG_ALIASES)},STRICT=${JSON.stringify(STRICT)},LONG_TYPE_RULES=[${LONG_TYPE_RULES.map(([re,code])=>`[${re.toString()},${JSON.stringify(code)}]`).join(",")}];
+function toIata(raw){const v=upper(raw);if(!v)return "";if(ICAO_TO_IATA[v])return ICAO_TO_IATA[v];if(/^[A-Z0-9]{3}$/.test(v))return v;const normalized=v.replace(/[–—]/g,"-").replace(/_/g," ").replace(/\s+/g," ");for(const [pattern,seatmap] of LONG_TYPE_RULES){if(pattern.test(normalized))return seatmap}return ""}
+function configCodes(code){const c=upper(code);return c?[...new Set([c,...(CONFIG_ALIASES[c]||[]),...STRICT.filter(g=>g.includes(c)).flat()])]:[]}
+return {toIata,configCodes}})()`;
 }
