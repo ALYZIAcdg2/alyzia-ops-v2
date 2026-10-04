@@ -20,3 +20,9 @@ test("ETD passed without ATD is to be checked, ETD ahead is not",()=>{
 test("a departed flight with ATD is not to be checked",()=>{
   assert.notEqual(classify(row({std:"09:00",atd:"09:05"}),now).state,"À CONTRÔLER");
 });
+
+test("an ETD after midnight for an evening STD is tomorrow, not passed",()=>{
+  const late={date:"2026-10-04",hhmm:"23:50"};
+  assert.notEqual(classify(row({std:"22:35",etd:"00:56",gate:"26",reg:"9V-SJD"}),late).state,"À CONTRÔLER");
+  assert.equal(classify(row({std:"21:00",etd:"23:10"}),late).state,"À CONTRÔLER");
+});
