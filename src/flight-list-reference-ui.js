@@ -3,8 +3,7 @@ export const REFERENCE_LIST_STYLE = String.raw`<style id="alyzia-flight-list-ref
 body:has(#app .home-page){background:#edf4fa!important}
 .page:has(.home-page){background:#edf4fa!important;min-height:calc(100vh - 60px)!important}
 #app .home-page{background:transparent!important}
-#app .home-hero{background:transparent!important;border:0!important;box-shadow:none!important;padding:12px 0 18px!important}
-#app .home-hero h1{display:inline-block!important;background:#103455!important;color:#fff!important;padding:10px 20px!important;border-radius:9px!important;font-size:26px!important;letter-spacing:0!important;line-height:1.2!important}
+#app .home-hero{background:transparent!important;border:0!important;box-shadow:none!important;padding:12px 0 18px!important;justify-content:flex-end!important}
 #app .home-hero p{display:none!important}
 #app .home-table-scroll{overflow:visible!important;min-width:0!important}
 #app .home-head{display:none!important}
@@ -89,7 +88,7 @@ body:has(#app .home-page){background:#edf4fa!important}
 }
 @media(min-width:721px) and (max-width:1000px){#app .ops-times{grid-template-columns:1fr!important}}
 @media(max-width:720px){
- #app .home-hero h1{font-size:21px!important;padding:9px 14px!important}#app .flight-home-list{gap:14px!important}
+ #app .flight-home-list{gap:14px!important}
  #app .flight-home-row.ops-flight-card{grid-template-columns:minmax(0,1fr) 30px!important;grid-template-areas:"identity expand" "journey journey" "details details"!important;gap:16px 8px!important;padding:16px 13px!important;min-height:0!important;border-radius:13px!important;overflow:visible!important}
  #app .flight-home-row.ops-flight-card:has(>.ops-extra[hidden]){grid-template-areas:"identity expand" "journey journey"!important}
  #app .flight-home-row.ops-flight-card>.ops-identity{grid-template-columns:88px minmax(0,1fr)!important;gap:13px!important}
