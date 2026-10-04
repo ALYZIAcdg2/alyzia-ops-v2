@@ -111,7 +111,8 @@ body:has(#app .home-page){background:#edf4fa!important}
  #app .ops-extra .ops-load-info{padding:4px 4px 10px}#app .ops-extra .ops-load-info strong{font-size:16px!important}
 }
 @media(prefers-reduced-motion:reduce){#app .ops-expand svg{transition:none}}
-#app .flight-home-row:not(.ops-flight-card):not(.ops-skip){visibility:hidden!important}
+html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip){visibility:hidden!important}
+#app .flight-home-row.ops-flight-card.ops-flight-card.ops-flight-card{visibility:visible!important}
 #app .flight-home-row.ops-flight-card[style*="display: none"],#app .flight-home-row.ops-flight-card.alyzia-final-time-hidden,#app .flight-home-row.ops-flight-card.alyzia-auto-past-hidden{display:none!important}
 #app .home-print-btn{display:none!important}
 .nav-plane{display:block;margin:auto}
@@ -133,6 +134,7 @@ body:has(#app .home-page){background:#edf4fa!important}
 
 // Inserted inside the existing UI controller so it shares its live refresh and escaping helpers.
 export const REFERENCE_LIST_RENDERER = "const ALY_TYPES="+clientSeatmapTypeSource()+";\n"+String.raw`
+document.documentElement.classList.add('alyzia-ops-cards');
 const expandedFlights=new Set();
 // ---- Aircraft type -> seatmap type and cabin configuration ----
 // Displayed type = type converted to the Seatmap code (359, 77W, 32Q…); the cabin configuration follows that type.
