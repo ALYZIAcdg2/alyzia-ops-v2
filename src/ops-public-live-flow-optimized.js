@@ -1,7 +1,8 @@
 import {guardDepartureClock,zoneOffsetMinutes} from "./local-time-guard.js";
+import {isWebWordRegistration} from "./registration-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
-import {flightAwareJsonSemantic} from "./flightaware-page-times.js";
+import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {noteActualAircraft} from "./aircraft-change.js";
@@ -41,7 +42,7 @@ const FA_HEADERS={accept:"text/html,application/xhtml+xml","accept-language":"fr
 async function faGet(url,timeout=8000){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:FA_HEADERS});return {httpStatus:r.status,raw:r.ok?await r.text():""}}catch(e){return {httpStatus:0,raw:"",error:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}finally{clearTimeout(t)}}
 export function flightAwareHistoryUrl(raw,f){
   const src=String(raw||"").replace(/\\\//g,"/").replace(/&amp;/g,"&"),found=[];
-  for(const m of src.matchAll(/https?:\/\/[^"'<>\s]*?\/live\/flight\/[A-Z0-9]+\/history\/(\d{8})\/(\d{4})Z\/([A-Z]{4})\/([A-Z]{4})/g))found.push({url:m[0],day:m[1],hm:m[2],origin:m[3]});
+  for(const m of src.matchAll(/https?:\/\/(?:www\.)?flightaware\.com\/live\/flight\/[A-Z0-9]+\/history\/(\d{8})\/(\d{4})Z\/([A-Z]{4})\/([A-Z]{4})/g))found.push({url:m[0],day:m[1],hm:m[2],origin:m[3]});
   const dep=String(f.std||"").match(/(\d{1,2}):(\d{2})/),d=String(f.date||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!dep||!d)return "";
   const stdUtc=Date.UTC(+d[1],+d[2]-1,+d[3],+dep[1],+dep[2])/60000-zoneOffsetMinutes(f.date,AIRPORT_TZ[upper(f.origin||"CDG")]||"Europe/Paris");
   let best="",gap=241;
@@ -54,7 +55,7 @@ export function flightAwareHistoryUrl(raw,f){
 }
 async function fetchFlightAwareLive(f,knownUrl){
   if(Date.now()<flightAwareCooldownUntil)return {status:"COOLDOWN"};
-  let url=clean(knownUrl),discovered=false;
+  let url=cleanFlightAwareUrl(knownUrl),discovered=false;
   if(!url){
     const designator=(flightLookupVariants({airline:f.airline,number:f.number}).find(v=>v.lookupCodeType==="ICAO"&&v.lookupNumberType==="RAW")||{}).designator||f.designator;
     const landing=await faGet(`https://www.flightaware.com/live/flight/${encodeURIComponent(designator)}`);
@@ -73,7 +74,9 @@ function textOnly(h){return String(h||"").replace(/<script\b[^>]*>[\s\S]*?<\/scr
 function around(text,f){const u=upper(text),keys=[upper(f.designator),`${upper(f.airline)} ${upper(f.number)}`];let i=-1;for(const k of keys){i=u.indexOf(k);if(i>=0)break}return i<0?String(text||"").slice(0,7000):String(text||"").slice(Math.max(0,i-3000),Math.min(String(text||"").length,i+9000))}
 function normTime(raw){let s=upper(raw).replace(/H/,":");const m=s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/);if(!m)return "";let h=Number(m[1]),mi=Number(m[2]);if(mi>59||h>23)return "";if(m[3]){if(h>12||h===0)return "";if(m[3]==="AM"&&h===12)h=0;if(m[3]==="PM"&&h!==12)h+=12}return `${String(h).padStart(2,"0")}:${String(mi).padStart(2,"0")}`}
 function firstTime(text,patterns){for(const p of patterns){const m=String(text||"").match(p);if(m){const v=normTime(m[1]);if(v)return v}}return ""}
-function registration(t){return upper((String(t||"").match(/\b(F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|EI-[A-Z]{3}|SP-[A-Z]{3}|YU-[A-Z]{3}|LZ-[A-Z]{3}|9XR-[A-Z]{2,3}|7T-[A-Z]{3}|HL\d{4}|JA\d{3,4}[A-Z]?|VT-[A-Z]{3}|CN-[A-Z]{3}|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z]{3,5})\b/i)||[])[1]||"")}
+const REGISTRATION_RE=/\b(F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|EI-[A-Z]{3}|SP-[A-Z]{3}|YU-[A-Z]{3}|LZ-[A-Z]{3}|9XR-[A-Z]{2,3}|7T-[A-Z]{3}|HL\d{4}|JA\d{3,4}[A-Z]?|VT-[A-Z]{3}|CN-[A-Z]{3}|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z]{3,5})\b/gi;
+// The first plausible registration of the page text (web words such as E-MAIL look like one and are skipped).
+function registration(t){for(const m of String(t||"").matchAll(REGISTRATION_RE)){const v=upper(m[1]);if(v&&!isWebWordRegistration(v))return v}return ""}
 function aircraft(t){return upper((String(t||"").match(/\b(A20N|A21N|A319|A320|A321|A332|A333|A339|A343|A350|A359|A380|B38M|B39M|B737|B738|B739|B748|B752|B753|B763|B764|B772|B773|B77W|B788|B789|BCS1|BCS3|32B|32Q|77W|788|789|359|333|332|320|321)\b/i)||[])[1]||"")}
 function statusValue(t){const s=upper(t);if(/CANCEL|ANNUL/.test(s))return "ANNULÉ";if(/ARRIVED AT GATE|ARRIVÉE|ARRIVED\b/.test(s))return "ARRIVÉE";if(/LANDED|ATTERI/.test(s))return "ATTERI";if(/IN AIR|AIRBORNE|IN FLIGHT|EN VOL|EN ROUTE|DEPARTED/.test(s))return "EN VOL";if(/DELAY|RETARD/.test(s))return "RETARDÉ";if(/ON TIME|SCHEDULED|PRÉVU|PREVU/.test(s))return "PRÉVU";return ""}
 function semanticText(source,text,f){const w=around(text,f),out={};if(source==="FLIGHTSTATS"){const dep=String(text).split("Flight Departure Times")[1]?.split("Flight Arrival Times")[0]||w,arr=String(text).split("Flight Arrival Times")[1]||w;out.atd=firstTime(dep,[/\bActual\b[^0-9]{0,35}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i,/Actual Departure[^0-9]{0,35}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i]);out.eta=firstTime(arr,[/\bEstimated\b[^0-9]{0,35}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i]);out.ata=firstTime(arr,[/\bActual\b[^0-9]{0,35}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i])}else{out.atd=firstTime(w,[/(?:gate departure|gate out|left gate|actual departure|ATD|départ porte)[^0-9]{0,40}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i]);out.eta=firstTime(w,[/(?:estimated gate arrival|estimated arrival|arrival estimate|ETA|arrivée estimée)[^0-9]{0,40}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i]);out.ata=firstTime(w,[/(?:gate arrival|gate in|arrived at gate|actual arrival|ATA|arrivée réelle)[^0-9]{0,40}(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)/i])}out.status=statusValue(w);out.aircraft=aircraft(w);out.reg=registration(w);return out}
@@ -86,7 +89,7 @@ function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   // Departure clocks must be local to the origin: a UTC reading (more than 50 min before STD) is shifted, an impossible one refused.
   if(field==="atd"||field==="takeoff"){const g=guardDepartureClock(hit.value,x.std,x.activeDate||x.date,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris");if(g.status==="REJECTED")return false;if(g.status==="SHIFTED")hit={...hit,value:g.value,source:`${hit.source}+LOCALIZED`}}
   const before=clean(x[field]);if(before===hit.value)return false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:`PUBLIC_LIVE:${hit.source}`,field,from:before,to:hit.value});x.flightInfoLog=log.slice(0,240);x[field]=hit.value;x[field+"Source"]=`PUBLIC_LIVE:${hit.source}`;x[field+"UpdatedAt"]=at;if(field==="reg"){x.registration=hit.value;x.aircraftRegistration=hit.value}return true}
-function needFromCurrent(x){return {atd:!clean(x.atd),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
+function needFromCurrent(x){return {atd:!clean(x.atd),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isWebWordRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
 function anyNeed(n,keys){return keys.some(k=>n[k])}
 async function readCurrent(env,id){const r=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(id).first();if(!r)return null;try{return JSON.parse(r.data_json||"{}")}catch{return {}}}
 async function saveMeta(env,data){try{await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_public_live_last',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(JSON.stringify(data)).run()}catch{}}
@@ -115,14 +118,14 @@ async function applyOne(env,row,{dryRun=false}={}){let fr24Id="";let base={};try
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
     if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
-    if(fa?.discovered)faUrl=fa.url;
+    if(fa?.url)faUrl=fa.url;
   }
   // PlaneFinder puis Skyscanner uniquement si quelque chose reste réellement à compléter.
   for(const source of ["PLANEFINDER","SKYSCANNER"]){const found={atd:choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd).value,eta:choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta).value,ata:choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata).value,status:choose(map,"status",LIVE_PUBLIC_SOURCE_ORDER.status).value,aircraft:choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft).value,reg:choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg).value};const n=needFromCurrent(base),left=(n.atd&&!found.atd)||(n.eta&&!found.eta)||(n.ata&&!found.ata)||(n.status&&!found.status)||(n.aircraft&&!found.aircraft)||(n.reg&&!found.reg);if(!left)break;const r=await fetchHtmlSource(source,f);attempts.push(attemptOf(source,r));map[source]=r?.semantic||{}}
   const current=await readCurrent(env,row.identity);if(!current)return {flight:f.designator,status:"FLIGHT_DISAPPEARED"};let changed=false;
   // The exact FR24 occurrence found once is kept on the flight: the next runs read its playback directly.
   if(fr24Id&&!clean(current.fr24OccurrenceId)){current.fr24OccurrenceId=fr24Id;changed=true}
-  if(faUrl&&!clean(current.flightAwareHistoryUrl)){current.flightAwareHistoryUrl=faUrl;changed=true}
+  if(faUrl&&clean(current.flightAwareHistoryUrl)!==faUrl){current.flightAwareHistoryUrl=faUrl;changed=true}
   const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),landing=choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),ata=choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&/^(E4|ENT)$/.test(upper(f.airline))&&landing.value)ataHit={value:addMinutes(landing.value,10),source:"DERIVED_ENT_LANDING_PLUS_10"};if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   const explicit=choose(map,"status",LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";if(nextStatus&&!manual(current,"status")&&clean(current.status)!==nextStatus){current.status=nextStatus;current.statusSource=explicit.value?`PUBLIC_LIVE:${explicit.source}`:"PUBLIC_LIVE:DERIVED";current.statusUpdatedAt=at;changed=true}

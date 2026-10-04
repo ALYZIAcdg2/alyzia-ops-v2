@@ -192,3 +192,32 @@ test("runLiveForFlight: dry run shows what would be written for ENT777 without s
     assert.equal((await runLiveForFlight(env,{flight:"NOPE1",dryRun:true})).error,"FLIGHT_NOT_FOUND");
   }finally{globalThis.fetch=real}
 });
+
+test("flightAwareHistoryUrl / cleanFlightAwareUrl never return a share link that merely contains the URL",async()=>{
+  const {flightAwareHistoryUrl}=await import("./ops-public-live-flow-optimized.js");
+  const {cleanFlightAwareUrl}=await import("./flightaware-page-times.js");
+  const real="https://www.flightaware.com/live/flight/ENT777/history/20261004/0310Z/LFPG/LATI";
+  const page=`<a href="https://facebook.com/sharer.php?u=${real}">share</a><a href="https://twitter.com/intent/tweet?url=${real}">tweet</a>`;
+  assert.equal(flightAwareHistoryUrl(page,{date:"2026-10-04",std:"05:00",origin:"CDG"}),real);
+  assert.equal(cleanFlightAwareUrl(`https://facebook.com/sharer.php?u=${real}`),real);
+  assert.equal(cleanFlightAwareUrl("https://example.com/x"),"");
+  assert.equal(cleanFlightAwareUrl(""),"");
+});
+
+test("a web word that looks like a registration (E-MAIL) is not kept: the real registration of the page is, and an E-MAIL already stored is replaced",async()=>{
+  const flight={airline:"ENT",flight:"ENT777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA",reg:"E-MAIL",flightAwareHistoryUrl:"https://facebook.com/sharer.php?u=https://www.flightaware.com/live/flight/ENT777/history/20261004/0310Z/LFPG/LATI"};
+  let update=null;
+  const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
+    async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"ENT777",airline:"ENT",std:"05:00",data_json:JSON.stringify(flight)}]}},
+    async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
+    async run(){return {}}}},batch:async()=>[]}};
+  const [y,m,d]=today.split("-"),mon=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m)-1];
+  const history=`<html><tr><td>SP-ESB</td><td>${d} ${mon} ${y}</td><td>Landed 07:45</td><td>STD 05:00</td><td>ATD 05:37</td><td>STA 07:25</td><td>FROM Paris (CDG)</td><td>TO Tirana (TIA)</td></tr></html>`;
+  const real=globalThis.fetch;
+  globalThis.fetch=async(url)=>String(url).includes("/data/flights/e4777")?new Response(history,{headers:{"content-type":"text/html"}}):new Response("<html>Contact E-MAIL us</html>",{status:200,headers:{"content-type":"text/html"}});
+  try{
+    await runPublicLiveFlow(env,{limit:1,concurrency:1});
+    assert.equal(update.reg,"SP-ESB");
+    assert.equal(update.atd,"05:37");
+  }finally{globalThis.fetch=real}
+});

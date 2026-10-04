@@ -1,7 +1,8 @@
+import {isWebWordRegistration} from './registration-guard.js';
 const clean=v=>String(v??'').trim();
 const upper=v=>clean(v).toUpperCase();
 const INVALID=/^(?:ON[ -]?TIME|SCHEDULED|DELAYED|DEPARTED|ARRIVED|LANDED|IN[ -]?AIR|AIRBORNE|EN[ -]?VOL|PREVU|PRÉVU|RETARDE|RETARDÉ|PARTI|CANCELLED|CANCELED|ANNULÉ|N\/A|NULL|UNKNOWN)$/i;
-function bad(v){const s=clean(v);return !!s&&INVALID.test(s)}
+function bad(v){const s=clean(v);return !!s&&(INVALID.test(s)||isWebWordRegistration(s))}
 const FIELDS=['reg','registration','aircraftRegistration','aircraft_registration','immat','immatriculation','tailNumber','tail_number','registrationNumber'];
 export async function sanitizeTodayRegistrations(env){
   if(!env?.OPS_DB)return {ok:false,error:'NO_DB'};

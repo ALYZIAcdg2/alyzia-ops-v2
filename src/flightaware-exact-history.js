@@ -1,6 +1,6 @@
 import {guardDepartureClock} from "./local-time-guard.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
-import {flightAwareJsonSemantic} from "./flightaware-page-times.js";
+import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
@@ -43,7 +43,7 @@ export async function recoverFlightAwareExactHistory(env){
   const date=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
   let checked=0,success=0,updated=0,cooldownSkipped=0;const flights=[];
-  for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const key=`${designator(row,x)}|${row.flight_date}`,url=clean(x.flightAwareHistoryUrl||x.flightawareHistoryUrl||EXACT[key]);if(!url)continue;if(on429Cooldown(x)){cooldownSkipped++;continue}checked++;const at=new Date().toISOString();let attempt={source:"FLIGHTAWARE",status:"FETCH_ERROR",checkedAt:at,url};
+  for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const key=`${designator(row,x)}|${row.flight_date}`,url=cleanFlightAwareUrl(x.flightAwareHistoryUrl||x.flightawareHistoryUrl)||clean(EXACT[key]);if(!url)continue;if(on429Cooldown(x)){cooldownSkipped++;continue}checked++;const at=new Date().toISOString();let attempt={source:"FLIGHTAWARE",status:"FETCH_ERROR",checkedAt:at,url};
     try{
       const c=new AbortController(),timer=setTimeout(()=>c.abort(),8000);let r,raw="";try{r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareExact/1.1)"}});raw=await r.text()}finally{clearTimeout(timer)}
       const text=textOnly(raw);attempt={source:"FLIGHTAWARE",status:blocked(text)?"BLOCKED":r.ok?"OK":"HTTP_ERROR",httpStatus:r.status,checkedAt:at,url:r.url||url,lookupCodeType:"ICAO",lookupDesignator:(url.match(/\/flight\/([^/]+)/i)||[])[1]||""};
