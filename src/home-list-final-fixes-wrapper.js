@@ -52,8 +52,8 @@ function controlsHost(){const all=[...document.querySelectorAll('#app button')].
 function ensureTime(){let wrap=document.querySelector('#app .alyzia-time-filter-wrap');if(wrap)return;const host=controlsHost();if(!host)return;wrap=document.createElement('span');wrap.className='alyzia-time-filter-wrap';const btn=document.createElement('button');btn.type='button';btn.className='alyzia-time-filter-btn';btn.textContent='◷ 6H';btn.setAttribute('aria-label','Filtrer par tranche horaire (heure réelle : ATD, sinon ETD, sinon STD)');btn.title='Heure réelle de départ : ATD, sinon ETD, sinon STD';const menu=document.createElement('span');menu.className='alyzia-time-filter-menu';Object.entries(RANGES).forEach(([k,r])=>{const c=document.createElement('button');c.type='button';c.className='alyzia-time-choice';c.dataset.range=k;c.textContent=r.label;c.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();activeRange=activeRange===k?'':k;applyFinalTimeFilter();menu.classList.remove('open')});menu.appendChild(c)});btn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();menu.classList.toggle('open')});wrap.append(btn,menu);host.appendChild(wrap);syncTimeUi()}
 function syncTimeUi(){const btn=document.querySelector('#app .alyzia-time-filter-btn');if(btn){btn.classList.toggle('active',!!activeRange);btn.textContent=activeRange?'◷ '+RANGES[activeRange].label:'◷ 6H'}document.querySelectorAll('#app .alyzia-time-choice').forEach(b=>b.classList.toggle('active',b.dataset.range===activeRange))}
 // ---- Masquage automatique des vols passés (liste du jour) ----
-// Un vol DÉJÀ PARTI (ATD / ATA connus, ou statut EN VOL / ARRIVÉ) ou annulé disparaît 2 h après son heure de départ réelle (ATD, sinon ETD, sinon STD).
-// Jamais masqué : un vol pas encore parti, ni un vol dont l'heure est passée SANS ATD (« À CONFIRMER / À CONTRÔLER » : il demande de l'attention).
+// Tout vol dont l'heure de départ (ATD, sinon ETD, sinon STD) date de plus de 2 h disparaît de la liste, qu'il soit parti, annulé ou sans ATD :
+// la liste passe ainsi au créneau suivant. Il reste accessible via la pastille « VOLS PASSÉS MASQUÉS · AFFICHER ».
 // Indépendant des tranches horaires ci-dessus (les deux filtres se cumulent). La recherche texte ignore ce masquage. Les arrivées ne comptent pas.
 const PAST_WINDOW_MIN=120;
 let showPast=false;try{showPast=sessionStorage.getItem('alyzia_show_past')==='1'}catch(e){}
@@ -61,10 +61,6 @@ function parisMinutesNow(){const p=new Intl.DateTimeFormat('fr-FR',{timeZone:'Eu
 function parisTodayISO(){return new Intl.DateTimeFormat('fr-CA',{timeZone:'Europe/Paris'}).format(new Date())}
 function homeIsToday(){try{return String(HOME_DATE)===parisTodayISO()}catch(e){return false}}
 function rowAutoPast(row,nowMin){
-  const status=norm((row.querySelector('.v2-status')||row.querySelector('.ops-status-badge'))?.textContent);
-  const cancelled=status.includes('ANNUL');
-  const departed=cellTime(row,'ATD')!==null||cellTime(row,'ATA')!==null||/^(ARRIV|EN VOL|DÉCOLL|DECOLL)/.test(status);
-  if(!cancelled&&!departed)return false;
   const t=stdFromRow(row);if(t===null)return false;
   return t<nowMin-PAST_WINDOW_MIN;
 }
