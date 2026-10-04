@@ -34,15 +34,18 @@ export function classify({row,x},now){
     if(!ata)missing.push("ATA");
     state=missing.length?"PARTIEL":"OK";
   }else if(today){
-    if(delta!==null&&delta<0){
+    // Reference departure time: ETD when announced, else STD. "À CONTRÔLER" only once it has passed without ATD;
+    // a flight whose STD (or ETD) is still ahead is never flagged, even without ETD.
+    const expected=minute(etd)??stdMin;
+    if(expected!==null&&nowMin!==null&&nowMin>expected){
       missing.push("ATD");
-      const expected=minute(etd)??stdMin;
-      state=expected!==null&&nowMin-expected>20?"À CONTRÔLER":"PARTIEL";
+      state="À CONTRÔLER";
     }else if(delta!==null&&delta<=60){
+      if(delta<0)missing.push("ATD");
       if(!etd)missing.push("ETD/ATD");
       if(!gate||gate==="—")missing.push("GATE");
       if(!reg)missing.push("REG");
-      state=!etd&&delta<=30?"À CONTRÔLER":missing.length?"PARTIEL":"OK";
+      state=missing.length?"PARTIEL":"OK";
     }
     if(!sta&&!etd&&!atd&&!eta&&!ata&&(!gate||gate==="—")&&!reg)state="NON TRAITÉ";
   }
