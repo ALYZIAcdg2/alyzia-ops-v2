@@ -1,4 +1,5 @@
 import app from "./v2-exact-occurrence-wrapper.js";
+import { REFERENCE_LIST_RENDERER } from "./flight-list-reference-ui.js";
 
 const UI=String.raw`<style id="alyzia-v2-single-status-css">
 :root{--v2x-navy:#08264a;--v2x-blue:#0872f5;--v2x-line:#dbe6f1;--v2x-soft:#f5f8fc;--v2x-green:#07945a;--v2x-red:#dc2743;--v2x-orange:#d87800;--v2x-muted:#687b91}
@@ -50,14 +51,9 @@ function terminalOf(x){const raw=txt(x?.terminal||x?.departureTerminal||x?.depar
 function airlineLogoHtml(x){try{return typeof window.airlineLogo==='function'?window.airlineLogo(x.airline):'<span class="airline-logo-fallback">'+esc(x.airline||'?')+'</span>'}catch{return'<span class="airline-logo-fallback">'+esc(x.airline||'?')+'</span>'}}
 function city(code){try{return (window.CITY&&window.CITY[code])||code||''}catch{return code||''}}
 function classKeys(x){const keys=[...new Set([...Object.keys(x?.config||{}),...Object.keys(x?.booked||{})])];const rank=k=>({F:1,J:2,C:2,S:3,W:3,Y:9,M:9})[up(k)]||5;return keys.sort((a,b)=>rank(a)-rank(b)||String(a).localeCompare(String(b)))}
-function sumObj(o){return Object.values(o||{}).reduce((a,v)=>a+(Number(v)||0),0)}
-function loadSummary(x){const ks=classKeys(x),cfg=ks.map(k=>k+Number(x?.config?.[k]||0)).join(' · '),book=ks.map(k=>k+Number(x?.booked?.[k]||0)).join(' · '),nok=(x?.inopSeats||[]).filter(r=>up(r?.status)==='NOK').length,avail=(Number.isFinite(Number(x?.available))?Number(x.available):sumObj(x?.config)-sumObj(x?.booked)-nok);return {cfg:cfg||'—',book:book||'—',avail:Number.isFinite(avail)?avail:'—'}}
-function timeCell(label,value,cls,day){return '<div class="v2x-t"><small>'+label+'</small><b class="'+(cls||'')+'">'+esc(value||'—')+(day?dayTag(day):'')+'</b></div>'}
 function dTimeCell(label,value,cls,day){return '<div class="v2x-d-t"><small>'+label+'</small><b class="'+(cls||'')+'">'+esc(value||'—')+(day?dayTag(day):'')+'</b></div>'}
-function rowFlight(row){const direct=up(row.querySelector('.home-flight')?.textContent||row.querySelector('.v2x-flight')?.textContent);if(direct)return direct;const m=up(row.textContent).match(/\b([A-Z0-9]{2,3}\d{1,4})\b/);return m?m[1]:''}
-function rowIndex(row,x){try{const i=window.FLIGHTS?.findIndex(f=>keyFlight(f)===keyFlight(x));return i>=0?i:0}catch{return 0}}
 function favorite(x){try{return typeof window.isFavoriteFlight==='function'&&window.isFavoriteFlight(x)}catch{return false}}
-function renderRow(row){const flight=rowFlight(row);if(!flight)return;const x=mergedFlight(flight),t=times(x),st=opStatus(x),term=terminalOf(x),load=loadSummary(x),idx=rowIndex(row,x),ac=val(x,'aircraftActual','aircraft')||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';const sig=[flight,t.std,t.etd,t.atd,t.takeoff,t.sta,t.eta,t.landing,t.ata,st.main,st.sub,ac,reg,x.gate,term,load.cfg,load.book,load.avail].join('|');if(row.dataset.v2xSig===sig)return;row.dataset.v2xSig=sig;row.classList.add('v2x-row');row.innerHTML='<div class="v2x-id"><div class="v2x-id-logo">'+airlineLogoHtml(x)+'</div><div><div class="v2x-flight">'+esc(flight)+'</div><div class="v2x-airline">'+esc(x.airline||'')+' · '+esc(city(x.dest))+'</div><div class="v2x-plane"><span class="v2x-chip">A/C '+esc(ac)+'</span><span class="v2x-chip">'+esc(reg)+'</span>'+(term?'<span class="v2x-chip term '+esc(term.toLowerCase())+'">'+esc(term)+'</span>':'')+(x.gate?'<span class="v2x-chip">GATE '+esc(x.gate)+'</span>':'')+'</div></div></div><div class="v2x-route"><div class="v2x-route-main">'+esc(x.dep||'CDG')+'<span>→</span>'+esc(x.dest||'—')+'</div><div class="v2x-route-city">'+esc(city(x.dep||'CDG'))+' → '+esc(city(x.dest))+'</div><div class="v2x-loadline"><span class="v2x-chip">CONFIG '+esc(load.cfg)+'</span><span class="v2x-chip">BOOK '+esc(load.book)+'</span><span class="v2x-chip">AVAILABLE '+esc(load.avail)+'</span></div></div><div class="v2x-times"><div class="v2x-timegroup">'+timeCell('STD',t.std,'')+timeCell('ETD',t.etd,t.etd?'warn':'')+timeCell('ATD',t.atd,t.atd?'live':'')+'</div><div class="v2x-timegroup arr">'+timeCell('STA',t.sta,'',t.staDay)+timeCell('ETA',t.eta,t.eta?'live':'',t.etaDay)+timeCell('ATA',t.ata,t.ata?'live':'',t.ataDay)+'</div></div><div class="v2x-statusbox '+st.cls+'"><div class="v2x-status-main">✈ '+esc(st.main)+'</div>'+(st.sub?'<div class="v2x-status-sub">'+esc(st.sub)+'</div>':'')+(st.remain?'<div class="v2x-status-remain">RESTE '+esc(st.remain)+'</div>':'')+'</div><div class="v2x-actions"><button class="v2x-pin '+(favorite(x)?'active':'')+'" onclick="event.stopPropagation();toggleFavoriteFlight('+idx+')">'+(favorite(x)?'★':'☆')+'</button><button class="v2x-open" onclick="event.stopPropagation();openFlightFromHomeList('+idx+')">›</button></div>'}
+${REFERENCE_LIST_RENDERER}
 function dedupeHome(){const app=document.getElementById('app');if(!app)return null;const pages=[...app.querySelectorAll('.home-page')].filter(p=>p.querySelector('.flight-home-list'));if(!pages.length)return null;const visible=pages.filter(p=>getComputedStyle(p).display!=='none'),ranked=(visible.length?visible:pages).sort((a,b)=>b.querySelectorAll('.flight-home-row').length-a.querySelectorAll('.flight-home-row').length),keep=ranked[0];for(const p of pages)if(p!==keep)p.remove();return keep}
 function syncList(){const page=dedupeHome();if(!page)return;for(const row of page.querySelectorAll('.flight-home-row'))renderRow(row)}
 function currentFlight(){try{if(Array.isArray(window.FLIGHTS)&&typeof window.selected!=='undefined'&&window.FLIGHTS[window.selected])return mergedFlight(keyFlight(window.FLIGHTS[window.selected]))}catch{}const n=document.querySelector('#app .flight-number');return n?mergedFlight(up(n.textContent)):null}
@@ -68,11 +64,15 @@ function renderDetail(){const old=document.querySelector('#app .flight-head'),x=
 function apply(){syncList();renderDetail()}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json();live=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];apply()}catch{}}
 let queued=false;function queue(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply()})}
-function start(){refresh();setInterval(refresh,15000);setInterval(apply,3000);const root=document.getElementById('app');if(root)new MutationObserver(queue).observe(root,{childList:true,subtree:true})}
+function start(){apply();refresh();setInterval(refresh,15000);setInterval(apply,3000);const root=document.getElementById('app');if(root)new MutationObserver(queue).observe(root,{childList:true,subtree:true})}
 document.readyState==='loading'?document.addEventListener('DOMContentLoaded',start,{once:true}):start();
 })();</script>`;
 
 function stripLegacyStatusUi(html){return String(html||'')
+ .replace(/<style id="alyzia-v2-full-style">[\s\S]*?<\/style>/g,'')
+ .replace(/<script id="alyzia-v2-full-js">[\s\S]*?<\/script>/g,'')
+ .replace(/<style id="alyzia-ops-list-v4-css">[\s\S]*?<\/style>/g,'')
+ .replace(/<script id="alyzia-ops-list-v4-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-v2-list-authoritative-css">[\s\S]*?<\/style>/g,'')
@@ -82,7 +82,7 @@ function stripLegacyStatusUi(html){return String(html||'')
  .replace(/<script id="alyzia-flight-list-live-sync-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<script id="alyzia-active-card-ops-fix">[\s\S]*?<\/script>/g,'');}
-function patch(html){let s=stripLegacyStatusUi(html);const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+UI+'\n'+s.slice(i):s+UI}
+function patch(html){let s=stripLegacyStatusUi(html).replace('<h1>VOLS AU DÉPART CDG</h1>','<h1>LISTE DES VOLS</h1>');const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+UI+'\n'+s.slice(i):s+UI}
 
 export default {
  async fetch(request,env,ctx){const r=await app.fetch(request,env,ctx);const type=String(r.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return r;const h=new Headers(r.headers);h.delete('content-length');h.set('cache-control','no-store');return new Response(patch(await r.text()),{status:r.status,statusText:r.statusText,headers:h})},
