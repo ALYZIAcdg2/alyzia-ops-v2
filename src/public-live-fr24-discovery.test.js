@@ -102,3 +102,30 @@ test("a departure missed by more than 6 h without ATD is still picked before the
     assert.equal(r.results[0].flight,"ST1");
   }finally{globalThis.fetch=real}
 });
+
+test("a quarter of the slots is kept for stale departures when airborne flights outnumber the slots",async()=>{
+  const nowMin=(()=>{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)})();
+  if(nowMin<420||nowMin>1100)return;
+  const hm=m=>String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+  const airborne=Array.from({length:6},(_,i)=>({identity:"air"+i,flight_number:"AB"+i,airline:"AB",std:hm(nowMin-120),extra:{atd:hm(nowMin-110),takeoff:hm(nowMin-105)}}));
+  const stale={identity:"stale",flight_number:"ST1",airline:"ST",std:hm(nowMin-400),extra:{}};
+  const rows=[...airborne,stale].map(r=>({identity:r.identity,flight_number:r.flight_number,airline:r.airline,std:r.std,flight_date:today,data_json:JSON.stringify({airline:r.airline,flight:r.flight_number,std:r.std,origin:"CDG",destination:"TIA",dest:"TIA",...r.extra})}));
+  const env={OPS_DB:{prepare(){return {bind(){return this},async all(){return {results:rows}},async first(){return null},async run(){return {}}}},batch:async()=>[]}};
+  const real=globalThis.fetch;
+  globalThis.fetch=async()=>new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}});
+  try{
+    const r=await runPublicLiveFlow(env,{limit:4,concurrency:1});
+    assert.equal(r.results.length,4);
+    assert.ok(r.results.some(x=>x.flight==="ST1"),"the stale departure gets one of the 4 slots");
+  }finally{globalThis.fetch=real}
+});
+
+test("pickSlots keeps a quarter of the slots (at least one) for the second tier or later",async()=>{
+  const {pickSlots}=await import("./ops-public-live-flow-optimized.js");
+  const z=(id,tier)=>({id,p:[tier,0]});
+  const sorted=[z("a1",1),z("a2",1),z("a3",1),z("a4",1),z("a5",1),z("a6",1),z("s1",2),z("s2",2),z("n1",4)];
+  assert.deepEqual(pickSlots(sorted,4).map(x=>x.id),["a1","a2","a3","s1"]);
+  assert.deepEqual(pickSlots(sorted,1).map(x=>x.id),["s1"]);
+  assert.deepEqual(pickSlots(sorted,8).map(x=>x.id),["a1","a2","a3","a4","a5","a6","s1","s2"]);
+  assert.deepEqual(pickSlots([z("a",1),z("b",1)],4).map(x=>x.id),["a","b"]);
+});
