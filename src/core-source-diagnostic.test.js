@@ -11,8 +11,8 @@ test("the diagnostic accepts a 3-letter airline designator (ENT777) and reports 
     assert.equal(r.ok,true);
     const fr24=r.results.find(x=>x.source==="FR24");
     assert.equal(fr24.status,"HISTORY_ROW");
-    assert.equal(fr24.historyRow.atd,"05:37");
-    assert.equal(fr24.fields.atd,"05:37");
+    assert.equal(fr24.historyRow.atd,"07:37"); // the diagnostic has no planned STD: the page is read as UTC
+    assert.equal(fr24.fields.atd,"07:37");
   }finally{globalThis.fetch=real}
 });
 test("2-letter airline designators still work",async()=>{

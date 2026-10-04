@@ -1,4 +1,5 @@
 import {flightLookupVariants} from "./public-flight-alias.js";
+import {AIRPORT_TZ} from "./airport-tz.js";
 
 const EXACT_OCCURRENCES={
   "CTM21|2026-10-01":"41ea23a2",
@@ -221,7 +222,24 @@ export function fr24HistoryRow(raw,flight){
   const std=time(/\bSTD\s*(\d{1,2}):(\d{2})/i),atd=time(/\bATD\s*(\d{1,2}):(\d{2})/i),sta=time(/\bSTA\s*(\d{1,2}):(\d{2})/i),landing=time(/\b(?:Landed|Arrived)\s*(\d{1,2}):(\d{2})/i);
   const reg=[...before.matchAll(/\b([A-Z0-9]{1,2}-[A-Z0-9]{3,5})\b/g)].map(m=>upper(m[1])).pop()||"";
   if(!atd&&!landing&&!std)return null;
-  return {std,atd,sta,landing,reg};
+  return normalizeHistoryTimes({std,atd,sta,landing,reg},flight);
+}
+
+// The Worker receives the page rendered in UTC (a browser shows it in its own time zone: STD 05:00 in Paris is 03:00 on the page read by the Worker).
+// Convert to airport-local clocks: ATD in the origin zone, STA and landing in the destination zone. If the page STD already equals the flight's STD, it is local.
+function utcToLocal(hhmm,date,zone){
+  const m=clean(hhmm).match(/^(\d{2}):(\d{2})$/),d=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m||!d||!zone)return hhmm;
+  const at=new Date(Date.UTC(+d[1],+d[2]-1,+d[3],+m[1],+m[2]));
+  try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(at).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return hhmm}
+}
+function normalizeHistoryTimes(row,flight){
+  const originZone=AIRPORT_TZ[upper(flight?.origin)]||"Europe/Paris",destZone=AIRPORT_TZ[upper(flight?.destination)]||originZone;
+  const planned=clean(flight?.std).match(/(\d{1,2}):(\d{2})/),plannedStd=planned?`${String(Number(planned[1])).padStart(2,"0")}:${planned[2]}`:"";
+  // Already local only when the page STD equals the planned STD and converting it from UTC would not.
+  const alreadyLocal=Boolean(plannedStd&&row.std===plannedStd&&utcToLocal(row.std,flight?.date,originZone)!==plannedStd);
+  if(alreadyLocal)return {...row,timezone:"LOCAL"};
+  const conv=(v,zone)=>v?utcToLocal(v,flight?.date,zone):"";
+  return {std:conv(row.std,originZone),atd:conv(row.atd,originZone),sta:conv(row.sta,destZone),landing:conv(row.landing,destZone),reg:row.reg,timezone:"UTC"};
 }
 function withHistoryRow(result,bodies,flight){
   if(!result||!bodies.length)return result;
