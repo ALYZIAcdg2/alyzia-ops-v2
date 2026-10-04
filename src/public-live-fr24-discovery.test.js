@@ -83,3 +83,22 @@ test("a UTC history page (as received by the Worker) is converted to local times
     assert.equal(update.ata,"07:55");
   }finally{globalThis.fetch=real}
 });
+
+test("a departure missed by more than 6 h without ATD is still picked before the later flights",async()=>{
+  const nowMin=(()=>{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)})();
+  if(nowMin<420||nowMin>1100)return; // minutes of the day only: needs a window with no midnight wrap
+  const hm=m=>{const v=((m%1440)+1440)%1440;return String(Math.floor(v/60)).padStart(2,"0")+":"+String(v%60).padStart(2,"0")};
+  const rows=[
+    {identity:"late",flight_number:"LT1",airline:"LT",std:hm(nowMin+300)},
+    {identity:"stale",flight_number:"ST1",airline:"ST",std:hm(nowMin-400)}
+  ].map(r=>({...r,flight_date:today,data_json:JSON.stringify({airline:r.airline,flight:r.flight_number,std:r.std,origin:"CDG",destination:"TIA",dest:"TIA"})}));
+  const seen=[];
+  const env={OPS_DB:{prepare(sql){return {bind(){return this},async all(){return {results:rows}},async first(){return null},async run(){return {}}}},batch:async()=>[]}};
+  const real=globalThis.fetch;
+  globalThis.fetch=async(url)=>{seen.push(String(url));return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
+  try{
+    const r=await runPublicLiveFlow(env,{limit:1,concurrency:1});
+    assert.equal(r.results.length,1);
+    assert.equal(r.results[0].flight,"ST1");
+  }finally{globalThis.fetch=real}
+});
