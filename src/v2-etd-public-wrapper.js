@@ -9,6 +9,7 @@ import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js
 import {recoverFlightAwareExactHistory} from "./flightaware-exact-history.js";
 import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-source-candidate-test.js";
 import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
+import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -98,6 +99,10 @@ export default {
       try{return json(await auditFlightData(env,{from:url.searchParams.get("from")||"",to:url.searchParams.get("to")||"",repair:request.method==="POST"&&url.searchParams.get("repair")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:2});
+    if(url.pathname==="/api/admin/board-backfill"&&request.method==="GET"){
+      // Rattrapage des portes manquantes depuis le tableau FR24 de CDG. Sans apply=1 : aperçu seulement.
+      try{return json(await backfillBoardGates(env,{date:url.searchParams.get("date")||"",apply:url.searchParams.get("apply")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
     if(url.pathname==="/api/admin/core-source-diagnostic"&&request.method==="GET"){
       try{return json(await runCoreSourceDiagnosticTest({date:url.searchParams.get('date')||'',flight:url.searchParams.get('flight')||'',origin:url.searchParams.get('origin')||'CDG',destination:url.searchParams.get('destination')||''}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
