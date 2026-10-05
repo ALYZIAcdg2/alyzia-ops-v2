@@ -88,6 +88,7 @@ function paginate(r){
   if(s!==sig){sig=s;page=1}
   const pages=Math.max(1,Math.ceil(all.length/PAGE));if(page>pages)page=pages;
   const keep=new Set(all.slice((page-1)*PAGE,page*PAGE));
+  const badge=r.querySelector('.flight-count-badge'),bt=all.length+' VOL'+(all.length>1?'S':'');if(badge&&badge.textContent!==bt)badge.textContent=bt;
   rows(r).forEach(tr=>{const off=!keep.has(tr)&&tr.style.display!=='none';if(tr.classList.contains('adx-off')!==off)tr.classList.toggle('adx-off',off)});
   const holder=table.closest('.adn-section')||table.parentElement;
   let bar=holder.querySelector('.adx-pager');if(!bar){bar=document.createElement('div');bar.className='adx-pager';holder.appendChild(bar)}
