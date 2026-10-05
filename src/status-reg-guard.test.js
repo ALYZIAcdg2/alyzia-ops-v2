@@ -154,3 +154,15 @@ test("an ATD copied from the FR24 takeoff is read first by the cron",()=>{
   assert.equal(suspectAtd({...x,atdSource:"MANUAL",atd:"12:02"}),false);
   assert.equal(priority({std:"11:20"},{...x,atdSource:"PUBLIC_LIVE:FLIGHTSTATS"},742)[0],1);
 });
+
+import {arrivingSoon} from "./ops-public-live-flow-optimized.js";
+test("airborne flights arriving within 2 h are re-read first, at most every 3 minutes",()=>{
+  const now=Date.UTC(2026,9,5,10,0),iso=min=>new Date(now+min*60000).toISOString();
+  const soon={std:"08:00",atd:"08:10",takeoff:"08:20",statusArrivalUtc:iso(90),publicLiveBackfill:{checkedAt:iso(-10)}};
+  assert.equal(arrivingSoon(soon,now),true);
+  assert.equal(priority({std:"08:00"},soon,600,now)[0],0.5);
+  assert.equal(priority({std:"08:00"},{...soon,publicLiveBackfill:{checkedAt:iso(-1)}},600,now)[0],1);
+  assert.equal(priority({std:"08:00"},{...soon,statusArrivalUtc:iso(400)},600,now)[0],1);
+  assert.equal(arrivingSoon({...soon,ata:"11:00"},now),false);
+  assert.equal(arrivingSoon({...soon,statusArrivalUtc:iso(-40)},now),false);
+});
