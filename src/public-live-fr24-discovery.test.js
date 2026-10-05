@@ -54,7 +54,7 @@ test("without playback, the FR24 history row alone gives ENT777 its ATD, landing
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.ok(update,"the flight was saved");
-    assert.equal(update.atd,"05:37");
+    assert.equal(update.takeoff,"05:37");
     assert.equal(update.landing,"07:45");
     assert.equal(update.reg,"SP-ESB");
     assert.equal(update.ata,"07:55");
@@ -78,7 +78,7 @@ test("a UTC history page (as received by the Worker) is converted to local times
   globalThis.fetch=async(url)=>String(url).includes("/data/flights/e4777")?new Response(history,{headers:{"content-type":"text/html"}}):new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}});
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
-    assert.equal(update.atd,"05:37");
+    assert.equal(update.takeoff,"05:37");
     assert.equal(update.landing,"07:45");
     assert.equal(update.ata,"07:55");
   }finally{globalThis.fetch=real}
@@ -185,7 +185,7 @@ test("runLiveForFlight: dry run shows what would be written for ENT777 without s
   try{
     const dry=await runLiveForFlight(env,{flight:"ent777",dryRun:true});
     assert.equal(dry.ok,true);assert.equal(dry.candidates,1);assert.equal(dry.rank,1);assert.equal(dry.inNextRun,true);
-    assert.equal(dry.result.dryRun,true);assert.equal(dry.result.after.atd,"05:37");assert.equal(dry.result.before.atd,null);assert.equal(dry.result.sources.FR24.atd,"05:37");
+    assert.equal(dry.result.dryRun,true);assert.equal(dry.result.after.takeoff,"05:37");assert.equal(dry.result.before.takeoff,null);assert.equal(dry.result.sources.FR24.takeoff,"05:37");
     assert.equal(saved,0,"a dry run saves nothing");
     const live=await runLiveForFlight(env,{flight:"ENT777",dryRun:false});
     assert.equal(live.result.status,"UPDATED");assert.equal(saved,1);
@@ -218,6 +218,6 @@ test("a web word that looks like a registration (E-MAIL) is not kept: the real r
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.equal(update.reg,"SP-ESB");
-    assert.equal(update.atd,"05:37");
+    assert.equal(update.takeoff,"05:37");
   }finally{globalThis.fetch=real}
 });

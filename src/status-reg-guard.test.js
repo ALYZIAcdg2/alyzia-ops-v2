@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {pickStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops-public-live-flow-optimized.js";
+import {pickStatus,LIVE_PUBLIC_SOURCE_ORDER,fr24Semantic} from "./ops-public-live-flow-optimized.js";
 import {isWebWordRegistration} from "./registration-guard.js";
 
 test("a single source saying ANNULÉ is ignored",()=>{
@@ -108,4 +108,10 @@ test("a 3-character flight number is not read as an aircraft type (LY320 -> 320)
   assert.equal(out.aircraft||"","");
   const real=semanticText("PLANEFINDER","Flight LY 320 Paris CDG to Tel Aviv TLV aircraft B739 scheduled 11:10",f);
   assert.equal(real.aircraft,"B739");
+});
+
+test("FR24 feeds TAKEOFF only: its actual departure is never used as ATD",()=>{
+  const sem=fr24Semantic({candidates:{semantic:{atdClock:"12:02",takeoff:"2026-10-05T10:02:00.000Z"}}},{destination:"KUL"});
+  assert.equal(sem.atd,"");
+  assert.equal(sem.takeoff,"12:02");
 });
