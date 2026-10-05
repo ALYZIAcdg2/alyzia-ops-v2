@@ -136,3 +136,11 @@ test("FlightStats details page, labels above values: arrival gate Actual = ATA a
   const d=flightStatsDetails(t);
   assert.equal(d.atd,"11:50");assert.equal(d.takeoff,"12:03");assert.equal(d.ata,"06:20");assert.equal(d.landing,"06:12");
 });
+
+import {flightStatsFlightId} from "./ops-public-live-flow-optimized.js";
+test("the tracker page link of the requested date gives the FlightStats flightId (MH21)",()=>{
+  const raw='<a href="/v2/flight-details/MH/21?year=2026&amp;month=10&amp;date=4&amp;flightId=1411000001">x</a><a href="/v2/flight-details/MH/21?year=2026&amp;month=10&amp;date=5&amp;flightId=1412343320">view details</a>';
+  assert.equal(flightStatsFlightId(raw,"2026-10-05"),"1412343320");
+  assert.equal(flightStatsFlightId(raw,"2026-10-06"),"");
+  assert.equal(flightStatsFlightId("<html>no link</html>","2026-10-05"),"");
+});
