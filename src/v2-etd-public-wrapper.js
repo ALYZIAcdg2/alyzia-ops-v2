@@ -44,6 +44,7 @@ async function acquireCronLock(env){
 }
 async function releaseCronLock(env){try{await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_cron_lock','0') ON CONFLICT(k) DO UPDATE SET v='0'`).run()}catch{}}
 // The cron fires on even minutes only: the quarter-hour window is minutes 0-1 of each quarter (0, 16, 30, 46), so it is hit exactly once per quarter.
+function isDailyCheckWindow(){const p=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).map(x=>[x.type,x.value]));const m=Number(p.hour)*60+Number(p.minute);return m>=180&&m<360}
 function isQuarterHour(controller){const t=Number(controller?.scheduledTime||Date.now());return new Date(t).getUTCMinutes()%15<2}
 
 const PUSH_UI=String.raw`<script id="alyzia-push-all-public-js">(()=>{'use strict';
@@ -77,6 +78,13 @@ export default {
     }
     if(url.pathname==="/api/admin/etd-public-status"){
       try{return json(await etdPublicStatusSafe(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/daily-check"){
+      // POST: runs one batch of the daily control now (all sources, yesterday + today flights not yet checked today). GET: nothing is run, shows how many remain.
+      try{
+        if(request.method==="POST")return json(await runPublicLiveFlow(env,{limit:Number(url.searchParams.get("limit")||12),concurrency:4,recheck:true}));
+        return json({ok:true,info:"POST /api/admin/daily-check?limit=12 runs a batch; the cron does it every 2 minutes between 03:00 and 06:00 Paris"});
+      }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/live-one"){
       // GET: what the live flow would read and write for one flight (nothing is saved). POST: applies it now, like a cron run.
@@ -138,6 +146,8 @@ export default {
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
         await runEtd(env).catch(()=>{});
         if(isQuarterHour(controller))await runGround(env).catch(()=>{});
+        // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.
+        if(isDailyCheckWindow())await runPublicLiveFlow(env,{limit:12,concurrency:4,recheck:true}).catch(()=>{});
         await runStatusModelTest(env).catch(()=>{});
       }finally{await releaseCronLock(env)}
     })());
