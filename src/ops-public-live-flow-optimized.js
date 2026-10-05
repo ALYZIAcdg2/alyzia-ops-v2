@@ -92,6 +92,16 @@ export function flightStatsBlockTimes(segment){
   else{for(let i=0;i<toks.length;i++){if(toks[i].l!==undefined&&toks[i+1]&&toks[i+1].l===undefined){labels.push(toks[i].l);values.push(toks[i+1].v);i++}}}
   const out={};labels.forEach((l,i)=>{out[l.toLowerCase()]=values[i]||""});return out;
 }
+// The tracker page links each flight of the day to its "Flight Details" page (…/flight-details/MH/21?year=2026&month=10&date=5&flightId=…): the id of the requested date is read from those links.
+export function flightStatsFlightId(raw,date){
+  const m=String(date||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return "";
+  const body=String(raw||"").replace(/&amp;|\\u0026|&#38;/g,"&"),want={year:m[1],month:String(Number(m[2])),date:String(Number(m[3]))},ids=new Set();
+  for(const x of body.matchAll(/flight-details\/[^"'\s<>]*?\?([^"'\s<>]*)/g)){
+    const q=new URLSearchParams(x[1]),id=q.get("flightId");
+    if(id&&/^\d+$/.test(id)&&q.get("year")===want.year&&q.get("month")===want.month&&q.get("date")===want.date)ids.add(id);
+  }
+  return ids.size===1?[...ids][0]:"";
+}
 export function flightStatsDetails(text){
   const t=String(text||""),gates=[...t.matchAll(/Flight Gate Times/g)].map(x=>x.index),runs=[...t.matchAll(/Flight Runway Times/g)].map(x=>x.index);
   if(gates.length<2)return null;
@@ -117,7 +127,16 @@ export function flightStatsSlot(source,fn,pauseMs=350){
 async function fetchHtmlSource(source,f){const build=FALLBACKS[source];if(!build)return {source,status:"NO_SOURCE",semantic:{}};return withIcaoFallback(f,build,async candidate=>{const url=build(candidate),c=new AbortController(),t=setTimeout(()=>c.abort(),source==="FLIGHTSTATS"?10000:6500),checkedAt=new Date().toISOString();try{const init={redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-LiveOptimized/1.0)"}};let r=await flightStatsSlot(source,()=>fetch(url,init));
   // FlightStats answers 403 / 429 to a burst of parallel requests (AI142: IATA lookup refused in the cron, fine alone): one retry after a short pause.
   if(source==="FLIGHTSTATS"&&(r.status===403||r.status===429)){await new Promise(z=>setTimeout(z,900+Math.floor(Math.random()*700)));r=await flightStatsSlot(source,()=>fetch(url,init))}
-  const raw=await r.text(),text=textOnly(raw),mentions=upper(text).includes(upper(candidate.designator))||upper(text).includes(`${upper(candidate.airline)} ${upper(candidate.number)}`);let status=publicPageStatus(source,text,r.status,mentions,routeMatched(text,candidate));if(status==="OK"&&source==="FLIGHTSTATS"&&!matchesFlightStatsOccurrence(text,{...candidate,date:f.date,origin:f.origin,destination:f.destination}))status="OCCURRENCE_MISMATCH";return {source,url:r.url||url,httpStatus:r.status,status,checkedAt,semantic:status==="OK"?semanticText(source,text,candidate):{},lookupDesignator:candidate.designator,lookupCodeType:candidate.lookupCodeType}}catch(e){return {source,url,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,checkedAt,semantic:{},error:String(e?.message||e).slice(0,160)}}finally{clearTimeout(t)}})}
+  const raw=await r.text(),text=textOnly(raw),mentions=upper(text).includes(upper(candidate.designator))||upper(text).includes(`${upper(candidate.airline)} ${upper(candidate.number)}`);let status=publicPageStatus(source,text,r.status,mentions,routeMatched(text,candidate));if(status==="OK"&&source==="FLIGHTSTATS"&&!matchesFlightStatsOccurrence(text,{...candidate,date:f.date,origin:f.origin,destination:f.destination}))status="OCCURRENCE_MISMATCH";let semantic=status==="OK"?semanticText(source,text,candidate):{},detailsInfo="";
+  if(status==="OK"&&source==="FLIGHTSTATS"){
+    // Gate and runway times (ATD/ATA, takeoff/landing) are on the "Flight Details" page of the exact flight.
+    const id=flightStatsFlightId(raw,f.date);
+    if(id){try{const du=new URL(r.url||url);du.pathname=du.pathname.replace("/flight-tracker/","/flight-details/");du.search="?year="+f.date.slice(0,4)+"&month="+Number(f.date.slice(5,7))+"&date="+Number(f.date.slice(8,10))+"&flightId="+id;
+      const dr=await flightStatsSlot(source,()=>fetch(du.toString(),init));detailsInfo="HTTP "+dr.status;
+      if(dr.ok){const d=flightStatsDetails(textOnly(await dr.text()));if(d){detailsInfo="OK";for(const k of ["atd","takeoff","eta","ata","landing"]){if(d[k])semantic[k]=d[k];else if(["atd","takeoff","ata","landing"].includes(k))delete semantic[k]}}else detailsInfo="NO_BLOCKS"}
+    }catch(e){detailsInfo="ERROR "+String(e?.message||e).slice(0,60)}}else detailsInfo="NO_FLIGHT_ID";
+  }
+  return {source,url:r.url||url,httpStatus:r.status,status,checkedAt,semantic,detailsInfo:detailsInfo||undefined,lookupDesignator:candidate.designator,lookupCodeType:candidate.lookupCodeType}}catch(e){return {source,url,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,checkedAt,semantic:{},error:String(e?.message||e).slice(0,160)}}finally{clearTimeout(t)}})}
 function clockFromIso(iso,zone){if(!iso)return "";const d=new Date(iso);if(Number.isNaN(d.getTime()))return "";try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone||"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(d).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return ""}}
 // FR24's "actual departure" is the wheels-up time (MH21: FR24 12:02/12:03, FlightStats and FlightAware gate departure 11:50): it feeds TAKEOFF only, never ATD.
 export function fr24Semantic(fr,f){const s=fr?.candidates?.semantic||{};const takeoff=clockFromIso(s.takeoff,"Europe/Paris"),history=clean(s.atdClock);return {takeoff:takeoff||history,eta:clockFromIso(s.eta,AIRPORT_TZ[f.destination]||"Europe/Paris"),landing:clockFromIso(s.landing,AIRPORT_TZ[f.destination]||"Europe/Paris")||clean(s.landingClock),status:statusValue(s.status||fr?.candidates?.statuses?.join(" ")||""),aircraft:upper(s.type||fr?.candidates?.aircraft?.[0]),reg:upper(s.reg||fr?.candidates?.registrations?.[0])}}
@@ -178,7 +197,7 @@ export function pickSlots(sorted,size){
   return [...head,...late,...rest.filter(z=>!late.includes(z))].slice(0,size);
 }
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
-function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||""}}
+function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
 async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base);if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // FlightStats: seulement si un champ gate-time/status manque.
