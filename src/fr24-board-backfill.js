@@ -1,7 +1,7 @@
 // Rattrapage et contrôle depuis le tableau des départs FR24 de CDG (vols du jour, partis ou à venir) : portes, immatriculations, types d'avion.
 // GET /api/admin/board-backfill?date=AAAA-MM-JJ[&fields=gate,reg,type]          : aperçu, n'écrit rien
 // GET /api/admin/board-backfill?date=AAAA-MM-JJ[&fields=...]&apply=1            : écrit ce qui manque
-// Seuls les champs vides sont remplis (jamais une saisie manuelle). Les immatriculations déjà présentes mais différentes du tableau sont seulement signalées (`regMismatch`).
+// Seuls les champs vides sont remplis (jamais une saisie manuelle). Les immatriculations déjà présentes mais différentes du tableau sont signalées (`regMismatch`) ; avec replace=1 elles sont remplacées par celles du tableau, ainsi que les portes différentes.
 import {fetchBoardRange,indexRows,matchRow,gateValue} from "./fr24-board.js";
 import {isJunkRegistration} from "./registration-guard.js";
 import {noteActualAircraft} from "./aircraft-change.js";
@@ -14,7 +14,7 @@ export const regValue=x=>{const v=clean(x?.reg||x?.registration||x?.aircraftRegi
 export const typeValue=x=>{const v=clean(x?.aircraftActual||x?.aircraft);return !v||PLACEHOLDER.test(v)?"":v};
 const normReg=v=>upper(v).replace(/[^A-Z0-9]/g,"");
 
-export async function backfillBoardGates(env,{date,apply=false,fields="gate,reg,type",fetchImpl=fetch,maxPages=8,nowMs=Date.now()}={}){
+export async function backfillBoardGates(env,{date,apply=false,fields="gate,reg,type",replace=false,fetchImpl=fetch,maxPages=8,nowMs=Date.now()}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const day=clean(date);if(!/^\d{4}-\d{2}-\d{2}$/.test(day))return {ok:false,error:"date=AAAA-MM-JJ requis"};
   const want=new Set(String(fields||"").toLowerCase().split(/[,\s]+/).filter(f=>["gate","reg","type"].includes(f)));if(!want.size)return {ok:false,error:"fields = gate, reg et/ou type"};
@@ -52,7 +52,11 @@ export async function backfillBoardGates(env,{date,apply=false,fields="gate,reg,
     const g=upper(row.gate);if(z.miss.gate&&g){z.x.gate=g;z.x.gateSource="PUBLIC_LIVE:FR24BOARD";z.x.gateUpdatedAt=at;logTo(z.x,"gate","",g);done.gate++;got.gate=g;changed=true}
     const rg=upper(row.reg);
     if(z.miss.reg&&rg&&!isJunkRegistration(rg)){z.x.reg=rg;z.x.registration=rg;z.x.aircraftRegistration=rg;z.x.regSource="PUBLIC_LIVE:FR24BOARD";z.x.regUpdatedAt=at;logTo(z.x,"reg","",rg);done.reg++;got.reg=rg;changed=true}
-    else if(!z.miss.reg&&rg&&want.has("reg")&&normReg(regValue(z.x))!==normReg(rg))mismatch.push({flight:z.f.designator,std:z.f.std,adminReg:regValue(z.x),fr24Reg:rg});
+    else if(!z.miss.reg&&rg&&want.has("reg")&&!isJunkRegistration(rg)&&normReg(regValue(z.x))!==normReg(rg)&&!manual(z.x,"reg")){
+      mismatch.push({flight:z.f.designator,std:z.f.std,adminReg:regValue(z.x),fr24Reg:rg,replaced:replace});
+      if(replace){const from=regValue(z.x);z.x.reg=rg;z.x.registration=rg;z.x.aircraftRegistration=rg;z.x.regSource="PUBLIC_LIVE:FR24BOARD";z.x.regUpdatedAt=at;logTo(z.x,"reg",from,rg);done.reg++;got.reg=rg;changed=true}
+    }
+    if(replace&&want.has("gate")&&!z.miss.gate&&g&&gateValue(z.x)!==g&&!manual(z.x,"gate")){const from=gateValue(z.x);z.x.gate=g;z.x.gateSource="PUBLIC_LIVE:FR24BOARD";z.x.gateUpdatedAt=at;logTo(z.x,"gate",from,g);done.gate++;got.gate=g;changed=true}
     const ty=upper(row.type);if(z.miss.type&&ty&&noteActualAircraft(z.x,ty,"PUBLIC_LIVE:FR24BOARD",at)){logTo(z.x,"aircraft","",ty);done.type++;got.type=ty;changed=true}
     {const still=needs.filter(k=>!got[k]);if(still.length)unfilled.push({flight:z.f.designator,std:z.f.std,missing:still.join("+"),reason:"FR24 n'a pas encore cette information ("+still.map(k=>k==='gate'?'porte':k==='reg'?'immatriculation':'type').join(', ')+")"})}
     if(changed){if(apply)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(z.x),z.r.identity).run();sample.push({flight:z.f.designator,std:z.f.std,...got})}
