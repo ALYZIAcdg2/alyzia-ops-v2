@@ -1,5 +1,5 @@
 // Source "FR24 tableau CDG" : le tableau public des départs de CDG (100 vols par page) lu en lot, au lieu d'une lecture par vol.
-// Donne : heure de départ réelle (vols « departed ») ou estimée (ETD), porte, immatriculation, type d'avion et identifiant FR24 du vol.
+// Donne : heure de décollage (vols « departed ») ou ETD (vols pas encore partis), porte, immatriculation, type d'avion et identifiant FR24 du vol.
 // Cache 8 min partagé par tous les vols d'un passage ; en cas de refus (403/429/409/challenge) la source se met en pause 10 min.
 import {extractDataPage,parseBoard} from "./fr24-board-parse.js";
 import {flightLookupVariants} from "./public-flight-alias.js";
@@ -70,7 +70,8 @@ export async function boardLookup(f,opts){
   const row=matchRow(b.index,f);
   if(!row)return {attempt:{source:"FR24BOARD",status:"NOT_TRACKED",httpStatus:200,checkedAt:at},semantic:{},fr24Id:""};
   const semantic={};
-  if(row.status==="departed"&&row.time)semantic.atd=parisClock(row.time);
+  // L'heure d'un vol parti sur le tableau FR24 est l'heure de décollage (roues), comme sur la page du vol : elle alimente TAKEOFF, jamais ATD (heure de porte, lue sur FlightStats / FlightAware).
+  if(row.status==="departed"&&row.time)semantic.takeoff=parisClock(row.time);
   else if(row.time&&row.status!=="canceled")semantic.etd=parisClock(row.time);
   if(row.gate)semantic.gate=upper(row.gate);if(row.reg)semantic.reg=upper(row.reg);if(row.type)semantic.aircraft=upper(row.type);
   const has=Object.keys(semantic).length>0||row.fr24Id;

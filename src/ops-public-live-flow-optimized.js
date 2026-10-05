@@ -20,11 +20,11 @@ const EXACT_FR24={"LO334|2026-10-03":"41f2d8d9","RJ120|2026-10-03":"41f2da8b","T
 // LIVE automatique: uniquement les sources qui ont prouvé une valeur opérationnelle.
 // FlightAware est traité séparément par flightaware-exact-history.js (occurrence exacte + cooldown).
 export const LIVE_PUBLIC_SOURCE_ORDER={
-  atd:["FlightStats","FlightAware exact","FR24Board","FR24","PlaneFinder","Skyscanner"],
+  atd:["FlightStats","FlightAware exact","FR24","PlaneFinder","Skyscanner"],
   status:["FR24","FlightStats","PlaneFinder","Skyscanner"],
   eta:["FR24","FlightAware exact","FlightStats","PlaneFinder","Skyscanner"],
   ata:["FlightStats","FlightAware exact","PlaneFinder","Skyscanner"],
-  takeoff:["FR24","FlightAware exact","PlaneFinder","FlightStats"],
+  takeoff:["FR24","FR24Board","FlightAware exact","PlaneFinder","FlightStats"],
   landing:["FR24","FlightAware exact","FlightStats","PlaneFinder"],
   aircraft:["FR24Board","FR24","PlaneFinder","FlightStats","Skyscanner"],
   reg:["FR24Board","FR24","PlaneFinder","FlightStats","Skyscanner"]
@@ -284,6 +284,8 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
   for(const source of ["PLANEFINDER","SKYSCANNER"]){const found={atd:choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd).value,eta:choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta).value,ata:choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata).value,status:choose(map,"status",LIVE_PUBLIC_SOURCE_ORDER.status).value,aircraft:choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft).value,reg:choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg).value};const n=needFromCurrent(base),left=(n.atd&&!found.atd)||(n.eta&&!found.eta)||(n.ata&&!found.ata)||(n.status&&!found.status)||(n.aircraft&&!found.aircraft)||(n.reg&&!found.reg);if(!left)break;const r=await fetchHtmlSource(source,f);attempts.push(attemptOf(source,r));map[source]=r?.semantic||{}}
   const current=await readCurrent(env,row.identity);if(!current)return {flight:f.designator,status:"FLIGHT_DISAPPEARED"};let changed=false;
   if(fsIdFound&&(clean(current.flightStatsId)!==fsIdFound||clean(current.flightStatsIdDate)!==f.date)){current.flightStatsId=fsIdFound;current.flightStatsIdDate=f.date;changed=true}
+  // Un ATD écrit à partir du tableau FR24 (c'était l'heure de décollage, pas l'heure de porte) est retiré : FlightStats / FlightAware fournissent le vrai ATD.
+  if(clean(current.atd)&&/FR24BOARD/.test(upper(current.atdSource))&&!manual(current,"atd")){delete current.atd;delete current.atdSource;delete current.atdUpdatedAt;delete current.atdConfirmed;delete current.atdSources;changed=true}
   // An ATD that is just the FR24 takeoff copied over is removed so FlightStats / FlightAware can supply the real gate departure.
   if(clean(current.atd)&&clean(current.atd)===clean(current.takeoff)&&/FR24/.test(upper(current.atdSource))&&!manual(current,"atd")){delete current.atd;delete current.atdSource;delete current.atdUpdatedAt;delete current.atdConfirmed;delete current.atdSources;changed=true}
   // Cleans an "aircraft change" earlier read from the flight number itself (LY320 -> 320).
