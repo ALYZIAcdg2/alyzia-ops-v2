@@ -1,5 +1,5 @@
 // Source "FR24 tableau CDG" : le tableau public des départs de CDG (100 vols par page) lu en lot, au lieu d'une lecture par vol.
-// Donne : heure de départ réelle (vols « departed »), immatriculation, type d'avion et identifiant FR24 du vol.
+// Donne : heure de départ réelle (vols « departed ») ou estimée (ETD), porte, immatriculation, type d'avion et identifiant FR24 du vol.
 // Cache 8 min partagé par tous les vols d'un passage ; en cas de refus (403/429/409/challenge) la source se met en pause 10 min.
 import {extractDataPage,parseBoard} from "./fr24-board-parse.js";
 import {flightLookupVariants} from "./public-flight-alias.js";
@@ -48,7 +48,8 @@ export async function boardLookup(f,opts){
   if(!row||(f.date&&parisDay(row.std)!==f.date)||(f.std&&parisClock(row.std)!==f.std))return {attempt:{source:"FR24BOARD",status:"NOT_TRACKED",httpStatus:200,checkedAt:at},semantic:{},fr24Id:""};
   const semantic={};
   if(row.status==="departed"&&row.time)semantic.atd=parisClock(row.time);
-  if(row.reg)semantic.reg=upper(row.reg);if(row.type)semantic.aircraft=upper(row.type);
+  else if(row.time&&row.status!=="canceled")semantic.etd=parisClock(row.time);
+  if(row.gate)semantic.gate=upper(row.gate);if(row.reg)semantic.reg=upper(row.reg);if(row.type)semantic.aircraft=upper(row.type);
   const has=Object.keys(semantic).length>0||row.fr24Id;
   return {attempt:{source:"FR24BOARD",status:has?"OK":"NO_USABLE_DATA",httpStatus:200,checkedAt:at},semantic,fr24Id:row.fr24Id||""};
 }
