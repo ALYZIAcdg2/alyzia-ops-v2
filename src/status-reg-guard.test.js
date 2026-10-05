@@ -44,3 +44,11 @@ test("FlightStats runway actual of the departure is read as takeoff",()=>{
   const r=semanticText("FLIGHTSTATS",page,{designator:"SQ337",airline:"SQ",number:"337"});
   assert.equal(r.takeoff,"00:58");
 });
+
+import {confirmation} from "./ops-public-live-flow-optimized.js";
+test("a time is confirmed when two sources agree within 2 minutes",()=>{
+  const map={FLIGHTSTATS:{atd:"00:41"},FLIGHTAWAREEXACT:{atd:"00:42"},FR24:{atd:"00:58"}};
+  assert.deepEqual(confirmation(map,"atd","00:41"),{confirmed:true,sources:["FLIGHTSTATS","FLIGHTAWAREEXACT"]});
+  assert.equal(confirmation(map,"atd","00:58").confirmed,false);
+  assert.equal(confirmation({FR24:{eta:"23:59"},FLIGHTSTATS:{eta:"00:01"}},"eta","23:59").confirmed,true);
+});
