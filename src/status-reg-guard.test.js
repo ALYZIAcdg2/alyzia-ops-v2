@@ -121,3 +121,18 @@ test("MH21: with a playback takeoff 12:03 and a history clock 12:02, FR24 still 
   assert.equal(sem.atd,undefined);
   assert.equal(sem.takeoff,"12:03");
 });
+
+import {flightStatsDetails} from "./ops-public-live-flow-optimized.js";
+const MH21={designator:"MH21",airline:"MH",number:"21"};
+const detailsInterleaved="(MH) Malaysia Airlines 21 Flight Details On time | Departed Departure CDG Paris Charles de Gaulle Airport, FR Flight Gate Times 05-Oct-2026 Scheduled 11:20 CEST Actual 11:50 CEST Total Departure Delay: 30 mins Flight Runway Times 05-Oct-2026 Scheduled -- Actual 12:03 CEST Runway Delay: - Terminal 2A Gate A39 Craft Type Airbus A350-900 Arrival KUL Kuala Lumpur International Airport, MY Flight Gate Times 06-Oct-2026 Scheduled 05:55 UTC+08:00 Estimated 06:01 UTC+08:00 Total Arrival Delay: 6 mins Flight Runway Times 06-Oct-2026 Scheduled -- Actual -- Runway Delay: - Terminal 1 Gate - Baggage Claim - Tail Number 9M-MAC";
+test("FlightStats details page: gate departure 11:50 is the ATD, runway 12:03 the takeoff, arrival estimate 06:01 (MH21)",()=>{
+  const d=flightStatsDetails(detailsInterleaved);
+  assert.equal(d.atd,"11:50");assert.equal(d.takeoff,"12:03");assert.equal(d.eta,"06:01");assert.equal(d.ata,"");assert.equal(d.landing,"");
+  const out=semanticText("FLIGHTSTATS",detailsInterleaved,MH21);
+  assert.equal(out.atd,"11:50");assert.equal(out.takeoff,"12:03");assert.equal(out.eta,"06:01");assert.equal(out.ata,undefined);
+});
+test("FlightStats details page, labels above values: arrival gate Actual = ATA and arrival runway Actual = landing",()=>{
+  const t="Departure Flight Gate Times Scheduled Actual 11:20 CEST 11:50 CEST Flight Runway Times Scheduled Actual -- 12:03 CEST Terminal Arrival Flight Gate Times Scheduled Actual 05:55 UTC+08:00 06:20 UTC+08:00 Flight Runway Times Scheduled Actual -- 06:12 UTC+08:00 Terminal";
+  const d=flightStatsDetails(t);
+  assert.equal(d.atd,"11:50");assert.equal(d.takeoff,"12:03");assert.equal(d.ata,"06:20");assert.equal(d.landing,"06:12");
+});
