@@ -190,3 +190,19 @@ test("FlightStats details page of TS111: gate 12:20, runway 12:34, arrival estim
   const d=flightStatsDetails(t);
   assert.equal(d.atd,"12:20");assert.equal(d.takeoff,"12:34");assert.equal(d.eta,"13:40");assert.equal(d.ata,"");assert.equal(d.landing,"");
 });
+
+import {flightStatsApiTimes} from "./ops-public-live-flow-optimized.js";
+// Réponse réelle de https://www.flightstats.com/v2/api/extendedDetails/TS/111/2026/10/5/1412363884 (vol en route, 5 oct 2026), champs utiles.
+const TS111_API={flightId:1412363884,departureTimes:{scheduledGate:{time24:"12:20"},actualGate:{time24:"12:20"},scheduledRunway:{time24:"12:30"},actualRunway:{time24:"12:34"}},arrivalTimes:{scheduledGate:{time24:"14:00"},estimatedGate:{time24:"13:40"},scheduledRunway:{time24:"13:56"},estimatedRunway:{time24:"13:26"}},status:{statusCode:"A",status:"Departed",diverted:false},divertedAirport:null,flightState:"en-route",additionalFlightInfo:{equipment:{tailNumber:"C-GUBT",iata:"332",name:"Airbus A330-200"}}};
+test("FlightStats JSON API (TS111): gate 12:20 = ATD, runway 12:34 = takeoff, estimated gate 13:40 = ETA, tail and aircraft",()=>{
+  const a=flightStatsApiTimes(TS111_API);
+  assert.deepEqual(a,{atd:"12:20",takeoff:"12:34",eta:"13:40",status:"EN VOL",reg:"C-GUBT",aircraft:"332"});
+});
+test("FlightStats JSON API: landed flight gives landing and ATA, a cancelled one is a strong ANNULÉ",()=>{
+  const landed=flightStatsApiTimes({...TS111_API,arrivalTimes:{actualRunway:{time24:"13:30"},actualGate:{time24:"13:41"},estimatedGate:{time24:"13:40"}},flightState:"landed"});
+  assert.equal(landed.landing,"13:30");assert.equal(landed.ata,"13:41");assert.equal(landed.eta,undefined);assert.equal(landed.status,"ARRIVÉE");
+  const onlyRunway=flightStatsApiTimes({...TS111_API,arrivalTimes:{actualRunway:{time24:"13:30"}}});
+  assert.equal(onlyRunway.status,"ATTERI");
+  const cancelled=flightStatsApiTimes({status:{statusCode:"C",status:"Cancelled"},departureTimes:{},arrivalTimes:{}});
+  assert.equal(cancelled.status,"ANNULÉ");assert.equal(cancelled.statusStrong,true);
+});
