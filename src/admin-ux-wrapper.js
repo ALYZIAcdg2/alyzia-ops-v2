@@ -14,6 +14,10 @@ const UI=String.raw`<style id="alyzia-admin-ux-css">
 .adx-pager span{font-size:11px;font-weight:900;color:#536d87}
 .adx-srcbtn{margin-left:8px;min-height:36px;padding:6px 14px;border:1px solid #bad2eb;border-radius:10px;background:#fff;color:#086bd5;font-weight:900;cursor:pointer}
 .adx-cron{display:inline-flex;align-items:center;gap:6px;margin-left:8px;min-height:36px;padding:6px 12px;border:1px solid #cfe3f6;border-radius:10px;background:#f4f9ff;font-size:11px;font-weight:900;color:#536d87}.adx-cron b{font-size:15px;color:#086bd5;font-variant-numeric:tabular-nums}.adx-cron.soon b{color:#0f8a5f}
+.adx-srcs{display:flex;gap:3px;flex-wrap:wrap;cursor:pointer}.adx-p{display:inline-block;min-width:26px;text-align:center;padding:2px 5px;border-radius:7px;font-size:9px;font-weight:950;letter-spacing:.02em;border:1px solid transparent}
+.adx-p.ok{background:#e1f6ec;color:#0f8a5f;border-color:#bfe6d3}.adx-p.block{background:#ffe9d6;color:#b25400;border-color:#f6cba3}.adx-p.none{background:#eef2f6;color:#6b7c90;border-color:#dbe3ec}.adx-p.err{background:#ffe3e7;color:#c0213a;border-color:#f5bcc5}
+.adx-health{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}.adx-h{border:1px solid #dfe9f2;border-radius:10px;padding:6px 10px;background:#fbfdff;font-size:11px;font-weight:900;color:#536d87}.adx-h b{color:#10233f}.adx-h .g{color:#0f8a5f}.adx-h .o{color:#b25400}.adx-h .r{color:#c0213a}
+.adx-modal table{width:100%;border-collapse:collapse;font-size:12px}.adx-modal th,.adx-modal td{padding:7px 8px;border-bottom:1px solid #e4ebf2;text-align:left;vertical-align:top}.adx-modal th{font-size:10px;color:#6b7c90}.adx-modal .miss{margin:10px 0;font-weight:900;font-size:12px}
 .adx-srchead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 14px}.adx-srchead b{font-size:22px;font-weight:950;color:#10233f}
 </style><script id="alyzia-admin-ux-js">(()=>{'use strict';
 if(window.__alyziaAdminUx)return;window.__alyziaAdminUx=true;
@@ -21,6 +25,39 @@ const PAGE=10,LEGACY=/QUOTAS?\s*API|PROVIDER|FOURNISSEUR/i,LEGACY_NAMES=/(AIRLAB
 let page=1,sig='',view='main',queued=false;
 const root=()=>document.querySelector('#app .admin-native');
 const rows=r=>[...r.querySelectorAll('.adn-table tbody tr')];
+
+const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FLIGHTAWARE','FA','FlightAware'],['PLANEFINDER','PF','PlaneFinder'],['SKYSCANNER','SK','Skyscanner']];
+const LAB={OK:'Lu avec succès',COOLDOWN:'En pause (limite atteinte récemment)',BLOCKED:'Bloqué par le site',NO_USABLE_DATA:'Page lue, aucune donnée utile',NOT_TRACKED:'Vol non suivi par cette source',NO_OCCURRENCE_URL:'Pas de page pour ce jour',FR24_NO_USABLE_DATA:'Aucune donnée exploitable',TIMEOUT:'Délai dépassé',FETCH_ERROR:'Erreur réseau',OCCURRENCE_MISMATCH:'Autre jour du même vol',HTTP_ERROR:'Erreur du site',NO_SOURCE:'Source non utilisée'};
+function kind(a){if(!a)return 'none';if(a.st==='OK')return 'ok';if(a.h===403||a.h===429||a.st==='BLOCKED'||a.st==='COOLDOWN')return 'block';if(/NO_USABLE|NOT_TRACKED|NO_OCCURRENCE|NO_SOURCE|MISMATCH/.test(a.st))return 'none';return 'err'}
+function label(a){let t=LAB[a.st]||a.st;if(a.h===403)t='Refusé (403) : trop de requêtes ou blocage';else if(a.h===429)t='Trop de requêtes (429) : patienter';else if(a.h&&a.st==='HTTP_ERROR')t='Erreur du site (HTTP '+a.h+')';return t}
+const hm=iso=>{const d=new Date(iso);return Number.isFinite(d.getTime())?d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):'—'};
+const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let flightsCache=null,flightsAt=0,loading=false;
+function loadFlights(){if(loading||Date.now()-flightsAt<15000)return;loading=true;fetch('/api/admin/flight-processing',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d&&d.ok){flightsCache=d.flights||[];flightsAt=Date.now();queue()}}).catch(()=>{}).finally(()=>{loading=false})}
+function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&x.date===date)}
+function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
+function pills(x){return SRC.map(s=>{const a=latest(x,s[0]);const k=kind(a);return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+(a?label(a):'pas encore lu'))+'">'+s[1]+'</span>'}).join('')}
+function openDetail(x){
+  const rows=SRC.map(s=>{const a=latest(x,s[0]);if(!a)return '<tr><td><b>'+s[2]+'</b></td><td colspan="3">Pas encore lu pour ce vol</td></tr>';const k=kind(a);return '<tr><td><b>'+s[2]+'</b></td><td><span class="adx-p '+k+'">'+(k==='ok'?'OK':k==='block'?'LIMITÉ':k==='none'?'VIDE':'ERREUR')+'</span> '+esc(label(a))+'</td><td>'+esc(a.d||'—')+'</td><td>'+hm(a.at)+'</td></tr>'}).join('');
+  const html='<div class="adx-modal"><div class="miss">'+(x.missing&&x.missing.length?'Manque : '+esc(x.missing.join(', ')):'Rien ne manque')+' · dernière lecture '+hm(x.liveAt)+'</div><table><thead><tr><th>SOURCE</th><th>RÉSULTAT</th><th>DÉTAIL</th><th>HEURE</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  if(typeof showModal==='function')showModal(x.flight+' · lectures des sources',x.date,html);
+}
+function decorate(r){
+  const table=r.querySelector('.adn-table');if(!table||!flightsCache)return;
+  const heads=[...table.querySelectorAll('thead th')].map(t=>t.textContent.trim().toUpperCase()),col=heads.indexOf('DERNIER TRAITEMENT');if(col<0)return;
+  const date=document.getElementById('adminDateInput')?.value||'';
+  rows(r).forEach(tr=>{const cell=tr.cells[col],fl=(tr.cells[0]?.textContent||'').trim();if(!cell||!fl)return;const x=find(fl,date);if(!x||!x.attempts||!x.attempts.length)return;
+    const sig=x.liveAt+'|'+x.attempts.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig)return;cell.dataset.adxSig=sig;
+    cell.innerHTML='<div class="adx-srcs" title="Cliquer pour le détail">'+pills(x)+'</div><div style="font-size:10px;color:#6b7c90;font-weight:800;margin-top:2px">'+hm(x.liveAt)+'</div>';
+    cell.querySelector('.adx-srcs').addEventListener('click',e=>{e.stopPropagation();e.preventDefault();openDetail(x)},true)});
+  health(r,table,date);
+}
+function health(r,table,date){
+  const holder=table.closest('.adn-section')||table.parentElement;let bar=holder.querySelector('.adx-health');if(!bar){bar=document.createElement('div');bar.className='adx-health';table.parentElement.insertBefore(bar,table)}
+  const list=(flightsCache||[]).filter(x=>x.date===date&&x.attempts&&x.attempts.length);
+  const html=list.length?SRC.map(s=>{let ok=0,bl=0,no=0,er=0;list.forEach(x=>{const a=latest(x,s[0]);if(!a)return;const k=kind(a);if(k==='ok')ok++;else if(k==='block')bl++;else if(k==='none')no++;else er++});return '<span class="adx-h"><b>'+s[2]+'</b> <span class="g">'+ok+' OK</span> · <span class="o">'+bl+' limité</span> · '+no+' vide · <span class="r">'+er+' erreur</span></span>'}).join(''):'<span class="adx-h">Aucune lecture enregistrée pour ce jour</span>';
+  if(bar.dataset.k!==html){bar.dataset.k=html;bar.innerHTML=html}
+}
 function tidy(r){
   r.querySelectorAll('.adn-section').forEach(sec=>{
     const h=(sec.querySelector('h3')?.textContent||'').trim();
@@ -60,7 +97,7 @@ function paginate(r){
   bar.querySelectorAll('button[data-p]').forEach(b=>b.addEventListener('click',()=>{const n=Number(b.dataset.p);if(n>=1&&n<=pages){page=n;bar.dataset.k='';run()}}));
 }
 function setView(v){view=v;const r=root();if(r){controls(r);try{window.scrollTo(0,0)}catch{}}}
-function run(){queued=false;const r=root();if(!r){view='main';return}try{tidy(r);controls(r);paginate(r)}catch(e){console.error('admin ux',e)}}
+function run(){queued=false;const r=root();if(!r){view='main';return}try{tidy(r);controls(r);paginate(r);loadFlights();decorate(r)}catch(e){console.error('admin ux',e)}}
 function queue(){if(queued)return;queued=true;requestAnimationFrame(run)}
 const app=document.getElementById('app');
 if(app)new MutationObserver(queue).observe(app,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});
