@@ -74,4 +74,6 @@ export async function boardLookup(f,opts){
   const has=Object.keys(semantic).length>0||row.fr24Id;
   return {attempt:{source:"FR24BOARD",status:has?"OK":"NO_USABLE_DATA",httpStatus:200,checkedAt:at},semantic,fr24Id:row.fr24Id||""};
 }
+// Porte absente comme ADMIN la compte : vide ou valeur de remplissage (« — », « - », N/A…), en lisant les mêmes champs (gate, departureGate).
+export const gateValue=x=>{const v=clean(x?.gate||x?.departureGate||x?.departure_gate);return /^(—|–|-+|n\/?a|tbd|\?+|null|none|unknown)$/i.test(v)?"":v};
 export const __reset=()=>{cache=null;pausedUntil=0;inflight=null};

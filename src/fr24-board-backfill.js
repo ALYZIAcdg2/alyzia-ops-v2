@@ -1,7 +1,7 @@
 // Rattrapage des portes manquantes depuis le tableau des départs FR24 de CDG (vols partis ou à venir du jour).
 // GET /api/admin/board-backfill?date=AAAA-MM-JJ        : aperçu, n'écrit rien
 // GET /api/admin/board-backfill?date=AAAA-MM-JJ&apply=1 : écrit les portes trouvées
-import {fetchBoardRange,indexRows,matchRow} from "./fr24-board.js";
+import {fetchBoardRange,indexRows,matchRow,gateValue} from "./fr24-board.js";
 
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const manual=(x,f)=>upper(x?.[f+"Source"]).includes("MANUAL")||Boolean(x?.manual?.[f]||x?.manualOverrides?.[f]||x?.manual_fields?.[f]);
@@ -13,7 +13,7 @@ export async function backfillBoardGates(env,{date,apply=false,fetchImpl=fetch,m
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS' ORDER BY std`).bind(day).all();
   const todo=[];
   for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}
-    if(upper(x.origin||"CDG")!=="CDG"||clean(x.gate)||manual(x,"gate"))continue;
+    if(upper(x.origin||"CDG")!=="CDG"||gateValue(x)||manual(x,"gate"))continue;
     const airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
     todo.push({r,x,f:{date:day,airline,number,designator,std:hhmm(x.std||r.std)}});
   }
