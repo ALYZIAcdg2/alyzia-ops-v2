@@ -75,3 +75,8 @@ test("landed for 15 minutes without ATA: ATA = landing + 10",()=>{
   assert.equal(deriveAta("16:50","Europe/Paris","ENT",now)?.value,"17:00");
   assert.equal(deriveAta("",  "Europe/Paris","PC",now),null);
 });
+test("FlightStats cancelled banner without the usual time blocks is still read",()=>{
+  const page="Track a Flight (AI) Air India 142 Flight Details Cancelled Flight Cancelled One or more of our data sources have indicated that this flight has been cancelled. Please contact the airline for more details. CDG Paris DEL Delhi Scheduled 20:45 CEST";
+  const r=semanticText("FLIGHTSTATS",page,{designator:"AI142",airline:"AI",number:"142"});
+  assert.equal(r.status,"ANNULÉ");assert.ok(r.statusStrong);
+});
