@@ -3,14 +3,14 @@
 // GET /api/admin/board-backfill?date=AAAA-MM-JJ[&fields=...]&apply=1            : écrit ce qui manque
 // Seuls les champs vides sont remplis (jamais une saisie manuelle). Les immatriculations déjà présentes mais différentes du tableau sont seulement signalées (`regMismatch`).
 import {fetchBoardRange,indexRows,matchRow,gateValue} from "./fr24-board.js";
-import {isWebWordRegistration} from "./registration-guard.js";
+import {isJunkRegistration} from "./registration-guard.js";
 import {noteActualAircraft} from "./aircraft-change.js";
 
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const manual=(x,f)=>upper(x?.[f+"Source"]).includes("MANUAL")||Boolean(x?.manual?.[f]||x?.manualOverrides?.[f]||x?.manual_fields?.[f]);
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?String(m[1]).padStart(2,"0")+":"+m[2]:""};
 const PLACEHOLDER=/^(—|–|-+|n\/?a|tbd|\?+|null|none|unknown|non renseign[ée])$/i;
-export const regValue=x=>{const v=clean(x?.reg||x?.registration||x?.aircraftRegistration);return !v||PLACEHOLDER.test(v)||isWebWordRegistration(v)?"":v};
+export const regValue=x=>{const v=clean(x?.reg||x?.registration||x?.aircraftRegistration);return !v||PLACEHOLDER.test(v)||isJunkRegistration(v)?"":v};
 export const typeValue=x=>{const v=clean(x?.aircraftActual||x?.aircraft);return !v||PLACEHOLDER.test(v)?"":v};
 const normReg=v=>upper(v).replace(/[^A-Z0-9]/g,"");
 
@@ -43,18 +43,19 @@ export async function backfillBoardGates(env,{date,apply=false,fields="gate,reg,
   const range=await fetchBoardRange({fromSec,stopAfterSec:stopAfter,maxPages,fetchImpl});
   const common={verdict:range.verdict,pages:range.pages,boardRows:range.rows.length,fromIso:new Date(range.fromSecUsed*1000).toISOString(),pagesInfo:range.info};
   if(!range.rows.length)return {...base,...common,filled:0,note:"Le tableau FR24 n'a rien renvoyé"};
-  const index=indexRows(range.rows),at=new Date().toISOString(),done={gate:0,reg:0,type:0},sample=[],mismatch=[];let notFound=0;
+  const index=indexRows(range.rows),at=new Date().toISOString(),done={gate:0,reg:0,type:0},sample=[],mismatch=[],unfilled=[];let notFound=0;
   const logTo=(x,field,from,to)=>{const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field,from,to});x.flightInfoLog=log.slice(0,240)};
   for(const z of todo){
     if(!inWindow.has(z.r.identity))continue;
-    const row=matchRow(index,z.f);if(!row){if(z.miss.gate||z.miss.reg||z.miss.type)notFound++;continue}
+    const row=matchRow(index,z.f),needs=Object.keys(z.miss).filter(k=>z.miss[k]);if(!row){if(needs.length){notFound++;unfilled.push({flight:z.f.designator,std:z.f.std,missing:needs.join("+"),reason:"absent du tableau FR24 (autre jour, autre heure prévue ou non listé)"})}continue}
     let changed=false;const got={};
     const g=upper(row.gate);if(z.miss.gate&&g){z.x.gate=g;z.x.gateSource="PUBLIC_LIVE:FR24BOARD";z.x.gateUpdatedAt=at;logTo(z.x,"gate","",g);done.gate++;got.gate=g;changed=true}
     const rg=upper(row.reg);
-    if(z.miss.reg&&rg&&!isWebWordRegistration(rg)){z.x.reg=rg;z.x.registration=rg;z.x.aircraftRegistration=rg;z.x.regSource="PUBLIC_LIVE:FR24BOARD";z.x.regUpdatedAt=at;logTo(z.x,"reg","",rg);done.reg++;got.reg=rg;changed=true}
+    if(z.miss.reg&&rg&&!isJunkRegistration(rg)){z.x.reg=rg;z.x.registration=rg;z.x.aircraftRegistration=rg;z.x.regSource="PUBLIC_LIVE:FR24BOARD";z.x.regUpdatedAt=at;logTo(z.x,"reg","",rg);done.reg++;got.reg=rg;changed=true}
     else if(!z.miss.reg&&rg&&want.has("reg")&&normReg(regValue(z.x))!==normReg(rg))mismatch.push({flight:z.f.designator,std:z.f.std,adminReg:regValue(z.x),fr24Reg:rg});
     const ty=upper(row.type);if(z.miss.type&&ty&&noteActualAircraft(z.x,ty,"PUBLIC_LIVE:FR24BOARD",at)){logTo(z.x,"aircraft","",ty);done.type++;got.type=ty;changed=true}
+    {const still=needs.filter(k=>!got[k]);if(still.length)unfilled.push({flight:z.f.designator,std:z.f.std,missing:still.join("+"),reason:"FR24 n'a pas encore cette information ("+still.map(k=>k==='gate'?'porte':k==='reg'?'immatriculation':'type').join(', ')+")"})}
     if(changed){if(apply)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(z.x),z.r.identity).run();sample.push({flight:z.f.designator,std:z.f.std,...got})}
   }
-  return {...base,...common,filled:done.gate+done.reg+done.type,filledGate:done.gate,filledReg:done.reg,filledType:done.type,notFoundOnBoard:notFound,regMismatch:mismatch.slice(0,20),regMismatchCount:mismatch.length,written:apply,sample:sample.slice(0,15)};
+  return {...base,...common,filled:done.gate+done.reg+done.type,filledGate:done.gate,filledReg:done.reg,filledType:done.type,notFoundOnBoard:notFound,unfilled:unfilled.slice(0,25),regMismatch:mismatch.slice(0,20),regMismatchCount:mismatch.length,written:apply,sample:sample.slice(0,15)};
 }

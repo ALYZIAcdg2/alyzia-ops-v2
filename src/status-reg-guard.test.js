@@ -216,3 +216,4 @@ test("FlightStats is paused for 90 s after two refusals in a row, and a success 
   assert.equal(flightStatsPaused(t+91000),false);
   flightStatsReset();
 });
+test("N2U est une immatriculation invalide",async()=>{const {isJunkRegistration}=await import("./registration-guard.js");assert.equal(isJunkRegistration("N2U"),true);assert.equal(isJunkRegistration("E-MAIL"),true);assert.equal(isJunkRegistration("N781AN"),false);assert.equal(isJunkRegistration("HL7579"),false);assert.equal(isJunkRegistration("F-GSPL"),false)});
