@@ -136,3 +136,21 @@ test("FlightStats details page, labels above values: arrival gate Actual = ATA a
   const d=flightStatsDetails(t);
   assert.equal(d.atd,"11:50");assert.equal(d.takeoff,"12:03");assert.equal(d.ata,"06:20");assert.equal(d.landing,"06:12");
 });
+
+import {flightStatsFlightId} from "./ops-public-live-flow-optimized.js";
+test("the tracker page link of the requested date gives the FlightStats flightId (MH21)",()=>{
+  const raw='<a href="/v2/flight-details/MH/21?year=2026&amp;month=10&amp;date=4&amp;flightId=1411000001">x</a><a href="/v2/flight-details/MH/21?year=2026&amp;month=10&amp;date=5&amp;flightId=1412343320">view details</a>';
+  assert.equal(flightStatsFlightId(raw,"2026-10-05"),"1412343320");
+  assert.equal(flightStatsFlightId(raw,"2026-10-06"),"");
+  assert.equal(flightStatsFlightId("<html>no link</html>","2026-10-05"),"");
+});
+
+import {priority,suspectAtd} from "./ops-public-live-flow-optimized.js";
+test("an ATD copied from the FR24 takeoff is read first by the cron",()=>{
+  const x={std:"11:20",atd:"12:02",takeoff:"12:02",atdSource:"PUBLIC_LIVE:FR24"};
+  assert.equal(suspectAtd(x),true);
+  assert.equal(priority({std:"11:20"},x,742)[0],0);
+  assert.equal(suspectAtd({...x,atdSource:"PUBLIC_LIVE:FLIGHTSTATS"}),false);
+  assert.equal(suspectAtd({...x,atdSource:"MANUAL",atd:"12:02"}),false);
+  assert.equal(priority({std:"11:20"},{...x,atdSource:"PUBLIC_LIVE:FLIGHTSTATS"},742)[0],1);
+});

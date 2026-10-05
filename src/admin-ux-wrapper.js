@@ -13,6 +13,7 @@ const UI=String.raw`<style id="alyzia-admin-ux-css">
 .adx-pager button[disabled]{opacity:.4;cursor:default}.adx-pager button.on{background:#086bd5;color:#fff;border-color:#086bd5}
 .adx-pager span{font-size:11px;font-weight:900;color:#536d87}
 .adx-srcbtn{margin-left:8px;min-height:36px;padding:6px 14px;border:1px solid #bad2eb;border-radius:10px;background:#fff;color:#086bd5;font-weight:900;cursor:pointer}
+.adx-cron{display:inline-flex;align-items:center;gap:6px;margin-left:8px;min-height:36px;padding:6px 12px;border:1px solid #cfe3f6;border-radius:10px;background:#f4f9ff;font-size:11px;font-weight:900;color:#536d87}.adx-cron b{font-size:15px;color:#086bd5;font-variant-numeric:tabular-nums}.adx-cron.soon b{color:#0f8a5f}
 .adx-srchead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 14px}.adx-srchead b{font-size:22px;font-weight:950;color:#10233f}
 </style><script id="alyzia-admin-ux-js">(()=>{'use strict';
 if(window.__alyziaAdminUx)return;window.__alyziaAdminUx=true;
@@ -28,8 +29,12 @@ function tidy(r){
   });
   r.querySelectorAll('.adn-card-next').forEach(el=>{const t=el.textContent||'',n=t.replace(LEGACY_NAMES,'FLIGHTSTATS · FR24 · FLIGHTAWARE');if(n!==t)el.textContent=n});
 }
+function cronLeft(){const n=new Date(),s=(120-((n.getUTCMinutes()%2)*60+n.getUTCSeconds()))%120||120;return s}
+function cronText(){const s=cronLeft();return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function tickCron(){document.querySelectorAll('.adx-cron').forEach(el=>{const b=el.querySelector('b'),t=cronText();if(b&&b.textContent!==t)b.textContent=t;el.classList.toggle('soon',cronLeft()<=10)})}
 function controls(r){
   const head=r.querySelector('.adn-head');
+  if(head&&!head.querySelector('.adx-cron')){const c=document.createElement('span');c.className='adx-cron';c.title='Le contrôle automatique des vols passe toutes les 2 minutes (minutes paires)';c.innerHTML='PROCHAIN PASSAGE <b>--:--</b>';const ref=head.querySelector('.adx-srcbtn');(ref?.parentNode||head).insertBefore(c,ref||null);tickCron()}
   if(head&&!head.querySelector('.adx-srcbtn')){
     const b=document.createElement('button');b.type='button';b.className='adx-srcbtn';b.textContent='SOURCES PUBLIQUES';b.addEventListener('click',()=>setView('sources'));
     const refresh=head.querySelector('.adn-refresh,#adminRefreshBtn');(refresh?.parentNode||head).appendChild(b);
@@ -59,7 +64,7 @@ function run(){queued=false;const r=root();if(!r){view='main';return}try{tidy(r)
 function queue(){if(queued)return;queued=true;requestAnimationFrame(run)}
 const app=document.getElementById('app');
 if(app)new MutationObserver(queue).observe(app,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});
-setInterval(run,1200);
+setInterval(run,1200);setInterval(tickCron,1000);
 })();</script>`;
 
 function patch(html){
