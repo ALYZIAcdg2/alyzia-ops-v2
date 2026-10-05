@@ -6,8 +6,8 @@ const UI=String.raw`<style id="alyzia-admin-ux-css">
 #app .admin-native .adn-table tbody tr.adx-off{display:none!important}
 #app .admin-native .adn-section.adx-src{display:none}
 @media(min-width:900px){#app .admin-native .adn-cards{grid-template-columns:repeat(3,minmax(0,1fr))!important}}
-#app .admin-native.adx-sources>*:not(.adx-srchead):not(.adx-src){display:none!important}
-#app .admin-native.adx-sources .adn-section.adx-src{display:block}
+#app .admin-native.adx-sources.adx-anc>:not(.adx-anc):not(.adx-src):not(.adx-srchead),#app .admin-native.adx-sources .adx-anc>:not(.adx-anc):not(.adx-src):not(.adx-srchead){display:none!important}
+#app .admin-native.adx-sources .adx-src,#app .admin-native.adx-sources .adx-anc{display:block}
 .adx-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin:12px 0 4px;flex-wrap:wrap}
 .adx-pager button{min-height:36px;min-width:36px;padding:6px 12px;border:1px solid #bad2eb;border-radius:10px;background:#fff;color:#086bd5;font-weight:900;cursor:pointer}
 .adx-pager button[disabled]{opacity:.4;cursor:default}.adx-pager button.on{background:#086bd5;color:#fff;border-color:#086bd5}
@@ -60,7 +60,7 @@ function health(r,table,date){
 }
 function tidy(r){
   r.querySelectorAll('.adn-section').forEach(sec=>{
-    const h=(sec.querySelector('h3')?.textContent||'').trim();
+    const h=(sec.querySelector(':scope>h3')?.textContent||'').trim();
     if(/SOURCES PUBLIQUES/i.test(h)){if(!sec.classList.contains('adx-src'))sec.classList.add('adx-src');return}
     if(LEGACY.test(h))sec.remove();
   });
@@ -80,6 +80,9 @@ function controls(r){
   if(!bar){bar=document.createElement('div');bar.className='adx-srchead';bar.innerHTML='<button type="button" class="adx-srcbtn" style="margin:0">‹ RETOUR ADMIN</button><b>SOURCES PUBLIQUES</b><span></span>';bar.querySelector('button').addEventListener('click',()=>setView('main'));r.insertBefore(bar,r.firstChild)}
   bar.style.display=view==='sources'?'flex':'none';
   r.classList.toggle('adx-sources',view==='sources');
+  // The sources table may sit inside another block (it is moved around by older scripts): keep the whole chain from the table up to the page visible.
+  r.querySelectorAll('.adx-anc').forEach(e=>{if(view!=='sources')e.classList.remove('adx-anc')});
+  if(view==='sources'){const sec=r.querySelector('.adx-src');if(sec){r.classList.add('adx-anc');for(let e=sec.parentElement;e&&e!==r;e=e.parentElement)e.classList.add('adx-anc')}}
 }
 function paginate(r){
   const table=r.querySelector('.adn-table');if(!table)return;
