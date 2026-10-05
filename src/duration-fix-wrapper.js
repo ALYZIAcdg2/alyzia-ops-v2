@@ -193,6 +193,8 @@ const DELETE_FLIGHT_UI = String.raw`
   }
 
   setInterval(function(){try{installFlightTools()}catch(_){}},1500);
+  // Replace the card the moment the page renders it, so it never flashes back to CRÉER VOL.
+  (function(){var q=false,root=document.getElementById('app');if(!root)return;new MutationObserver(function(){if(q)return;q=true;requestAnimationFrame(function(){q=false;try{installFlightTools()}catch(_){}})}).observe(root,{childList:true,subtree:true})})();
   const previousOpenTools=window.openTools;
   window.openTools=async function(...args){
     const result=typeof previousOpenTools==='function' ? await previousOpenTools.apply(this,args) : undefined;
