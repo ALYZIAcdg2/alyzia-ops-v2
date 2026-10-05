@@ -206,3 +206,13 @@ test("FlightStats JSON API: landed flight gives landing and ATA, a cancelled one
   const cancelled=flightStatsApiTimes({status:{statusCode:"C",status:"Cancelled"},departureTimes:{},arrivalTimes:{}});
   assert.equal(cancelled.status,"ANNULÉ");assert.equal(cancelled.statusStrong,true);
 });
+
+import {flightStatsNoteResult,flightStatsPaused,flightStatsReset} from "./ops-public-live-flow-optimized.js";
+test("FlightStats is paused for 90 s after two refusals in a row, and a success resets the count",()=>{
+  flightStatsReset();const t=Date.UTC(2026,9,5,10,0);
+  flightStatsNoteResult(403,t);assert.equal(flightStatsPaused(t+1),false);
+  flightStatsNoteResult(200,t);flightStatsNoteResult(429,t);assert.equal(flightStatsPaused(t+1),false);
+  flightStatsNoteResult(403,t);assert.equal(flightStatsPaused(t+1000),true);
+  assert.equal(flightStatsPaused(t+91000),false);
+  flightStatsReset();
+});
