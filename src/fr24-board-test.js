@@ -3,7 +3,7 @@
 const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 const clean=v=>String(v??"").trim();
 
-export function parseBoard(json){
+export function parseBoard(json,{all=false}={}){
   const props=json?.props||{},flights=Array.isArray(props.flights)?props.flights:[],meta=props.meta||{};
   const rows=flights.map(f=>({
     flight:clean(f.flightNumber),callsign:clean(f.callsign),status:clean(f.status?.name),
@@ -14,7 +14,7 @@ export function parseBoard(json){
   const count=k=>rows.reduce((m,r)=>(m[r[k]||"-"]=(m[r[k]||"-"]||0)+1,m),{});
   return {total:rows.length,statuses:count("status"),withGate:rows.filter(r=>r.gate).length,withReg:rows.filter(r=>r.reg).length,withFr24Id:rows.filter(r=>r.fr24Id).length,
     departedWithTime:rows.filter(r=>r.status==="departed"&&r.time).length,
-    meta:{date:meta.date||0,nextPage:meta.nextPage??null,hasMoreNextData:!!meta.hasMoreNextData,hoursRange:meta.hoursRange||0},sample:rows.slice(0,5)};
+    meta:{date:meta.date||0,nextPage:meta.nextPage??null,hasMoreNextData:!!meta.hasMoreNextData,hoursRange:meta.hoursRange||0},sample:rows.slice(0,5),...(all?{rows}:{})};
 }
 
 // Page HTML normale : le JSON de la page est dans l'attribut data-page (protocole Inertia). Le mode JSON (x-inertia) exige la version exacte

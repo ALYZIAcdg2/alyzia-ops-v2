@@ -26,14 +26,14 @@ let page=1,sig='',view='main',queued=false;
 const root=()=>document.querySelector('#app .admin-native');
 const rows=r=>[...r.querySelectorAll('.adn-table tbody tr')];
 
-const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FLIGHTAWARE','FA','FlightAware'],['PLANEFINDER','PF','PlaneFinder'],['SKYSCANNER','SK','Skyscanner']];
+const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FR24BOARD','TB','FR24 tableau CDG'],['FLIGHTAWARE','FA','FlightAware'],['PLANEFINDER','PF','PlaneFinder'],['SKYSCANNER','SK','Skyscanner']];
 const LAB={OK:'Lu avec succès',COOLDOWN:'En pause (limite atteinte récemment)',BLOCKED:'Bloqué par le site',NO_USABLE_DATA:'Page lue, aucune donnée utile',NOT_TRACKED:'Vol non suivi par cette source',NO_OCCURRENCE_URL:'Pas de page pour ce jour',FR24_NO_USABLE_DATA:'Aucune donnée exploitable',TIMEOUT:'Délai dépassé',FETCH_ERROR:'Erreur réseau',OCCURRENCE_MISMATCH:'Autre jour du même vol',HTTP_ERROR:'Erreur du site',NO_SOURCE:'Source non utilisée'};
 function kind(a){if(!a)return 'none';if(a.st==='OK')return 'ok';if(a.h===403||a.h===429||a.st==='BLOCKED'||a.st==='COOLDOWN')return 'block';if(/NO_USABLE|NOT_TRACKED|NO_OCCURRENCE|NO_SOURCE|MISMATCH/.test(a.st))return 'none';return 'err'}
 function label(a){let t=LAB[a.st]||a.st;if(a.h===403)t='Refusé (403) : trop de requêtes ou blocage';else if(a.h===429)t='Trop de requêtes (429) : patienter';else if(a.h&&a.st==='HTTP_ERROR')t='Erreur du site (HTTP '+a.h+')';return t}
 const hm=iso=>{const d=new Date(iso);return Number.isFinite(d.getTime())?d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):'—'};
 const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let flightsCache=null,flightsAt=0,loading=false;
-function loadFlights(){if(loading||Date.now()-flightsAt<15000)return;loading=true;fetch('/api/admin/flight-processing',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d&&d.ok){flightsCache=d.flights||[];flightsAt=Date.now();queue()}}).catch(()=>{}).finally(()=>{loading=false})}
+let refDate='',flightsCache=null,flightsAt=0,loading=false;
+function loadFlights(){if(loading||Date.now()-flightsAt<15000)return;loading=true;fetch('/api/admin/flight-processing',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d&&d.ok){flightsCache=d.flights||[];refDate=d.date||'';flightsAt=Date.now();queue()}}).catch(()=>{}).finally(()=>{loading=false})}
 function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&x.date===date)}
 function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
 function pills(x){return SRC.map(s=>{const a=latest(x,s[0]);const k=kind(a);return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+(a?label(a):'pas encore lu'))+'">'+s[1]+'</span>'}).join('')}
@@ -55,8 +55,18 @@ function decorate(r){
 function health(r,table,date){
   const holder=table.closest('.adn-section')||table.parentElement;let bar=holder.querySelector('.adx-health');if(!bar){bar=document.createElement('div');bar.className='adx-health';table.parentElement.insertBefore(bar,table)}
   const list=(flightsCache||[]).filter(x=>x.date===date&&x.attempts&&x.attempts.length);
-  const html=list.length?SRC.map(s=>{let ok=0,bl=0,no=0,er=0;list.forEach(x=>{const a=latest(x,s[0]);if(!a)return;const k=kind(a);if(k==='ok')ok++;else if(k==='block')bl++;else if(k==='none')no++;else er++});return '<span class="adx-h"><b>'+s[2]+'</b> <span class="g">'+ok+' OK</span> · <span class="o">'+bl+' limité</span> · '+no+' vide · <span class="r">'+er+' erreur</span></span>'}).join(''):'<span class="adx-h">Aucune lecture enregistrée pour ce jour</span>';
+  const html=list.length?SRC.map(s=>{let ok=0,bl=0,no=0,er=0;list.forEach(x=>{const a=latest(x,s[0]);if(!a)return;const k=kind(a);if(k==='ok')ok++;else if(k==='block')bl++;else if(k==='none')no++;else er++});const part=[ok?'<span class="g">'+ok+' lus</span>':'',bl?'<span class="o">'+bl+' refusés / en pause</span>':'',no?no+' sans donnée':'',er?'<span class="r">'+er+' en erreur</span>':''].filter(Boolean).join(' · ')||'pas encore lu';return '<span class="adx-h" title="Dernière lecture de chaque vol du jour ('+list.length+' vols)"><b>'+s[2]+'</b> '+part+'</span>'}).join(''):'<span class="adx-h">Aucune lecture enregistrée pour ce jour</span>';
   if(bar.dataset.k!==html){bar.dataset.k=html;bar.innerHTML=html}
+}
+function cards(r){
+  if(!flightsCache||!flightsCache.length)return;
+  const cs=[...r.querySelectorAll('.adn-cards .adn-card')];if(cs.length<3)return;
+  const ref=refDate;if(!ref)return;
+  const groups=[x=>x.date===ref,x=>x.date>ref,x=>x.date<ref];
+  cs.slice(0,3).forEach((c,i)=>{const l=flightsCache.filter(groups[i]);const n=st=>l.filter(x=>st(String(x.state||''))).length;
+    const set=(cls,t)=>{const el=c.querySelector('.adn-mini .'+cls);if(el&&el.textContent!==t)el.textContent=t};
+    const b=c.querySelector(':scope>b');const tt=(b?.textContent||'').split('·')[0].trim();if(b&&l.length){const nt=tt+' · '+l.length;if(b.textContent!==nt)b.textContent=nt}
+    if(!l.length)return;set('ok','OK '+n(v=>v==='OK'));set('part','PARTIEL '+n(v=>v==='PARTIEL'));set('check','À CONTRÔLER '+n(v=>v.includes('CONTRÔLER')));set('none','NON TRAITÉ '+n(v=>v==='NON TRAITÉ'))});
 }
 function tidy(r){
   r.querySelectorAll('.adn-section').forEach(sec=>{
@@ -101,7 +111,7 @@ function paginate(r){
   bar.querySelectorAll('button[data-p]').forEach(b=>b.addEventListener('click',()=>{const n=Number(b.dataset.p);if(n>=1&&n<=pages){page=n;bar.dataset.k='';run()}}));
 }
 function setView(v){view=v;const r=root();if(r){controls(r);try{window.scrollTo(0,0)}catch{}}}
-function run(){queued=false;const r=root();if(!r){view='main';return}try{tidy(r);controls(r);paginate(r);loadFlights();decorate(r)}catch(e){console.error('admin ux',e)}}
+function run(){queued=false;const r=root();if(!r){view='main';return}try{tidy(r);controls(r);paginate(r);loadFlights();decorate(r);cards(r)}catch(e){console.error('admin ux',e)}}
 function queue(){if(queued)return;queued=true;requestAnimationFrame(run)}
 const app=document.getElementById('app');
 if(app)new MutationObserver(queue).observe(app,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});

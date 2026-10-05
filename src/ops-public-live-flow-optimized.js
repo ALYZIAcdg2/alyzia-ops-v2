@@ -1,6 +1,7 @@
 import {guardDepartureClock,zoneOffsetMinutes} from "./local-time-guard.js";
 import {isWebWordRegistration} from "./registration-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
+import {boardLookup} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
@@ -19,14 +20,14 @@ const EXACT_FR24={"LO334|2026-10-03":"41f2d8d9","RJ120|2026-10-03":"41f2da8b","T
 // LIVE automatique: uniquement les sources qui ont prouvé une valeur opérationnelle.
 // FlightAware est traité séparément par flightaware-exact-history.js (occurrence exacte + cooldown).
 export const LIVE_PUBLIC_SOURCE_ORDER={
-  atd:["FlightStats","FlightAware exact","FR24","PlaneFinder","Skyscanner"],
+  atd:["FlightStats","FlightAware exact","FR24Board","FR24","PlaneFinder","Skyscanner"],
   status:["FR24","FlightStats","PlaneFinder","Skyscanner"],
   eta:["FR24","FlightAware exact","FlightStats","PlaneFinder","Skyscanner"],
   ata:["FlightStats","FlightAware exact","PlaneFinder","Skyscanner"],
   takeoff:["FR24","FlightAware exact","PlaneFinder","FlightStats"],
   landing:["FR24","FlightAware exact","FlightStats","PlaneFinder"],
-  aircraft:["FR24","PlaneFinder","FlightStats","Skyscanner"],
-  reg:["FR24","PlaneFinder","FlightStats","Skyscanner"]
+  aircraft:["FR24","FR24Board","PlaneFinder","FlightStats","Skyscanner"],
+  reg:["FR24","FR24Board","PlaneFinder","FlightStats","Skyscanner"]
 };
 const ACTIVE_HTML=["FLIGHTSTATS","PLANEFINDER","SKYSCANNER"];
 const FALLBACKS={
@@ -262,6 +263,8 @@ function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus
 async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="";if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // FlightStats: seulement si un champ gate-time/status manque.
   if(anyNeed(needs,["atd","eta","ata","status"])){const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId)}
+  // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
+  if(anyNeed(needs,["atd","reg","aircraft"])){const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
