@@ -10,6 +10,7 @@ import {recoverFlightAwareExactHistory} from "./flightaware-exact-history.js";
 import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-source-candidate-test.js";
 import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {backfillBoardGates} from "./fr24-board-backfill.js";
+import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -19,11 +20,13 @@ async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);co
 async function runLive(env,opts){
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
   const live=await runPublicLiveFlow(env,opts);
+  // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
+  const boardSweep=await sweepBoardToday(env).catch(()=>null);
   const recovery=await recoverValidatedLiveFacts(env);
   const parisAeroport=await runParisAirportStatusFlow(env);
   const regFix=await sanitizeTodayRegistrations(env);
   const statusModel=await runStatusModelTest(env);
-  return {...live,flightAwareExact,recovery,parisAeroport,regFix,statusModel};
+  return {...live,boardSweep,flightAwareExact,recovery,parisAeroport,regFix,statusModel};
 }
 async function runGround(env){const ground=await runGroundPublicFlow(env);const regFix=await sanitizeTodayRegistrations(env);return {...ground,regFix}}
 async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=true}={}){
