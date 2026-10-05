@@ -90,8 +90,8 @@ function v2xBack(){var o='';try{o=window.__alyziaFlightOriginView||''}catch{}if(
 window.v2xBack=v2xBack;
 function apply(){syncList();renderDetail()}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json();live=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];apply()}catch{}}
-let queued=false;function queue(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply()})}
-function start(){apply();refresh();setInterval(refresh,15000);setInterval(apply,3000);setInterval(updateClocks,15000);const root=document.getElementById('app');if(root)new MutationObserver(queue).observe(root,{childList:true,subtree:true})}
+let queued=false,mo=null;function queue(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply();/* our own DOM writes must not re-trigger apply (it ran ~60 times a second and made scrolling jerky) */try{mo&&mo.takeRecords()}catch(e){}})}
+function start(){apply();refresh();setInterval(refresh,15000);setInterval(apply,3000);setInterval(updateClocks,15000);const root=document.getElementById('app');if(root){mo=new MutationObserver(function(list){/* text-only changes (counters, button labels) are not list changes */for(var i=0;i<list.length;i++){var r=list[i],n=r.addedNodes,m=r.removedNodes,k;for(k=0;k<n.length;k++)if(n[k].nodeType===1)return queue();for(k=0;k<m.length;k++)if(m[k].nodeType===1)return queue()}});mo.observe(root,{childList:true,subtree:true})}}
 document.readyState==='loading'?document.addEventListener('DOMContentLoaded',start,{once:true}):start();
 })();</script>`;
 
