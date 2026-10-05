@@ -101,3 +101,11 @@ test("FlightStats requests are serialised, other sources are not",async()=>{
   max=0;await Promise.all([1,2,3].map(()=>flightStatsSlot("PLANEFINDER",job,1)));
   assert.equal(max,3);
 });
+
+test("a 3-character flight number is not read as an aircraft type (LY320 -> 320)",()=>{
+  const f={designator:"LY320",airline:"LY",number:"320"};
+  const out=semanticText("PLANEFINDER","Flight LY 320 Paris CDG to Tel Aviv TLV scheduled 11:10 arrival 16:40",f);
+  assert.equal(out.aircraft||"","");
+  const real=semanticText("PLANEFINDER","Flight LY 320 Paris CDG to Tel Aviv TLV aircraft B739 scheduled 11:10",f);
+  assert.equal(real.aircraft,"B739");
+});
