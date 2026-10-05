@@ -1,7 +1,7 @@
 import {guardDepartureClock,zoneOffsetMinutes} from "./local-time-guard.js";
 import {isWebWordRegistration} from "./registration-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
-import {boardLookup} from "./fr24-board.js";
+import {boardLookup,gateValue} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
@@ -264,7 +264,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
   // FlightStats: seulement si un champ gate-time/status manque.
   if(anyNeed(needs,["atd","eta","ata","status"])){const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId)}
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
-  needs={...needs,gate:!clean(base.gate)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
+  needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
   if(anyNeed(needs,["atd","reg","aircraft","gate","etd"])){const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft,gate:false,etd:false};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
@@ -300,7 +300,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
   {const e=clean(map.FR24BOARD?.etd),from=clean(current.etd||current.edt),own=/FR24BOARD/.test(upper(current.etdSource)),stale=Date.now()-(Date.parse(current.etdUpdatedAt||0)||0)>15*60000;
    if(e&&!clean(current.atd)&&!clean(current.takeoff)&&!manual(current,"etd")&&from!==e&&(!from||own||stale)){const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from,to:e});current.flightInfoLog=log.slice(0,240);current.etd=e;current.edt=e;current.etdSource="PUBLIC_LIVE:FR24BOARD";current.etdUpdatedAt=at;current.etdTimeBasis="CDG_LOCAL";changed=true}}
   // Porte du tableau FR24 : remplie si elle manque, et suivie ensuite tant que c'est cette source qui l'a écrite (une porte venant d'une autre source ou saisie à la main n'est pas touchée).
-  {const g=upper(map.FR24BOARD?.gate),from=clean(current.gate);if(g&&!manual(current,"gate")&&from!==g&&(!from||/FR24BOARD/.test(upper(current.gateSource)))){const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"gate",from,to:g});current.flightInfoLog=log.slice(0,240);current.gate=g;current.gateSource="PUBLIC_LIVE:FR24BOARD";current.gateUpdatedAt=at;changed=true}}
+  {const g=upper(map.FR24BOARD?.gate),from=gateValue(current);if(g&&!manual(current,"gate")&&from!==g&&(!from||/FR24BOARD/.test(upper(current.gateSource)))){const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"gate",from,to:g});current.flightInfoLog=log.slice(0,240);current.gate=g;current.gateSource="PUBLIC_LIVE:FR24BOARD";current.gateUpdatedAt=at;changed=true}}
   const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),landing=choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),ata=choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   // Confirmation: stored on each time field (xxxConfirmed + xxxSources); read by the diagnostic and the admin.
