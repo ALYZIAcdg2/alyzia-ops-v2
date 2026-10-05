@@ -19,8 +19,10 @@ const fmtLong=d=>d&&Number.isFinite(d.getTime())?d.toLocaleString('fr-FR'):'—'
 function nextFive(d=new Date()){const x=new Date(d);x.setSeconds(0,0);const m=x.getMinutes();x.setMinutes(m+(2-m%2||2));return x}
 function ceilFive(d){return nextFive(new Date(d.getTime()-1))}
 function atLocal(date,hhmm='00:00'){const [h,m]=String(hhmm||'00:00').split(':').map(Number);const d=new Date(date+'T00:00:00');d.setHours(Number.isFinite(h)?h:0,Number.isFinite(m)?m:0,0,0);return d}
-function stateText(tr){return String(tr.cells?.[11]?.textContent||'').trim().toUpperCase()}
-function missText(tr){return String(tr.cells?.[13]?.textContent||'').toUpperCase()}
+function colIdx(tr,name){const heads=[...(tr.closest('table')?.querySelectorAll('thead th')||[])].map(t=>t.textContent.trim().toUpperCase());return heads.indexOf(name)}
+function cellText(tr,name,fallback){const i=colIdx(tr,name);return String(tr.cells?.[i>=0?i:fallback]?.textContent||'')}
+function stateText(tr){return cellText(tr,'ÉTAT',11).trim().toUpperCase()}
+function missText(tr){return cellText(tr,'MANQUE',13).toUpperCase()}
 function futureBaseTime(date,std,now){
   if(/^\d{2}:\d{2}$/.test(std)){const at=atLocal(date,std);at.setMinutes(at.getMinutes()-180);return at>now?ceilFive(at):nextFive(now)}
   return atLocal(date,'00:05');

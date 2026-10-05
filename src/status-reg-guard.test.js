@@ -217,3 +217,7 @@ test("FlightStats is paused for 90 s after two refusals in a row, and a success 
   flightStatsReset();
 });
 test("N2U est une immatriculation invalide",async()=>{const {isJunkRegistration}=await import("./registration-guard.js");assert.equal(isJunkRegistration("N2U"),true);assert.equal(isJunkRegistration("E-MAIL"),true);assert.equal(isJunkRegistration("N781AN"),false);assert.equal(isJunkRegistration("HL7579"),false);assert.equal(isJunkRegistration("F-GSPL"),false)});
+test("même immatriculation sur des vols proches : retirée sauf FR24 tableau / manuel",async()=>{const {duplicateRegistrationIds}=await import("./ops-reg-sanitizer.js");
+ const r=(id,std,reg,src)=>({identity:id,std,x:{origin:"CDG",std,reg,regSource:src}});
+ const ids=duplicateRegistrationIds([r("a","15:10","D-AIHV","PUBLIC_LIVE:PLANEFINDER"),r("b","15:30","D-AIHV","PUBLIC_LIVE:FR24BOARD"),r("c","15:35","D-AIHV",""),r("d","19:00","D-AIHV","PUBLIC_LIVE:PLANEFINDER"),r("e","10:00","F-GSPL","")]);
+ assert.deepEqual([...ids].sort(),["a","c"])});
