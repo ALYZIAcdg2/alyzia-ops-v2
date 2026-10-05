@@ -22,3 +22,8 @@ test("nothing is invented from a page without those keys",()=>{
   assert.deepEqual(flightAwareJsonHints("<html></html>"),[]);
   assert.ok(flightAwareJsonHints(page).length>0);
 });
+
+test("an estimated arrival equal to the schedule is not used as ETA",()=>{
+  const same=page.replace(/"gateArrivalTimes":\{[^}]*\}/,`"gateArrivalTimes":{"scheduled":${t(5,25)},"estimated":${t(5,25)},"actual":null}`);
+  assert.equal(flightAwareJsonSemantic(same,{origin:"CDG",destination:"TIA"}).eta,"");
+});

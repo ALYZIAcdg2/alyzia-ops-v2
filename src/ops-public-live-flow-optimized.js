@@ -21,7 +21,7 @@ const EXACT_FR24={"LO334|2026-10-03":"41f2d8d9","RJ120|2026-10-03":"41f2da8b","T
 export const LIVE_PUBLIC_SOURCE_ORDER={
   atd:["FlightStats","FlightAware exact","FR24","PlaneFinder","Skyscanner"],
   status:["FR24","FlightStats","PlaneFinder","Skyscanner"],
-  eta:["FlightAware exact","FlightStats","FR24","PlaneFinder","Skyscanner"],
+  eta:["FlightStats","FR24","FlightAware exact","PlaneFinder","Skyscanner"],
   ata:["FlightStats","FlightAware exact","PlaneFinder","Skyscanner"],
   takeoff:["FR24","FlightAware exact","PlaneFinder","FlightStats"],
   landing:["FR24","FlightAware exact","FlightStats","PlaneFinder"],

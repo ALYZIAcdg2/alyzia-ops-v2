@@ -37,7 +37,8 @@ export function flightAwareJsonSemantic(raw,{origin="CDG",destination=""}={}){
   if(t.atd)out.atd=localClock(t.atd.actual,oz);
   if(t.takeoff)out.takeoff=localClock(t.takeoff.actual,oz);
   if(t.landing)out.landing=localClock(t.landing.actual,dz);
-  if(t.arrival){out.ata=localClock(t.arrival.actual,dz);if(!t.arrival.actual)out.eta=localClock(t.arrival.estimated,dz)}
+  if(t.arrival){out.ata=localClock(t.arrival.actual,dz);// An estimate equal to the schedule is the page's initial value, not a live ETA (SQ337: estimated = scheduled 17:40 while the flight was 1h airborne).
+    if(!t.arrival.actual&&t.arrival.estimated&&t.arrival.estimated!==t.arrival.scheduled)out.eta=localClock(t.arrival.estimated,dz)}
   return out;
 }
 
