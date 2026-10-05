@@ -19,11 +19,26 @@ export function cleanFlightAwareUrl(value){
   return m?m[0]:"";
 }
 
+// The flight page lists several occurrences: "activityLog.flights" holds the other days (the upcoming 6 Oct one comes first), and the occurrence shown by the page
+// carries the same keys at the top level of its flight object. Reading the first match gave the times of ANOTHER day (SQ337: ETA 17:40 = the 6 Oct schedule).
+function currentFlightObject(src){
+  const i=src.indexOf("trackpollBootstrap");if(i<0)return null;
+  const start=src.indexOf("{",i);if(start<0)return null;
+  let depth=0,inStr=false,esc=false,end=-1;
+  for(let k=start;k<src.length;k++){const c=src[k];
+    if(inStr){if(esc)esc=false;else if(c==="\\")esc=true;else if(c==='"')inStr=false;continue}
+    if(c==='"')inStr=true;else if(c==="{")depth++;else if(c==="}"){depth--;if(depth===0){end=k;break}}}
+  if(end<0)return null;
+  try{const j=JSON.parse(src.slice(start,end+1)),f=j?.flights;if(!f)return null;const first=Object.values(f)[0];return first&&typeof first==="object"?first:null}catch{return null}
+}
+
 // Returns epoch seconds per key, e.g. {atd:{scheduled,estimated,actual},takeoff:{...},landing:{...},arrival:{...}} (missing keys absent).
 export function flightAwareJsonTimes(raw){
-  const src=normalize(raw),out={};
+  const src=normalize(raw),out={},cur=currentFlightObject(src);
   for(const [key,name] of Object.entries(KEYS)){
-    const m=src.match(new RegExp(`"${key}"\\s*:\\s*\\{([^{}]*)\\}`));if(!m)continue;
+    if(cur&&cur[key]&&typeof cur[key]==="object"){const o=cur[key],num=v=>Number.isFinite(Number(v))&&Number(v)>0?Number(v):null;out[name]={scheduled:num(o.scheduled),estimated:num(o.estimated),actual:num(o.actual)};continue}
+    // Fallback without a parsable bootstrap: the LAST match is the top-level one (the log of other days comes first).
+    const all=[...src.matchAll(new RegExp(`"${key}"\\s*:\\s*\\{([^{}]*)\\}`,"g"))];const m=all[all.length-1];if(!m)continue;
     const read=field=>{const v=m[1].match(new RegExp(`"${field}"\\s*:\\s*(\\d{9,11})`));return v?Number(v[1]):null};
     out[name]={scheduled:read("scheduled"),estimated:read("estimated"),actual:read("actual")};
   }
@@ -37,8 +52,7 @@ export function flightAwareJsonSemantic(raw,{origin="CDG",destination=""}={}){
   if(t.atd)out.atd=localClock(t.atd.actual,oz);
   if(t.takeoff)out.takeoff=localClock(t.takeoff.actual,oz);
   if(t.landing)out.landing=localClock(t.landing.actual,dz);
-  if(t.arrival){out.ata=localClock(t.arrival.actual,dz);// An estimate equal to the schedule is the page's initial value, not a live ETA (SQ337: estimated = scheduled 17:40 while the flight was 1h airborne).
-    if(!t.arrival.actual&&t.arrival.estimated&&t.arrival.estimated!==t.arrival.scheduled)out.eta=localClock(t.arrival.estimated,dz)}
+  if(t.arrival){out.ata=localClock(t.arrival.actual,dz);if(!t.arrival.actual)out.eta=localClock(t.arrival.estimated,dz)}
   return out;
 }
 
