@@ -1,7 +1,7 @@
 // Source "FR24 tableau CDG" : le tableau public des départs de CDG (100 vols par page) lu en lot, au lieu d'une lecture par vol.
 // Donne : heure de départ réelle (vols « departed »), immatriculation, type d'avion et identifiant FR24 du vol.
 // Cache 8 min partagé par tous les vols d'un passage ; en cas de refus (403/429/409/challenge) la source se met en pause 10 min.
-import {extractDataPage,parseBoard} from "./fr24-board-test.js";
+import {extractDataPage,parseBoard} from "./fr24-board-parse.js";
 import {flightLookupVariants} from "./public-flight-alias.js";
 
 const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
