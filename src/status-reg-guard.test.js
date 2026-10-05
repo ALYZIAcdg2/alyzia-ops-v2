@@ -52,3 +52,16 @@ test("a time is confirmed when two sources agree within 2 minutes",()=>{
   assert.equal(confirmation(map,"atd","00:58").confirmed,false);
   assert.equal(confirmation({FR24:{eta:"23:59"},FLIGHTSTATS:{eta:"00:01"}},"eta","23:59").confirmed,true);
 });
+
+import {minutesOnFlightDay} from "./ops-public-live-flow-optimized.js";
+test("after midnight an evening departure of yesterday is in the past",()=>{
+  assert.equal(minutesOnFlightDay("2026-10-04","2026-10-05",99),1539);
+  assert.equal(minutesOnFlightDay("2026-10-05","2026-10-05",99),99);
+  assert.equal(minutesOnFlightDay("2026-10-05","2026-10-04",99),99);
+});
+test("a cancellation stated in the FlightStats banner wins alone",()=>{
+  const page="(AI) Air India 142 Flight Tracker AI 142 CDG DEL Cancelled Flight Departure Times 04-Oct-2026 Scheduled 20:45 CEST Flight Arrival Times Scheduled 10:25";
+  const r=semanticText("FLIGHTSTATS",page,{designator:"AI142",airline:"AI",number:"142"});
+  assert.equal(r.status,"ANNULÉ");assert.ok(r.statusStrong);
+  assert.equal(pickStatus({FLIGHTSTATS:r,FR24:{status:"EN VOL"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"ANNULÉ");
+});
