@@ -42,7 +42,7 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-route{display:grid!important;grid-template-columns:minmax(86px,auto) minmax(35px,1fr) minmax(140px,auto)!important;gap:18px!important;align-items:start!important;margin-bottom:12px!important}
 #app .ops-airport-code{display:flex;align-items:center;gap:10px;font-size:28px!important;line-height:1.15;font-weight:800!important;color:#071227;white-space:nowrap}
 #app .ops-flag{font-size:24px;line-height:1;display:inline-flex}
-#app .ops-flag svg{width:30px;height:20px;border:1px solid #e0e5eb;border-radius:2px}
+#app .ops-flag svg,#app .ops-flag img{width:30px;height:20px;border:1px solid #e0e5eb;border-radius:2px;object-fit:cover}
 #app .ops-airport-city{font-size:16px!important;line-height:1.3;margin-top:3px;color:#294666;overflow-wrap:anywhere;text-transform:none!important}
 #app .ops-airport-meta{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap}
 #app .ops-airport-meta .wx-line{margin:3px 0 0!important;min-height:0!important;font-size:12px!important}
@@ -232,7 +232,7 @@ function opsFlag(code){
   SG:'<path fill="#fff" d="M0 0h30v20H0z"/><path fill="#ef3340" d="M0 0h30v10H0z"/><circle cx="6" cy="5" r="3.7" fill="#fff"/><circle cx="7.6" cy="5" r="3.1" fill="#ef3340"/><g fill="#fff">'+[[11.4,2.1],[13.8,3.9],[12.9,6.7],[9.9,6.7],[9,3.9]].map(([x,y])=>'<path transform="translate('+x+' '+y+')" d="M0-1 .24-.32 .95-.31 .38.12 .59.81 0 .4-.59.81-.38.12-.95-.31-.24-.32z"/>').join('')+'</g>',
   KR:'<path fill="#fff" d="M0 0h30v20H0z"/><g transform="rotate(33.7 15 10)"><circle cx="15" cy="10" r="5" fill="#cd2e3a"/><path d="M10 10a5 5 0 0 0 10 0a2.5 2.5 0 0 0-5 0a2.5 2.5 0 0 1-5 0" fill="#0047a0"/></g><g stroke="#111" stroke-width=".8">'+[[5.2,5,-55,[0,0,0]],[24.8,15,-55,[1,1,1]],[24.8,5,55,[1,0,1]],[5.2,15,55,[0,1,0]]].map(([x,y,r,breaks])=>'<g transform="translate('+x+' '+y+') rotate('+r+')">'+breaks.map((b,i)=>b?'<path d="M-2.6 '+(i-1)*1.3+'h2.2m.8 0h2.2"/>':'<path d="M-2.6 '+(i-1)*1.3+'h5.2"/>').join('')+'</g>').join('')+'</g>'
  };
- return '<span class="ops-flag" role="img" aria-label="'+country+'">'+(flags[country]?'<svg viewBox="0 0 30 20" aria-hidden="true">'+flags[country]+'</svg>':String.fromCodePoint(...[...country].map(c=>127397+c.charCodeAt(0))))+'</span>';
+ return '<span class="ops-flag" role="img" aria-label="'+country+'">'+(flags[country]?'<svg viewBox="0 0 30 20" aria-hidden="true">'+flags[country]+'</svg>':'<img src="https://flagcdn.com/w40/'+country.toLowerCase()+'.png" srcset="https://flagcdn.com/w80/'+country.toLowerCase()+'.png 2x" alt="'+country+'" width="30" height="20" loading="lazy" onerror="this.replaceWith(document.createTextNode(String.fromCodePoint(...[...\''+country+'\'].map(c=>127397+c.charCodeAt(0)))))">')+'</span>';
 }
 function opsLocalFlights(){try{return typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)?FLIGHTS:window.FLIGHTS||[]}catch{return []}}
 function opsFlightForRow(row){
