@@ -250,8 +250,8 @@ export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clea
 const INFLIGHT_WINDOW_MIN=120,INFLIGHT_REREAD_MIN=3;
 export function arrivingSoon(x,nowMs=Date.now()){const a=Date.parse(clean(x?.statusArrivalUtc));if(!Number.isFinite(a)||clean(x?.ata))return false;const m=(a-nowMs)/60000;return m<=INFLIGHT_WINDOW_MIN&&m>=-30}
 export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];
-  // Took off but no ATD yet (FR24 no longer gives it): FlightStats / FlightAware are asked again, every 5 minutes at most, for 2 h after takeoff.
-  if(!clean(x.atd)&&clean(x.takeoff)&&!clean(x.ata)&&nowMs-checked>=5*60000){const since=minutesSinceLocalClock(x.takeoff,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris",new Date(nowMs));if(since!==null&&since<=120)return [0.4,checked]}if(departed&&!clean(x.ata)&&arrivingSoon(x,nowMs)&&nowMs-checked>=INFLIGHT_REREAD_MIN*60000)return [0.5,checked];if(!departed&&std!=null&&std<=nowMin+30)return [nowMin-std>360?2:0,checked];if(departed&&!clean(x.ata))return [1,checked];if(!clean(x.eta)&&clean(x.atd))return [2,checked];if(std!=null&&std<=nowMin+120)return [3,checked];return [4,checked]}
+  // Took off but no ATD yet (FR24 no longer gives it): FlightStats / FlightAware are asked again, every 5 minutes at most, for 12 h after takeoff ; the flights whose FlightStats id is known (light API call) come first.
+  if(!clean(x.atd)&&clean(x.takeoff)&&!clean(x.ata)&&nowMs-checked>=5*60000){const since=minutesSinceLocalClock(x.takeoff,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris",new Date(nowMs));if(since!==null&&since<=720)return [/^\d+$/.test(clean(x.flightStatsId))&&clean(x.flightStatsIdDate)===row.flight_date?0.3:0.4,checked]}if(departed&&!clean(x.ata)&&arrivingSoon(x,nowMs)&&nowMs-checked>=INFLIGHT_REREAD_MIN*60000)return [0.5,checked];if(!departed&&std!=null&&std<=nowMin+30)return [nowMin-std>360?2:0,checked];if(departed&&!clean(x.ata))return [1,checked];if(!clean(x.eta)&&clean(x.atd))return [2,checked];if(std!=null&&std<=nowMin+120)return [3,checked];return [4,checked]}
 // A quarter of the slots (at least one) is kept for flights of the second tier or later (missing ETA, departure missed long ago): otherwise the airborne
 // flights, which are always more numerous than the slots in the evening, would starve them for good.
 export function pickSlots(sorted,size){
@@ -272,7 +272,8 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
   // FlightAware (generic) only when no departure fact was found at all.
   let faUrl="";
-  const noDeparture=!clean(base.atd)&&!clean(base.takeoff)&&!clean(map.FR24?.atd)&&!clean(map.FR24?.takeoff)&&!clean(map.FLIGHTSTATS?.atd);
+  // Pas d'ATD (heure de porte) : FlightAware est interrogé même si le décollage est connu par FR24 (le décollage ne remplace pas l'ATD).
+  const noDeparture=!clean(base.atd)&&!clean(map.FLIGHTSTATS?.atd);
   // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
   const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
   if(noDeparture||(noArrival&&clean(base.flightAwareHistoryUrl))){
