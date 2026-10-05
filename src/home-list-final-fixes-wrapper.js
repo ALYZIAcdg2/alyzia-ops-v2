@@ -37,6 +37,7 @@ function cellTime(row,label){for(const c of row.querySelectorAll('.ops-time')){i
 // Tranche horaire = heure RÉELLE de départ : ATD, sinon ETD, sinon STD (heure programmée).
 function stdFromRow(row){const real=cellTime(row,'ATD');if(real!==null)return real;const est=cellTime(row,'ETD');if(est!==null)return est;const txt=String(row.textContent||'').replace(/\s+/g,' ');const m=txt.match(/\bSTD\s*(\d{1,2}:\d{2})\b/i);if(m)return minutes(m[1]);const i=rowIndex(row),x=i!==null?flights()[i]:null;if(x){const t=minutes(x.atd)??minutes(x.etd||x.edt)??minutes(x.std);if(t!==null)return t}return null}
 function updateVisibleFlightCount(){
+ if(document.querySelector('#app .admin-native'))return; // the ADMIN table has its own counter (it was overwritten with the home list count, 0)
  const rows=[...document.querySelectorAll('#app .flight-home-row')];
  const visible=rows.filter(row=>getComputedStyle(row).display!=='none'&&!row.hidden&&row.getAttribute('aria-hidden')!=='true').length;
  const candidates=[...document.querySelectorAll('#app *')].filter(el=>el.children.length===0&&/^\s*\d+\s+VOLS?\s*$/i.test(String(el.textContent||'')));
