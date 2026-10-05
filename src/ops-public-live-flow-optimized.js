@@ -1,5 +1,5 @@
 import {guardDepartureClock,zoneOffsetMinutes} from "./local-time-guard.js";
-import {isWebWordRegistration} from "./registration-guard.js";
+import {isWebWordRegistration,isJunkRegistration} from "./registration-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {boardLookup,gateValue} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
@@ -78,7 +78,7 @@ function normTime(raw){let s=upper(raw).replace(/H/,":");const m=s.match(/^(\d{1
 function firstTime(text,patterns){for(const p of patterns){const m=String(text||"").match(p);if(m){const v=normTime(m[1]);if(v)return v}}return ""}
 const REGISTRATION_RE=/\b(F-[A-Z]{4}|TC-[A-Z]{3}|TS-[A-Z]{3}|SU-[A-Z]{3}|CC-[A-Z]{3}|9V-[A-Z]{3}|9M-[A-Z]{3}|EI-[A-Z]{3}|SP-[A-Z]{3}|YU-[A-Z]{3}|LZ-[A-Z]{3}|9XR-[A-Z]{2,3}|7T-[A-Z]{3}|HL\d{4}|JA\d{3,4}[A-Z]?|VT-[A-Z]{3}|CN-[A-Z]{3}|N\d{1,5}[A-Z]{0,2}|[A-Z]{1,2}-[A-Z]{3,5})\b/gi;
 // The first plausible registration of the page text (web words such as E-MAIL look like one and are skipped).
-function registration(t){for(const m of String(t||"").matchAll(REGISTRATION_RE)){const v=upper(m[1]);if(v&&!isWebWordRegistration(v))return v}return ""}
+function registration(t){for(const m of String(t||"").matchAll(REGISTRATION_RE)){const v=upper(m[1]);if(v&&!isJunkRegistration(v))return v}return ""}
 // A bare 3-character code equal to the flight number is the flight itself, not a type (LY320 was read as a "320" aircraft change from "LY 320").
 function aircraft(t,f){const re=/\b(A20N|A21N|A319|A320|A321|A332|A333|A339|A343|A350|A359|A380|B38M|B39M|B737|B738|B739|B748|B752|B753|B763|B764|B772|B773|B77W|B788|B789|BCS1|BCS3|32B|32Q|77W|788|789|359|333|332|320|321)\b/gi,num=upper(f?.number||String(f?.designator||"").replace(/^[A-Z0-9]{2,3}?(?=\d)/,""));let m;const text=String(t||"");while((m=re.exec(text))){const v=upper(m[1]);if(num&&v===num&&/^[0-9A-Z]{3}$/.test(v))continue;return v}return ""}
 function statusValue(t){const s=upper(t);if(/CANCEL|ANNUL/.test(s))return "ANNULÉ";if(/DIVERT|DÉROUT|DEROUT/.test(s))return "DÉROUTÉ";if(/ARRIVED AT GATE|ARRIVÉE|ARRIVED\b/.test(s))return "ARRIVÉE";if(/LANDED|ATTERI/.test(s))return "ATTERI";if(/IN AIR|AIRBORNE|IN FLIGHT|EN VOL|EN ROUTE|DEPARTED/.test(s))return "EN VOL";if(/DELAY|RETARD/.test(s))return "RETARDÉ";if(/ON TIME|SCHEDULED|PRÉVU|PREVU/.test(s))return "PRÉVU";return ""}
@@ -221,7 +221,7 @@ function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   // Departure clocks must be local to the origin: a UTC reading (more than 50 min before STD) is shifted, an impossible one refused.
   if(field==="atd"||field==="takeoff"){const g=guardDepartureClock(hit.value,x.std,x.activeDate||x.date,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris");if(g.status==="REJECTED")return false;if(g.status==="SHIFTED")hit={...hit,value:g.value,source:`${hit.source}+LOCALIZED`}}
   const before=clean(x[field]);if(before===hit.value)return false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:`PUBLIC_LIVE:${hit.source}`,field,from:before,to:hit.value});x.flightInfoLog=log.slice(0,240);x[field]=hit.value;x[field+"Source"]=`PUBLIC_LIVE:${hit.source}`;x[field+"UpdatedAt"]=at;if(field==="reg"){x.registration=hit.value;x.aircraftRegistration=hit.value}return true}
-function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isWebWordRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
+function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isJunkRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
 function anyNeed(n,keys){return keys.some(k=>n[k])}
 async function readCurrent(env,id){const r=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(id).first();if(!r)return null;try{return JSON.parse(r.data_json||"{}")}catch{return {}}}
 async function saveMeta(env,data){try{await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_public_live_last',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(JSON.stringify(data)).run()}catch{}}
