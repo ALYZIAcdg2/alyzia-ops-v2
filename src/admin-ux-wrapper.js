@@ -47,7 +47,7 @@ function decorate(r){
   const heads=[...table.querySelectorAll('thead th')].map(t=>t.textContent.trim().toUpperCase()),col=heads.indexOf('DERNIER TRAITEMENT');if(col<0)return;
   const date=document.getElementById('adminDateInput')?.value||'';
   rows(r).forEach(tr=>{const cell=tr.cells[col],fl=(tr.cells[0]?.textContent||'').trim();if(!cell||!fl)return;const x=find(fl,date);if(!x||!x.attempts||!x.attempts.length)return;
-    const sig=x.liveAt+'|'+x.attempts.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig)return;cell.dataset.adxSig=sig;
+    const sig=x.liveAt+'|'+x.attempts.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig&&cell.querySelector('.adx-srcs'))return;cell.dataset.adxSig=sig;
     cell.innerHTML='<div class="adx-srcs" title="Cliquer pour le détail">'+pills(x)+'</div><div style="font-size:10px;color:#6b7c90;font-weight:800;margin-top:2px">'+hm(x.liveAt)+'</div>';
     cell.querySelector('.adx-srcs').addEventListener('click',e=>{e.stopPropagation();e.preventDefault();openDetail(x)},true)});
   health(r,table,date);
