@@ -126,7 +126,7 @@ const FAVORITES_FILTER_SCRIPT = String.raw`
     const badge=document.getElementById('homeVisibleFlightCount');
     // N'écrire que si le texte change : réécrire le même texte déclenchait l'observateur ci-dessous en boucle (une passe par image, ~90 % du processeur au repos).
     const label=visible+' VOL'+(visible>1?'S':'');
-    if(badge&&badge.textContent!==label)badge.textContent=label;
+    if(badge&&!badge.closest('.admin-native')&&badge.textContent!==label)badge.textContent=label;
   }
 
   function scheduleApply(){
