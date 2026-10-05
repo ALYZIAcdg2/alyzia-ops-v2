@@ -112,6 +112,12 @@ test("a 3-character flight number is not read as an aircraft type (LY320 -> 320)
 
 test("FR24 feeds TAKEOFF only: its actual departure is never used as ATD",()=>{
   const sem=fr24Semantic({candidates:{semantic:{atdClock:"12:02",takeoff:"2026-10-05T10:02:00.000Z"}}},{destination:"KUL"});
-  assert.equal(sem.atd,"");
+  assert.equal(sem.atd,undefined);
   assert.equal(sem.takeoff,"12:02");
+});
+
+test("MH21: with a playback takeoff 12:03 and a history clock 12:02, FR24 still gives no ATD",()=>{
+  const sem=fr24Semantic({candidates:{semantic:{atdClock:"12:02",takeoff:"2026-10-05T10:03:00.000Z"}}},{destination:"KUL"});
+  assert.equal(sem.atd,undefined);
+  assert.equal(sem.takeoff,"12:03");
 });
