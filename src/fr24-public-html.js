@@ -1,5 +1,6 @@
 import {flightLookupVariants} from "./public-flight-alias.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
+import {zoneOffsetMinutes} from "./local-time-guard.js";
 
 const EXACT_OCCURRENCES={
   "CTM21|2026-10-01":"41ea23a2",
@@ -271,6 +272,14 @@ export function fr24IdsFromHistory(raw,flight){
   const best=new Map();for(const f of scored)best.set(f.id,Math.max(best.get(f.id)??-1,f.score));
   return [...best.entries()].sort((a,b)=>b[1]-a[1]).map(([id])=>id).slice(0,DISCOVERY_MAX_PROBES);
 }
+// A new flight (TU655) has no scheduled time in the FR24 playback: the occurrence is then recognised by its takeoff, within 2 h before / 8 h after the planned STD (or on the same Paris day without STD).
+export function takeoffMatchesStd(takeoffIso,flight){
+  const t=Date.parse(takeoffIso||"");if(!Number.isFinite(t))return false;
+  const m=clean(flight?.std).match(/(\d{1,2}):(\d{2})/),d=clean(flight?.date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m||!d)return parisDay(takeoffIso)===clean(flight?.date);
+  const zone=AIRPORT_TZ[upper(flight?.origin)]||"Europe/Paris",stdUtc=Date.UTC(+d[1],+d[2]-1,+d[3],Number(m[1]),Number(m[2]))-zoneOffsetMinutes(flight.date,zone)*60000;
+  return t>=stdUtc-2*3600000&&t<=stdUtc+8*3600000;
+}
 async function discoverOccurrence(flight,historyBodies){
   const key=`${upper(flight.designator)}|${clean(flight.date)}`,cached=DISCOVERY_CACHE.get(key);
   if(cached?.id)return {id:cached.id,playback:null,attempts:[]};
@@ -281,7 +290,7 @@ async function discoverOccurrence(flight,historyBodies){
       if(seen.has(id))continue;seen.add(id);
       const playback=await fetchPlayback(flight,id),s=playback?.candidates?.semantic||{};
       const routeOk=(!flight.origin||upper(s.origin)===upper(flight.origin))&&(!flight.destination||upper(s.destination)===upper(flight.destination));
-      const dayOk=s.std&&parisDay(s.std)===clean(flight.date);
+      const dayOk=s.std?parisDay(s.std)===clean(flight.date):takeoffMatchesStd(s.takeoff,flight);
       attempts.push({id,status:playback?.status||"",routeOk:Boolean(routeOk),dayOk:Boolean(dayOk)});
       if(playback?.status==="OK"&&routeOk&&dayOk){DISCOVERY_CACHE.set(key,{id,at:Date.now()});return {id,playback,attempts}}
     }
