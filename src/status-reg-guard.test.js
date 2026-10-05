@@ -65,3 +65,13 @@ test("a cancellation stated in the FlightStats banner wins alone",()=>{
   assert.equal(r.status,"ANNULÉ");assert.ok(r.statusStrong);
   assert.equal(pickStatus({FLIGHTSTATS:r,FR24:{status:"EN VOL"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"ANNULÉ");
 });
+
+import {deriveAta,minutesSinceLocalClock} from "./ops-public-live-flow-optimized.js";
+test("landed for 15 minutes without ATA: ATA = landing + 10",()=>{
+  const now=new Date("2026-10-04T15:00:00Z"); // 17:00 Paris
+  assert.equal(minutesSinceLocalClock("16:40","Europe/Paris",now),20);
+  assert.deepEqual(deriveAta("16:40","Europe/Paris","PC",now),{value:"16:50",source:"DERIVED_LANDING_PLUS_10"});
+  assert.equal(deriveAta("16:50","Europe/Paris","PC",now),null);
+  assert.equal(deriveAta("16:50","Europe/Paris","ENT",now)?.value,"17:00");
+  assert.equal(deriveAta("",  "Europe/Paris","PC",now),null);
+});
