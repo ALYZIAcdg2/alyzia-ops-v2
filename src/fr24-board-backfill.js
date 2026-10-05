@@ -17,13 +17,13 @@ export async function backfillBoardGates(env,{date,apply=false,fetchImpl=fetch,m
     const airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
     todo.push({r,x,f:{date:day,airline,number,designator,std:hhmm(x.std||r.std)}});
   }
-  const base={ok:true,mode:apply?"BOARD_GATE_BACKFILL_APPLY":"BOARD_GATE_BACKFILL_PREVIEW",date:day,flights:results.length,withoutGate:todo.length};
+  const stdList=todo.map(z=>hhmm(z.f.std)).filter(Boolean).sort(),base={ok:true,mode:apply?"BOARD_GATE_BACKFILL_APPLY":"BOARD_GATE_BACKFILL_PREVIEW",date:day,flights:results.length,withoutGate:todo.length,missingStdRange:stdList.length?[stdList[0],stdList[stdList.length-1]]:null,missingSample:todo.slice(0,8).map(z=>z.f.designator+" "+z.f.std)};
   if(!todo.length)return {...base,filled:0,note:"Aucun vol sans porte"};
   const [y,mo,d]=day.split("-").map(Number),dayUtc=Date.UTC(y,mo-1,d)/1000,stds=todo.map(z=>hhmm(z.f.std)).filter(Boolean).map(t=>Number(t.slice(0,2))*3600+Number(t.slice(3))*60);
   const first=stds.length?Math.min(...stds):0,last=stds.length?Math.max(...stds):86399;
-  const fromSec=dayUtc+first-3*3600,stopAfter=dayUtc+last-3600; // marge UTC/Paris : la page commence à fromSec, on s'arrête après le dernier vol à rattraper
+  const nowSec=Math.floor(Date.now()/1000),fromSec=Math.max(dayUtc+first-3*3600,nowSec-20*3600),stopAfter=dayUtc+last-3600; // marge UTC/Paris : la page commence à fromSec, on s'arrête après le dernier vol à rattraper
   const range=await fetchBoardRange({fromSec,stopAfterSec:stopAfter,maxPages,fetchImpl});
-  if(!range.rows.length)return {...base,filled:0,verdict:range.verdict,httpStatus:range.httpStatus,note:"Le tableau FR24 n'a rien renvoyé"};
+  if(!range.rows.length)return {...base,filled:0,verdict:range.verdict,httpStatus:range.httpStatus,fromSec,fromIso:new Date(fromSec*1000).toISOString(),pagesInfo:range.info,note:"Le tableau FR24 n'a rien renvoyé"};
   const index=indexRows(range.rows),at=new Date().toISOString(),filled=[];let notFound=0;
   for(const z of todo){
     const row=matchRow(index,z.f),g=upper(row?.gate);
@@ -33,5 +33,5 @@ export async function backfillBoardGates(env,{date,apply=false,fetchImpl=fetch,m
     if(apply)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(z.x),z.r.identity).run();
     filled.push({flight:z.f.designator,std:z.f.std,gate:g});
   }
-  return {...base,verdict:range.verdict,pages:range.pages,boardRows:range.rows.length,filled:filled.length,notFoundOnBoard:notFound,written:apply,sample:filled.slice(0,15)};
+  return {...base,verdict:range.verdict,pages:range.pages,boardRows:range.rows.length,fromIso:new Date(fromSec*1000).toISOString(),pagesInfo:range.info,filled:filled.length,notFoundOnBoard:notFound,written:apply,sample:filled.slice(0,15)};
 }
