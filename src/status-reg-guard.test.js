@@ -87,3 +87,8 @@ test("the status model keeps a cancellation confirmed by the live flow",()=>{
   assert.equal(derive(x,"2026-10-04").status,"ANNULÉ");
   assert.notEqual(derive({...x,cancelledSource:undefined,status:"PRÉVU"},"2026-10-04").status,"ANNULÉ");
 });
+test("a stored ANNULÉ written by the live flow (no marker) is kept by the status model",()=>{
+  const x={flight:"AI142",std:"20:45",sta:"10:25",dep:"CDG",dest:"DEL",status:"ANNULÉ",statusSource:"PUBLIC_LIVE:FLIGHTSTATS"};
+  assert.equal(derive(x,"2026-10-04").status,"ANNULÉ");
+  assert.equal(derive({...x,statusSource:"ALYZIA_STATUS_V1:CANCELLED:V2_PUBLIC"},"2026-10-04").status,"ANNULÉ");
+});
