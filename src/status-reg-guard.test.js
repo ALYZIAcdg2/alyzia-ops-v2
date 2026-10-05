@@ -92,3 +92,12 @@ test("a stored ANNULÉ written by the live flow (no marker) is kept by the statu
   assert.equal(derive(x,"2026-10-04").status,"ANNULÉ");
   assert.equal(derive({...x,statusSource:"ALYZIA_STATUS_V1:CANCELLED:V2_PUBLIC"},"2026-10-04").status,"ANNULÉ");
 });
+
+import {flightStatsSlot} from "./ops-public-live-flow-optimized.js";
+test("FlightStats requests are serialised, other sources are not",async()=>{
+  let running=0,max=0;const job=()=>new Promise(r=>{running++;max=Math.max(max,running);setTimeout(()=>{running--;r()},15)});
+  await Promise.all([1,2,3].map(()=>flightStatsSlot("FLIGHTSTATS",job,1)));
+  assert.equal(max,1);
+  max=0;await Promise.all([1,2,3].map(()=>flightStatsSlot("PLANEFINDER",job,1)));
+  assert.equal(max,3);
+});
