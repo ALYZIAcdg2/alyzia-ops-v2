@@ -20,8 +20,8 @@ export async function runFaBoardTest({offset=0,fetchImpl=fetch}={}){
   const off=Math.max(0,Math.min(200,Math.round((Number(offset)||0)/40)*40)),started=Date.now();
   const url=`https://www.flightaware.com/live/airport/LFPG/departures${off?`?;offset=${off};order=actualdeparturetime;sort=DESC`:""}`;
   try{
-    const r=await fetchImpl(url,{headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":UA},redirect:"manual"});
-    const html=await r.text(),base={ok:true,mode:"FA_BOARD_TEST_NO_WRITE",url,httpStatus:r.status,contentType:clean(r.headers.get("content-type")),bytes:html.length,ms:Date.now()-started};
+    const r=await fetchImpl(url,{headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":UA},redirect:"follow"});
+    const html=await r.text(),base={ok:true,mode:"FA_BOARD_TEST_NO_WRITE",url,finalUrl:r.url||url,httpStatus:r.status,location:clean(r.headers.get("location")),contentType:clean(r.headers.get("content-type")),bytes:html.length,ms:Date.now()-started};
     if(r.status!==200)return {...base,verdict:r.status===403||r.status===429||r.status===503?"REFUSE":"HTTP_"+r.status,sample:html.slice(0,300)};
     const rows=parseFaBoard(html);
     if(!rows.length)return {...base,verdict:/just a moment|captcha|access denied|unusual traffic|verify you are human/i.test(html)?"CHALLENGE":"PAGE_SANS_VOLS",sample:html.slice(0,300)};
