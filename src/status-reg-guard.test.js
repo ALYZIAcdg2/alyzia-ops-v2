@@ -166,3 +166,12 @@ test("airborne flights arriving within 2 h are re-read first, at most every 3 mi
   assert.equal(arrivingSoon({...soon,ata:"11:00"},now),false);
   assert.equal(arrivingSoon({...soon,statusArrivalUtc:iso(-40)},now),false);
 });
+
+test("a flight that took off without ATD is asked again by the cron (FlightStats / FlightAware)",()=>{
+  const now=Date.UTC(2026,9,5,10,30),iso=min=>new Date(now+min*60000).toISOString();
+  const x={std:"11:10",takeoff:"12:09",dep:"CDG",publicLiveBackfill:{checkedAt:iso(-10)}};   // 12:09 Paris = 10:09 UTC, 21 min ago
+  assert.equal(priority({std:"11:10"},x,750,now)[0],0.4);
+  assert.equal(priority({std:"11:10"},{...x,publicLiveBackfill:{checkedAt:iso(-2)}},750,now)[0],1);
+  assert.equal(priority({std:"11:10"},{...x,atd:"11:50"},750,now)[0],1);
+  assert.equal(priority({std:"08:00"},{...x,takeoff:"08:10"},750,now)[0],1);
+});
