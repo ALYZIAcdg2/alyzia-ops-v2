@@ -221,3 +221,11 @@ test("même immatriculation sur des vols proches : retirée sauf FR24 tableau / 
  const r=(id,std,reg,src)=>({identity:id,std,x:{origin:"CDG",std,reg,regSource:src}});
  const ids=duplicateRegistrationIds([r("a","15:10","D-AIHV","PUBLIC_LIVE:PLANEFINDER"),r("b","15:30","D-AIHV","PUBLIC_LIVE:FR24BOARD"),r("c","15:35","D-AIHV",""),r("d","19:00","D-AIHV","PUBLIC_LIVE:PLANEFINDER"),r("e","10:00","F-GSPL","")]);
  assert.deepEqual([...ids].sort(),["a","c"])});
+test("disjoncteurs FlightStats séparés : la page refusée ne bloque pas l'API",()=>{
+  flightStatsReset();const t=Date.UTC(2026,9,5,10,0);
+  flightStatsNoteResult(403,t);flightStatsNoteResult(403,t);
+  assert.equal(flightStatsPaused(t+1000),true);assert.equal(flightStatsPaused(t+1000,"api"),false);
+  flightStatsNoteResult(429,t,"api");flightStatsNoteResult(429,t,"api");assert.equal(flightStatsPaused(t+1000,"api"),false);
+  flightStatsNoteResult(429,t,"api");assert.equal(flightStatsPaused(t+1000,"api"),true);assert.equal(flightStatsPaused(t+61000,"api"),false);
+  flightStatsReset();
+});

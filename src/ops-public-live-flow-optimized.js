@@ -146,10 +146,11 @@ function routeMatched(text,f){const u=upper(text);return (!f.origin||u.includes(
 // FlightStats refuses (403) a burst of parallel requests: its requests go one after the other with a short pause (the other sources stay parallel).
 let flightStatsChain=Promise.resolve();
 // FlightStats refuses bursts (403 / 429 on 86 of 89 flights): one request every 1.5 s, and a pause of 90 s once it has refused twice in a row.
-let flightStatsRefusals=0,flightStatsPausedUntil=0;
-export function flightStatsNoteResult(status,now=Date.now()){if(status===403||status===429){flightStatsRefusals++;if(flightStatsRefusals>=2)flightStatsPausedUntil=now+90000}else if(status>=200&&status<400)flightStatsRefusals=0}
-export function flightStatsPaused(now=Date.now()){return now<flightStatsPausedUntil}
-export function flightStatsReset(){flightStatsRefusals=0;flightStatsPausedUntil=0}
+// Deux disjoncteurs séparés : la page du vol (HTML, protégée par un pare-feu, souvent refusée) et l'API légère extendedDetails (identifiant déjà connu). Un refus de la page ne bloque plus les vols dont l'identifiant est mémorisé.
+const FS_BREAKER={page:{refusals:0,until:0,after:2,pause:90000},api:{refusals:0,until:0,after:3,pause:60000}};
+export function flightStatsNoteResult(status,now=Date.now(),kind="page"){const b=FS_BREAKER[kind]||FS_BREAKER.page;if(status===403||status===429){b.refusals++;if(b.refusals>=b.after)b.until=now+b.pause}else if(status>=200&&status<400)b.refusals=0}
+export function flightStatsPaused(now=Date.now(),kind="page"){return now<(FS_BREAKER[kind]||FS_BREAKER.page).until}
+export function flightStatsReset(){for(const b of Object.values(FS_BREAKER)){b.refusals=0;b.until=0}}
 export function flightStatsSlot(source,fn,pauseMs=1500){
   if(source!=="FLIGHTSTATS")return fn();
   const run=flightStatsChain.then(()=>fn());
@@ -158,11 +159,11 @@ export function flightStatsSlot(source,fn,pauseMs=1500){
 }
 // The FlightStats id of a flight does not change during the day: once known, only the light JSON API is called (no tracker page, no WAF challenge).
 async function flightStatsFromCachedId(f){
-  const id=clean(f.raw?.flightStatsId);if(!/^\d+$/.test(id)||clean(f.raw?.flightStatsIdDate)!==f.date||flightStatsPaused())return null;
+  const id=clean(f.raw?.flightStatsId);if(!/^\d+$/.test(id)||clean(f.raw?.flightStatsIdDate)!==f.date||flightStatsPaused(Date.now(),"api"))return null;
   const ymd=f.date.slice(0,4)+"/"+Number(f.date.slice(5,7))+"/"+Number(f.date.slice(8,10)),url=`https://www.flightstats.com/v2/api/extendedDetails/${encodeURIComponent(f.airline)}/${encodeURIComponent(f.number)}/${ymd}/${id}`,c=new AbortController(),t=setTimeout(()=>c.abort(),10000),checkedAt=new Date().toISOString();
   try{
     const r=await flightStatsSlot("FLIGHTSTATS",()=>fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"*/*","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":FS_UA}}));
-    flightStatsNoteResult(r.status);
+    flightStatsNoteResult(r.status,Date.now(),"api");
     if(!r.ok)return null;
     const a=flightStatsApiTimes(await r.json().catch(()=>null));if(!a||!Object.keys(a).length)return null;
     return {source:"FLIGHTSTATS",url,httpStatus:r.status,status:"OK",checkedAt,semantic:a,lookupDesignator:f.designator,lookupCodeType:"IATA",detailsInfo:"API OK (id mémorisé)",flightId:id};
