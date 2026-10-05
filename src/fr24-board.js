@@ -35,7 +35,7 @@ async function loadPages(fetchImpl,nowMs){
 
 // Lecture d'une plage (rattrapage) : à partir de fromSec, jusqu'à maxPages pages de 100 vols. Ne touche ni au cache ni à la pause.
 export async function fetchBoardRange({fromSec,maxPages=8,stopAfterSec=0,fetchImpl=fetch}){
-  const rows=[],info=[];let pages=0,verdict="OK",status=0;
+  const rows=[],info=[];let pages=0,verdict="OK",status=0,shifts=0;
   for(let page=1;page<=maxPages;page++){
     const r=await fetchImpl(`https://www.flightradar24.com/data/airports/cdg/departures?date=${fromSec}&page=${page}`,{headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":UA},redirect:"manual"});
     status=r.status;const text=await r.text();
@@ -43,9 +43,11 @@ export async function fetchBoardRange({fromSec,maxPages=8,stopAfterSec=0,fetchIm
     const json=extractDataPage(text);if(!json){verdict=/just a moment|cf-chl|verify you are human/i.test(text)?"BLOCKED":"NO_USABLE_DATA";break}
     const b=parseBoard(json,{all:true});pages++;rows.push(...b.rows);info.push({page,rows:b.rows.length,hasMore:b.meta.hasMoreNextData,hoursRange:b.meta.hoursRange,firstStd:b.rows.length?Math.min(...b.rows.map(x=>x.std)):0,outsideAllowance:json?.props?.meta?.outsideAllowance??null,withinMaxAllowance:json?.props?.meta?.withinMaxAllowance??null});
     const last=b.rows.length?Math.max(...b.rows.map(x=>x.std)):0;
+    // Première page vide parce que la date demandée est hors de la fenêtre gratuite de FR24 : on avance de 2 h (3 essais).
+    if(page===1&&!b.rows.length&&json?.props?.meta?.outsideAllowance&&shifts<3){shifts++;fromSec+=7200;page=0;continue}
     if(!b.meta.hasMoreNextData||(stopAfterSec&&last>stopAfterSec))break;
   }
-  return {rows,pages,verdict,httpStatus:status,info};
+  return {rows,pages,verdict,httpStatus:status,info,fromSecUsed:fromSec};
 }
 
 export async function getBoard({fetchImpl=fetch,nowMs=Date.now()}={}){
