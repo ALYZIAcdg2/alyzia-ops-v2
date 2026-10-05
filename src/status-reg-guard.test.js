@@ -80,3 +80,10 @@ test("FlightStats cancelled banner without the usual time blocks is still read",
   const r=semanticText("FLIGHTSTATS",page,{designator:"AI142",airline:"AI",number:"142"});
   assert.equal(r.status,"ANNULÉ");assert.ok(r.statusStrong);
 });
+
+import {derive} from "./status-model-test.js";
+test("the status model keeps a cancellation confirmed by the live flow",()=>{
+  const x={flight:"AI142",std:"20:45",sta:"10:25",dep:"CDG",dest:"DEL",status:"ANNULÉ",cancelledSource:"FLIGHTSTATS"};
+  assert.equal(derive(x,"2026-10-04").status,"ANNULÉ");
+  assert.notEqual(derive({...x,cancelledSource:undefined,status:"PRÉVU"},"2026-10-04").status,"ANNULÉ");
+});
