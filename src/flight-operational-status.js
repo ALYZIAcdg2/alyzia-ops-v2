@@ -10,6 +10,8 @@ export function flightOperationalStatus(x){
   // Manual status remains authoritative too.
   const source=upper(x?.statusSource||x?.status_source);
   const stored=upper(x?.status);
+  // A cancellation confirmed by the live flow stays ANNULÉ everywhere (list, sheet, admin), like the status model.
+  if(String(x?.cancelledSource??'').trim()&&/ANNUL|CANCEL/.test(stored))return 'ANNULÉ';
   if((source.startsWith('ALYZIA_STATUS_V1:')||source.includes('MANUAL'))&&stored){
     if(stored.startsWith('ARRIV'))return 'ARRIVÉE';
     if(stored.startsWith('EN VOL'))return 'EN VOL';
