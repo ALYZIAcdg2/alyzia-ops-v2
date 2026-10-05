@@ -163,8 +163,13 @@ const DELETE_FLIGHT_UI = String.raw`
 
   function installFlightTools(){
     const title=document.getElementById('modalTitle');
-    const body=document.getElementById('modalBody');
-    if(!title||!body||clean(title.textContent)!=='OUTILS')return;
+    let body=document.getElementById('modalBody');
+    if(!(title&&body&&clean(title.textContent)==='OUTILS')){
+      // Outils is now a page of the app, not only a modal.
+      const page=document.getElementById('app');
+      body=page&&page.querySelector('.tool-card')?page:null;
+    }
+    if(!body)return;
 
     const create=[...body.querySelectorAll('.tool-card')].find(button=>/CRÉER VOL|CRÉATION DE VOLS/.test(clean(button.textContent)));
     if(create&&!create.dataset.flightManagementTool){
@@ -187,6 +192,7 @@ const DELETE_FLIGHT_UI = String.raw`
     }
   }
 
+  setInterval(function(){try{installFlightTools()}catch(_){}},1500);
   const previousOpenTools=window.openTools;
   window.openTools=async function(...args){
     const result=typeof previousOpenTools==='function' ? await previousOpenTools.apply(this,args) : undefined;
@@ -552,8 +558,11 @@ export function patchDurationFormatter(html) {
 }
 
 export function injectDeleteFlightUi(html) {
-  const source = String(html || "");
-  if (!source || source.includes('id="alyzia-delete-flight-ui"')) return source;
+  // The baked page may already carry an older copy of this UI: replace it so fixes reach production.
+  const source = String(html || "")
+    .replace(/<style id="alyzia-delete-flight-ui-css">[\s\S]*?<\/style>\s*/g, "")
+    .replace(/<script id="alyzia-delete-flight-ui">[\s\S]*?<\/script>\s*/g, "");
+  if (!source) return source;
   const bodyEnd = source.lastIndexOf("</body>");
   return bodyEnd >= 0
     ? source.slice(0, bodyEnd) + DELETE_FLIGHT_UI + "\n" + source.slice(bodyEnd)
