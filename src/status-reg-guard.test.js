@@ -231,3 +231,10 @@ test("disjoncteurs FlightStats séparés : la page refusée ne bloque pas l'API"
   flightStatsNoteResult(429,t,"api");assert.equal(flightStatsPaused(t+1000,"api"),true);assert.equal(flightStatsPaused(t+61000,"api"),false);
   flightStatsReset();
 });
+test("vol arrivé sans ATD : relu avant les vols sans enjeu, pas avant les vols en l'air",()=>{
+  const now=Date.UTC(2026,9,5,15,0),iso=m=>new Date(now+m*60000).toISOString();
+  const landed={std:"11:15",takeoff:"11:30",ata:"13:14",publicLiveBackfill:{checkedAt:iso(-30)}};
+  assert.equal(priority({std:"11:15"},landed,900,now)[0],1.6);
+  assert.equal(priority({std:"11:15"},{...landed,publicLiveBackfill:{checkedAt:iso(-3)}},900,now)[0]>1.6,true);
+  assert.equal(priority({std:"11:15"},{...landed,atd:"11:20",reg:"F-GSPL"},900,now)[0]>1.6,true);
+});
