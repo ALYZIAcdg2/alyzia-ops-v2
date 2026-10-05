@@ -66,12 +66,13 @@ export const STATUS_MODEL_TEST_RULES={
 
 export async function runStatusModelTest(env){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
-  const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
+  // Flights of yesterday are recomputed too: after midnight an evening departure is still airborne / just landed.
+  const date=today(),from=(()=>{const t=new Date(`${date}T12:00:00Z`);t.setUTCDate(t.getUTCDate()-1);return t.toISOString().slice(0,10)})(),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,data_json FROM flights WHERE flight_date BETWEEN ? AND ? AND airline<>'SYS'`).bind(from,date).all();
   let updated=0;const items=[],at=new Date().toISOString();
   for(const row of results){
     let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
     if(manual(x)){items.push({identity:row.identity,status:"MANUAL"});continue}
-    const d=derive(x,date),arrivalIso=d.arrivalUtc!=null?new Date(d.arrivalUtc).toISOString():"";
+    const d=derive(x,row.flight_date||date),arrivalIso=d.arrivalUtc!=null?new Date(d.arrivalUtc).toISOString():"";
     const before={status:clean(x.status),arrival:clean(x.statusArrivalUtc),reason:clean(x.statusReason),evidence:JSON.stringify(x.statusEvidence||{}),source:clean(x.statusSource)};
     x.status=d.status;
     x.statusSource=`ALYZIA_STATUS_V1:${d.reason}:${upper(d.evidence?.source||"ALYZIA")}`;

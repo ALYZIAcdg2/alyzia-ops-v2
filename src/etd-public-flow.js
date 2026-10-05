@@ -79,7 +79,9 @@ async function apply(env,row){
 export async function runEtdPublicFlow(env,{concurrency=6}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const date=parisToday(),startedAt=new Date().toISOString();
-  const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS' ORDER BY std,flight_number`).bind(date).all();
+  // During the first 6 hours after midnight (Paris) the flights of yesterday that have not departed yet (late evening delays, ETD after midnight) are read too.
+  const pp=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value])),early=Number(pp.hour)<6,from=(()=>{const t=new Date(`${date}T12:00:00Z`);t.setUTCDate(t.getUTCDate()-(early?1:0));return t.toISOString().slice(0,10)})();
+  const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date BETWEEN ? AND ? AND airline<>'SYS' ORDER BY flight_date,std,flight_number`).bind(from,date).all();
   const candidates=results.filter(row=>{let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}return !hhmm(x.atd)&&!hhmm(x.takeoff)&&Boolean(hhmm(x.std||row.std))});
   const out=await mapLimit(candidates,Math.max(1,Math.min(8,Number(concurrency)||6)),row=>apply(env,row));
   const summary={ok:true,date,startedAt,finishedAt:new Date().toISOString(),total:results.length,checked:candidates.length,updated:out.filter(x=>x.status==="UPDATED").length,unchanged:out.filter(x=>x.status==="UNCHANGED").length,stoppedAtd:results.length-candidates.length,statusCounts:{}};
