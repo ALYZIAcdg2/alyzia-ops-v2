@@ -92,15 +92,40 @@ export function flightStatsBlockTimes(segment){
   else{for(let i=0;i<toks.length;i++){if(toks[i].l!==undefined&&toks[i+1]&&toks[i+1].l===undefined){labels.push(toks[i].l);values.push(toks[i+1].v);i++}}}
   const out={};labels.forEach((l,i)=>{out[l.toLowerCase()]=values[i]||""});return out;
 }
-// The tracker page links each flight of the day to its "Flight Details" page (…/flight-details/MH/21?year=2026&month=10&date=5&flightId=…): the id of the requested date is read from those links.
+// The FlightStats page names the flight of the requested date in several places: the "view details" link (…/flight-details/MH/21?year=2026&month=10&date=5&flightId=…),
+// the path form (…/flight-details/TS/111/2026/10/5/1412363884) and the JSON data ("flightId":1412363884 followed by its date). Every form is read; the id is used only when they all agree.
 export function flightStatsFlightId(raw,date){
   const m=String(date||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return "";
-  const body=String(raw||"").replace(/&amp;|\\u0026|&#38;/g,"&"),want={year:m[1],month:String(Number(m[2])),date:String(Number(m[3]))},ids=new Set();
+  const body=String(raw||"").replace(/&amp;|\\u0026|&#38;/g,"&").replace(/\\\//g,"/"),want={year:m[1],month:String(Number(m[2])),date:String(Number(m[3]))},ids=new Set();
   for(const x of body.matchAll(/flight-details\/[^"'\s<>]*?\?([^"'\s<>]*)/g)){
     const q=new URLSearchParams(x[1]),id=q.get("flightId");
     if(id&&/^\d+$/.test(id)&&q.get("year")===want.year&&q.get("month")===want.month&&q.get("date")===want.date)ids.add(id);
   }
+  for(const x of body.matchAll(/flight-details\/[A-Z0-9]+\/\d+\/(\d{4})\/(\d{1,2})\/(\d{1,2})\/(\d+)/g)){
+    if(x[1]===want.year&&String(Number(x[2]))===want.month&&String(Number(x[3]))===want.date)ids.add(x[4]);
+  }
+  for(const x of body.matchAll(/"flightId"\s*:\s*"?(\d{6,})"?/g)){
+    const ahead=body.slice(x.index,x.index+2500),d=ahead.match(/"date"\s*:\s*"(\d{4})-(\d{2})-(\d{2})/);
+    if(d&&d[1]===want.year&&d[2]===m[2]&&d[3]===m[3])ids.add(x[1]);
+  }
   return ids.size===1?[...ids][0]:"";
+}
+// FlightStats serves the same data as JSON (…/v2/api/extendedDetails/TS/111/2026/10/5/<flightId>): clean times (time24, local to each airport), status, tail number and aircraft.
+export function flightStatsApiTimes(j){
+  if(!j||typeof j!=="object")return null;
+  const t=(o,k)=>{const v=o&&o[k]&&o[k].time24;return /^\d{1,2}:\d{2}$/.test(String(v||""))?String(v).padStart(5,"0"):""};
+  const dep=j.departureTimes||j.departureAirport?.times||{},arr=j.arrivalTimes||j.arrivalAirport?.times||{},st=j.status||{},label=String(st.status||"");
+  const out={atd:t(dep,"actualGate"),takeoff:t(dep,"actualRunway"),ata:t(arr,"actualGate"),landing:t(arr,"actualRunway")};
+  out.eta=out.ata?"":t(arr,"estimatedGate");
+  if(/cancel/i.test(label)||/^C$/i.test(String(st.statusCode||""))){out.status="ANNULÉ";out.statusStrong=true}
+  else if(st.diverted===true||j.divertedAirport)out.status="DÉROUTÉ";
+  else if(out.ata)out.status="ARRIVÉE";else if(out.landing)out.status="ATTERI";
+  else if(String(j.flightState||"").toLowerCase()==="en-route"||out.atd||out.takeoff)out.status="EN VOL";
+  const eq=j.additionalFlightInfo?.equipment||{};
+  if(eq.tailNumber)out.reg=upper(eq.tailNumber);
+  if(eq.iata)out.aircraft=upper(eq.iata);
+  for(const k of Object.keys(out))if(out[k]==="")delete out[k];
+  return out;
 }
 export function flightStatsDetails(text){
   const t=String(text||""),gates=[...t.matchAll(/Flight Gate Times/g)].map(x=>x.index),runs=[...t.matchAll(/Flight Runway Times/g)].map(x=>x.index);
@@ -131,10 +156,20 @@ async function fetchHtmlSource(source,f){const build=FALLBACKS[source];if(!build
   if(status==="OK"&&source==="FLIGHTSTATS"){
     // Gate and runway times (ATD/ATA, takeoff/landing) are on the "Flight Details" page of the exact flight.
     const id=flightStatsFlightId(raw,f.date);
-    if(id){try{const du=new URL(r.url||url);du.pathname=du.pathname.replace("/flight-tracker/","/flight-details/");du.search="?year="+f.date.slice(0,4)+"&month="+Number(f.date.slice(5,7))+"&date="+Number(f.date.slice(8,10))+"&flightId="+id;
-      const dr=await flightStatsSlot(source,()=>fetch(du.toString(),init));detailsInfo="HTTP "+dr.status;
-      if(dr.ok){const d=flightStatsDetails(textOnly(await dr.text()));if(d){detailsInfo="OK";for(const k of ["atd","takeoff","eta","ata","landing"]){if(d[k])semantic[k]=d[k];else if(["atd","takeoff","ata","landing"].includes(k))delete semantic[k]}}else detailsInfo="NO_BLOCKS"}
-    }catch(e){detailsInfo="ERROR "+String(e?.message||e).slice(0,60)}}else detailsInfo="NO_FLIGHT_ID";
+    if(id){try{
+      const base=new URL(r.url||url),parts=base.pathname.split("/").filter(Boolean),ti=parts.indexOf("flight-tracker"),car=parts[ti+1],num=parts[ti+2];
+      const ymd=f.date.slice(0,4)+"/"+Number(f.date.slice(5,7))+"/"+Number(f.date.slice(8,10));
+      let done=false;
+      if(car&&num){
+        const au=`https://www.flightstats.com/v2/api/extendedDetails/${car}/${num}/${ymd}/${id}`,ar=await flightStatsSlot(source,()=>fetch(au,{...init,headers:{...init.headers,accept:"*/*",referer:"https://www.flightstats.com/v2"}}));detailsInfo="API HTTP "+ar.status;
+        if(ar.ok){const a=flightStatsApiTimes(await ar.json().catch(()=>null));if(a&&Object.keys(a).length){detailsInfo="API OK";done=true;for(const k of ["atd","takeoff","eta","ata","landing"]){if(a[k])semantic[k]=a[k];else if(["atd","takeoff","ata","landing"].includes(k))delete semantic[k]}for(const k of ["status","statusStrong","reg","aircraft"])if(a[k]!==undefined)semantic[k]=a[k]}}
+      }
+      if(!done){
+        const du=new URL(r.url||url);du.pathname=du.pathname.replace("/flight-tracker/","/flight-details/");du.search="?year="+f.date.slice(0,4)+"&month="+Number(f.date.slice(5,7))+"&date="+Number(f.date.slice(8,10))+"&flightId="+id;
+        const dr=await flightStatsSlot(source,()=>fetch(du.toString(),init));detailsInfo+=" · page HTTP "+dr.status;
+        if(dr.ok){const d=flightStatsDetails(textOnly(await dr.text()));if(d){detailsInfo="PAGE OK";for(const k of ["atd","takeoff","eta","ata","landing"]){if(d[k])semantic[k]=d[k];else if(["atd","takeoff","ata","landing"].includes(k))delete semantic[k]}}else detailsInfo+=" · NO_BLOCKS"}
+      }
+    }catch(e){detailsInfo="ERROR "+String(e?.message||e).slice(0,60)}}else detailsInfo="NO_FLIGHT_ID"+(/flightId/.test(raw)?" (flightId présent, date non reconnue)":" (aucun flightId dans la page)");
   }
   return {source,url:r.url||url,httpStatus:r.status,status,checkedAt,semantic,detailsInfo:detailsInfo||undefined,lookupDesignator:candidate.designator,lookupCodeType:candidate.lookupCodeType}}catch(e){return {source,url,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,checkedAt,semantic:{},error:String(e?.message||e).slice(0,160)}}finally{clearTimeout(t)}})}
 function clockFromIso(iso,zone){if(!iso)return "";const d=new Date(iso);if(Number.isNaN(d.getTime()))return "";try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone||"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(d).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return ""}}
