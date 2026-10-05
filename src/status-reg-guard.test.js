@@ -175,3 +175,18 @@ test("a flight that took off without ATD is asked again by the cron (FlightStats
   assert.equal(priority({std:"11:10"},{...x,atd:"11:50"},750,now)[0],1);
   assert.equal(priority({std:"08:00"},{...x,takeoff:"08:10"},750,now)[0],1);
 });
+
+test("flightId found in the path form and in the JSON data of the page (TS111, 5 Oct)",()=>{
+  const path='"url":"/flight-details/TS/111/2026/10/5/1412363884","carrier":{"flightNumber":"111"}';
+  assert.equal(flightStatsFlightId(path,"2026-10-05"),"1412363884");
+  assert.equal(flightStatsFlightId(path,"2026-10-04"),"");
+  const json='"extendedDetails":{"sortTime":"2026-10-05T10:20:00.000Z","flightId":1412363884,"carrier":{"fs":"TS"},"departureAirport":{"fs":"CDG","times":{},"date":"2026-10-05T12:20:00.000"}}';
+  assert.equal(flightStatsFlightId(json,"2026-10-05"),"1412363884");
+  const two=path+',"flightId":1411111111,"x":{"date":"2026-10-05T01:00:00.000"}';
+  assert.equal(flightStatsFlightId(two,"2026-10-05"),"");
+});
+test("FlightStats details page of TS111: gate 12:20, runway 12:34, arrival estimates 13:40 / 13:26 (not landing)",()=>{
+  const t="(TS) Air Transat 111 Flight Details On time | Departed Departure CDG Flight Gate Times 05-Oct-2026 Scheduled 12:20 CEST Actual 12:20 CEST Total Departure Delay: - Flight Runway Times 05-Oct-2026 Scheduled 12:30 CEST Actual 12:34 CEST Runway Delay: 4 mins Terminal 3 Gate - Craft Type Airbus A330-200 Arrival YUL Flight Gate Times 05-Oct-2026 Scheduled 14:00 EDT Estimated 13:40 EDT Total Arrival Delay: - Flight Runway Times 05-Oct-2026 Scheduled 13:56 EDT Estimated 13:26 EDT Runway Delay: - Terminal - Gate -";
+  const d=flightStatsDetails(t);
+  assert.equal(d.atd,"12:20");assert.equal(d.takeoff,"12:34");assert.equal(d.eta,"13:40");assert.equal(d.ata,"");assert.equal(d.landing,"");
+});
