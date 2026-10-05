@@ -136,7 +136,10 @@ document.documentElement.classList.add('alyzia-ops-cards');
 const expandedFlights=new Set();
 // ---- Aircraft type -> seatmap type and cabin configuration ----
 // Displayed type = type converted to the Seatmap code (359, 77W, 32Q…); the cabin configuration follows that type.
-function opsType(x){const raw=txt((x&&x.aircraftChange&&x.aircraftChange.to)||x?.aircraft||x?.aircraftActual);return raw?(ALY_TYPES.toIata(raw)||ALY_TYPES.toIata(raw.replace(/^B(?=7\d\d)/i,'Boeing '))||up(raw)):''}
+// The type shown follows the seatmap catalog of the airline (TK files its A321neo under N32, not 32Q).
+function opsCatalogType(cie,type){try{if(!type||!cie||typeof window.sariaConfigsFor!=='function')return type;const l=window.sariaConfigsFor(up(cie),type),e=l&&l[0];return e&&e.ac?up(e.ac):type}catch{return type}}
+window.alyCatalogType=opsCatalogType;
+function opsType(x){const raw=txt((x&&x.aircraftChange&&x.aircraftChange.to)||x?.aircraft||x?.aircraftActual),t=raw?(ALY_TYPES.toIata(raw)||ALY_TYPES.toIata(raw.replace(/^B(?=7\d\d)/i,'Boeing '))||up(raw)):'';return opsCatalogType(x?.airline,t)}
 function opsSameType(a,b){const A=up(a),B=up(b);return !A||!B||ALY_TYPES.configCodes(A).includes(B)}
 function opsCatalog(){try{return typeof SARIA_CATALOG!=='undefined'&&Array.isArray(SARIA_CATALOG)?SARIA_CATALOG:[]}catch{return []}}
 // Same preference as the server auto-injection: exact flight prefix, then company-wide plan, then first by key; exact type before equivalent codes.
@@ -150,6 +153,17 @@ function opsPickByType(x,type){
  }
  return null;
 }
+(function wrapAircraftSelect(){
+ try{
+  const base=window.sariaAircraftSelectHtml;
+  if(typeof base!=='function'||base.__alyCat)return;
+  const wrapped=function(x){
+   try{if(x){const cat=v=>v?opsCatalogType(x.airline,up(ALY_TYPES.toIata(v)||v)):v;x=Object.assign({},x,{aircraft:cat(x.aircraft)||x.aircraft,aircraftChange:x.aircraftChange?Object.assign({},x.aircraftChange,{to:cat(x.aircraftChange.to)||x.aircraftChange.to}):x.aircraftChange})}}catch{}
+   return base.call(this,x);
+  };
+  wrapped.__alyCat=true;window.sariaAircraftSelectHtml=wrapped;
+ }catch{}
+})();
 (function wrapSeatmapChoice(){
  try{
   const base=window.sariaSelectedEntry;
@@ -232,7 +246,7 @@ function opsFlag(code){
   SG:'<path fill="#fff" d="M0 0h30v20H0z"/><path fill="#ef3340" d="M0 0h30v10H0z"/><circle cx="6" cy="5" r="3.7" fill="#fff"/><circle cx="7.6" cy="5" r="3.1" fill="#ef3340"/><g fill="#fff">'+[[11.4,2.1],[13.8,3.9],[12.9,6.7],[9.9,6.7],[9,3.9]].map(([x,y])=>'<path transform="translate('+x+' '+y+')" d="M0-1 .24-.32 .95-.31 .38.12 .59.81 0 .4-.59.81-.38.12-.95-.31-.24-.32z"/>').join('')+'</g>',
   KR:'<path fill="#fff" d="M0 0h30v20H0z"/><g transform="rotate(33.7 15 10)"><circle cx="15" cy="10" r="5" fill="#cd2e3a"/><path d="M10 10a5 5 0 0 0 10 0a2.5 2.5 0 0 0-5 0a2.5 2.5 0 0 1-5 0" fill="#0047a0"/></g><g stroke="#111" stroke-width=".8">'+[[5.2,5,-55,[0,0,0]],[24.8,15,-55,[1,1,1]],[24.8,5,55,[1,0,1]],[5.2,15,55,[0,1,0]]].map(([x,y,r,breaks])=>'<g transform="translate('+x+' '+y+') rotate('+r+')">'+breaks.map((b,i)=>b?'<path d="M-2.6 '+(i-1)*1.3+'h2.2m.8 0h2.2"/>':'<path d="M-2.6 '+(i-1)*1.3+'h5.2"/>').join('')+'</g>').join('')+'</g>'
  };
- return '<span class="ops-flag" role="img" aria-label="'+country+'">'+(flags[country]?'<svg viewBox="0 0 30 20" aria-hidden="true">'+flags[country]+'</svg>':'<img src="https://flagcdn.com/w40/'+country.toLowerCase()+'.png" srcset="https://flagcdn.com/w80/'+country.toLowerCase()+'.png 2x" alt="'+country+'" width="30" height="20" loading="lazy" onerror="this.replaceWith(document.createTextNode(String.fromCodePoint(...[...\''+country+'\'].map(c=>127397+c.charCodeAt(0)))))">')+'</span>';
+ return '<span class="ops-flag" role="img" aria-label="'+country+'">'+(flags[country]?'<svg viewBox="0 0 30 20" aria-hidden="true">'+flags[country]+'</svg>':'<img src="https://flagcdn.com/w40/'+country.toLowerCase()+'.png" srcset="https://flagcdn.com/w80/'+country.toLowerCase()+'.png 2x" alt="'+country+'" width="30" height="20" decoding="sync" onerror="this.replaceWith(document.createTextNode(String.fromCodePoint(...[...\''+country+'\'].map(c=>127397+c.charCodeAt(0)))))">')+'</span>';
 }
 function opsLocalFlights(){try{return typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)?FLIGHTS:window.FLIGHTS||[]}catch{return []}}
 function opsFlightForRow(row){
