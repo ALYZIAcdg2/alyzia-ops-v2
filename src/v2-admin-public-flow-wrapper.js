@@ -98,7 +98,7 @@ function patchTable(){
  const headers=[...table.querySelectorAll('thead th')].map(x=>String(x.textContent||'').trim().toUpperCase()),lastIdx=headers.indexOf('DERNIER TRAITEMENT'),nextIdx=headers.indexOf('PROCHAIN');
  [...table.querySelectorAll('tbody tr')].forEach(tr=>{
    const cells=[...tr.children],flight=String(cells[0]?.textContent||'').trim().toUpperCase(),f=findFlow(flight);if(!f)return;
-   if(lastIdx>=0&&cells[lastIdx])cells[lastIdx].innerHTML=esc(fmtAt(f.sourceAt))+'<span class="adn-public-src">'+esc(f.source||'—')+'</span>';
+   if(lastIdx>=0&&cells[lastIdx]&&!cells[lastIdx].querySelector('.adx-srcs'))cells[lastIdx].innerHTML=esc(fmtAt(f.sourceAt))+'<span class="adn-public-src">'+esc(f.source||'—')+'</span>';
    if(nextIdx>=0&&cells[nextIdx]){
      const chain=(f.nextChain||[]).join(' → '),next=f.nextSource==='STA OK'?'STA OK':nextCron()+' · '+(f.nextSource||'—');
      cells[nextIdx].innerHTML='<span class="adn-public-next">'+esc(next)+'</span>'+(chain?'<span class="adn-source-chain">'+esc(chain)+'</span>':'')+'<button type="button" class="adn-delete-flight" data-delete-id="'+esc(f.identity)+'" data-delete-flight="'+esc(f.flight)+'">SUPPR.</button>';
