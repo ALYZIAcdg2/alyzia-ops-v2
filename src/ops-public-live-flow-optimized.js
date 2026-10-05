@@ -191,7 +191,10 @@ export function deriveAta(landingValue,zone,airline,now=new Date()){
 }
 // An ATD that is only the FR24 takeoff copied over (older readings): it is re-read first so FlightStats / FlightAware can give the real gate departure.
 export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clean(x.takeoff)&&/FR24/.test(upper(x.atdSource))&&!manual(x,"atd")}
-export function priority(row,x,nowMin){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];if(!departed&&std!=null&&std<=nowMin+30)return [nowMin-std>360?2:0,checked];if(departed&&!clean(x.ata))return [1,checked];if(!clean(x.eta)&&clean(x.atd))return [2,checked];if(std!=null&&std<=nowMin+120)return [3,checked];return [4,checked]}
+// Airborne flight arriving within 2 h (or just overdue): its ETA moves most, so it is re-read first, at most every 3 minutes.
+const INFLIGHT_WINDOW_MIN=120,INFLIGHT_REREAD_MIN=3;
+export function arrivingSoon(x,nowMs=Date.now()){const a=Date.parse(clean(x?.statusArrivalUtc));if(!Number.isFinite(a)||clean(x?.ata))return false;const m=(a-nowMs)/60000;return m<=INFLIGHT_WINDOW_MIN&&m>=-30}
+export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];if(departed&&!clean(x.ata)&&arrivingSoon(x,nowMs)&&nowMs-checked>=INFLIGHT_REREAD_MIN*60000)return [0.5,checked];if(!departed&&std!=null&&std<=nowMin+30)return [nowMin-std>360?2:0,checked];if(departed&&!clean(x.ata))return [1,checked];if(!clean(x.eta)&&clean(x.atd))return [2,checked];if(std!=null&&std<=nowMin+120)return [3,checked];return [4,checked]}
 // A quarter of the slots (at least one) is kept for flights of the second tier or later (missing ETA, departure missed long ago): otherwise the airborne
 // flights, which are always more numerous than the slots in the evening, would starve them for good.
 export function pickSlots(sorted,size){
