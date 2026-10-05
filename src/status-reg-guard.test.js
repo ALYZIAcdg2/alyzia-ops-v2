@@ -29,3 +29,26 @@ test("EN VOL is kept when the flight has an ATD",()=>{
   assert.equal(guardAirborneStatus("ARRIVÉE",{takeoff:"12:17"}),"ARRIVÉE");
   assert.equal(guardAirborneStatus("RETARDÉ",{}),"RETARDÉ");
 });
+
+import {semanticText} from "./ops-public-live-flow-optimized.js";
+test("a FlightStats page of a diverted flight reads DÉROUTÉ",()=>{
+  const page="(SQ) Singapore Airlines 337 Flight Details Diverted to CDG Flight Diverted SQ337 Flight Departure Times Actual 00:41 Flight Arrival Times Actual 00:59";
+  assert.equal(semanticText("FLIGHTSTATS",page,{designator:"SQ337",airline:"SQ",number:"337"}).status,"DÉROUTÉ");
+});
+test("a single DÉROUTÉ is not believed",()=>{
+  assert.equal(pickStatus({FLIGHTSTATS:{status:"DÉROUTÉ"},FR24:{status:"EN VOL"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"EN VOL");
+  assert.equal(pickStatus({FLIGHTSTATS:{status:"DÉROUTÉ"}},LIVE_PUBLIC_SOURCE_ORDER.status).value,"");
+});
+test("FlightStats runway actual of the departure is read as takeoff",()=>{
+  const page="Flight Gate Times 04-Oct-2026 Scheduled 22:35 CEST Actual 00:41 CEST Flight Runway Times 04-Oct-2026 Scheduled -- Actual 00:58 CEST Terminal 1 Gate 26 Arrival SIN Flight Gate Times Scheduled 17:40";
+  const r=semanticText("FLIGHTSTATS",page,{designator:"SQ337",airline:"SQ",number:"337"});
+  assert.equal(r.takeoff,"00:58");
+});
+
+import {confirmation} from "./ops-public-live-flow-optimized.js";
+test("a time is confirmed when two sources agree within 2 minutes",()=>{
+  const map={FLIGHTSTATS:{atd:"00:41"},FLIGHTAWAREEXACT:{atd:"00:42"},FR24:{atd:"00:58"}};
+  assert.deepEqual(confirmation(map,"atd","00:41"),{confirmed:true,sources:["FLIGHTSTATS","FLIGHTAWAREEXACT"]});
+  assert.equal(confirmation(map,"atd","00:58").confirmed,false);
+  assert.equal(confirmation({FR24:{eta:"23:59"},FLIGHTSTATS:{eta:"00:01"}},"eta","23:59").confirmed,true);
+});

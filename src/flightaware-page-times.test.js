@@ -22,3 +22,12 @@ test("nothing is invented from a page without those keys",()=>{
   assert.deepEqual(flightAwareJsonHints("<html></html>"),[]);
   assert.ok(flightAwareJsonHints(page).length>0);
 });
+
+test("the occurrence of the page is read, not the first other-day occurrence of the log (SQ337)",()=>{
+  const day=(sched,est,act)=>`"takeoffTimes":{"scheduled":${sched},"estimated":${est},"actual":null},"landingTimes":{"scheduled":${sched},"estimated":${est},"actual":null},"gateDepartureTimes":{"scheduled":${sched},"estimated":${est},"actual":${act}},"gateArrivalTimes":{"scheduled":${sched},"estimated":${est},"actual":null}`;
+  const html=`<script>var trackpollBootstrap = {"version":"2.24","flights":{"SIA337-1:0":{"activityLog":{"flights":[{"flightId":"next",${day(1791366000,1791366000,"null")}},{"flightId":"past",${day(1791060300,1791060300,1791060300)}}]},"takeoffTimes":{"scheduled":1791146700,"estimated":1791154680,"actual":1791154680},"landingTimes":{"scheduled":1791197040,"estimated":1791198180,"actual":null},"gateDepartureTimes":{"scheduled":1791146100,"estimated":1791152880,"actual":null},"gateArrivalTimes":{"scheduled":1791193200,"estimated":1791198780,"actual":null},"flightStatus":"airborne"}}};</script>`;
+  const r=flightAwareJsonSemantic(html,{origin:"CDG",destination:"SIN"});
+  assert.equal(r.eta,"19:13");
+  assert.equal(r.takeoff,"00:58");
+  assert.equal(r.ata,"");
+});
