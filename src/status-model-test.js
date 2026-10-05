@@ -25,8 +25,7 @@ function arrivalUtc(x,date){
 }
 function etaPassedBy15(x,date,nowMs){const a=arrivalUtc(x,date);return a!=null&&nowMs>=a+15*60000}
 function etdDelayed(x){const s=mins(x.std),e=mins(x.etd);if(s==null||e==null)return false;let d=e-s;if(d<-720)d+=1440;if(d>720)d-=1440;return d>=5}
-// cancelledSource: written by the live flow when a cancellation is confirmed (FlightStats banner / two sources); without it this model overwrote ANNULÉ with À L'HEURE (AI142).
-function cancelled(x){return Boolean(clean(x?.cancelledSource))||/CANCEL|ANNUL/.test(rawSignals(x))||parisPhase(x)==="ANNULÉ"}
+function cancelled(x){return /CANCEL|ANNUL/.test(rawSignals(x))||parisPhase(x)==="ANNULÉ"}
 function boarding(x){const p=parisPhase(x);return p==="EMBARQUEMENT"||p==="EMBARQUEMENT CLOS"||/BOARDING|EMBARQUEMENT/.test(rawSignals(x))}
 function delayed(x){return parisPhase(x)==="RETARDÉ"||/DELAY|RETARD/.test(rawSignals(x))||etdDelayed(x)}
 
