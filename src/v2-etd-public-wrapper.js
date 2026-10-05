@@ -10,6 +10,7 @@ import {recoverFlightAwareExactHistory} from "./flightaware-exact-history.js";
 import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-source-candidate-test.js";
 import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {runFr24BoardTest} from "./fr24-board-test.js";
+import {runFaBoardTest} from "./fa-board-test.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -101,6 +102,10 @@ export default {
     if(url.pathname==="/api/admin/etd-public-sources")return json({ok:true,sources:ETD_PUBLIC_SOURCE_ORDER,cadenceMinutes:2});
     if(url.pathname==="/api/admin/core-source-diagnostic"&&request.method==="GET"){
       try{return json(await runCoreSourceDiagnosticTest({date:url.searchParams.get('date')||'',flight:url.searchParams.get('flight')||'',origin:url.searchParams.get('origin')||'CDG',destination:url.searchParams.get('destination')||''}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/fa-board-test"&&request.method==="GET"){
+      // Lecture seule : une page du tableau des départs FlightAware de CDG, pour voir si FlightAware répond depuis le Worker.
+      try{return json(await runFaBoardTest({offset:url.searchParams.get("offset")||0}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fr24-board-test"&&request.method==="GET"){
       // Lecture seule : une page du tableau des départs FR24, pour voir si FR24 répond depuis le Worker.
