@@ -16,11 +16,12 @@ export function indexFeed(rows){
   return idx;
 }
 export function compareFlights(flights,rows){
-  const idx=indexFeed(rows),out={flights:flights.length,matched:0,feedActual:0,bothAtd:0,gain:0,vsAtd:{},vsTakeoff:{},gateBoth:0,gateSame:0,examples:{gain:[],farFromAtd:[],gateDiff:[]}};
+  const idx=indexFeed(rows),out={flights:flights.length,matched:0,feedActual:0,bothAtd:0,gain:0,vsAtd:{},vsTakeoff:{},gateBoth:0,gateSame:0,unmatched:[],examples:{gain:[],farFromAtd:[],gateDiff:[]}};
   const bump=(o,d)=>{const k=d==null?"?":Math.abs(d)<=1?"0..1":Math.abs(d)<=3?"2..3":Math.abs(d)<=10?"4..10":">10";o[k]=(o[k]||0)+1};
   for(const f of flights){
     const c=(idx.get(upper(f.designator))||[]).filter(r=>hhmm(r.dep_time)===hhmm(f.std));
-    const r=c.find(x=>upper(x.flight_iata)===upper(f.designator))||c[0];if(!r)continue;
+    const r=c.find(x=>upper(x.flight_iata)===upper(f.designator))||c[0];
+    if(!r){if(out.unmatched.length<40)out.unmatched.push({flight:f.designator,std:f.std,inFeedWithOtherTime:(idx.get(upper(f.designator))||[]).map(x=>hhmm(x.dep_time)).join(",")||null});continue}
     out.matched++;
     const act=hhmm(r.dep_actual);if(act)out.feedActual++;
     if(act&&f.atd){out.bothAtd++;const d=diff(act,f.atd);bump(out.vsAtd,d);if(d!=null&&Math.abs(d)>3&&out.examples.farFromAtd.length<12)out.examples.farFromAtd.push({flight:f.designator,std:f.std,feedActual:act,ourAtd:f.atd,ourTakeoff:f.takeoff||""})}
@@ -29,6 +30,12 @@ export function compareFlights(flights,rows){
     const g=upper(r.dep_gate);if(g&&f.gate){out.gateBoth++;if(upper(f.gate)===g)out.gateSame++;else if(out.examples.gateDiff.length<12)out.examples.gateDiff.push({flight:f.designator,ours:f.gate,feed:g})}
   }
   return out;
+}
+// Fenêtre couverte par le flux : première et dernière heure prévue, et nombre de lignes avec heure réelle par heure.
+export function feedWindow(rows){
+  const a=Array.isArray(rows)?rows:[],times=a.map(r=>clean(r?.dep_time)).filter(Boolean).sort(),byHour={};
+  for(const r of a){const h=hhmm(r?.dep_time).slice(0,2);if(!h)continue;const o=byHour[h]||(byHour[h]={rows:0,actual:0});o.rows++;if(clean(r.dep_actual))o.actual++}
+  return {first:times[0]||null,last:times[times.length-1]||null,byHour};
 }
 export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now()}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
@@ -41,5 +48,5 @@ export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now()}={}){
     if(upper(d.origin||"CDG")!=="CDG")continue;
     const airline=upper(d.airline||x.airline),designator=upper(d.flight||x.flight_number);
     flights.push({designator:designator.startsWith(airline)?designator:airline+String(x.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),std:hhmm(d.std||x.std),atd:hhmm(d.atd),takeoff:hhmm(d.takeoff),gate:clean(d.gate)})}
-  return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,...compareFlights(flights,rows)};
+  return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,feedWindow:feedWindow(rows),...compareFlights(flights,rows)};
 }
