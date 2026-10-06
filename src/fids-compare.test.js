@@ -7,3 +7,10 @@ test("compare ATD, décollage et porte au flux",()=>{
   assert.equal(r.matched,2);assert.equal(r.bothAtd,1);assert.equal(r.vsAtd["0..1"],1);
   assert.equal(r.gain,1);assert.equal(r.gateSame,1);assert.equal(r.examples.gateDiff.length,1);
 });
+import {runFidsCompare} from "./fids-compare.js";
+test("mode explication : lignes du flux et nos valeurs pour un vol",async()=>{
+  const env={OPS_DB:{prepare:()=>({bind:()=>({all:async()=>({results:[{flight_number:"9628",airline:"A9",std:"15:40",data_json:JSON.stringify({airline:"A9",flight:"A9628",std:"15:40",takeoff:"16:32"})}]})})})}};
+  const rows=[{flight_iata:"A9628",dep_time:"2026-10-06 15:40",dep_actual:"",status:"active"}];
+  const r=await runFidsCompare(env,{flight:"a9628",nowMs:Date.parse("2026-10-06T14:40:00Z"),fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
+  assert.equal(r.explain.ours[0].takeoff,"16:32");assert.equal(r.explain.feed[0].dep_actual,"");
+});
