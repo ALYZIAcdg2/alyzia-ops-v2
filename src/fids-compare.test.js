@@ -35,3 +35,10 @@ test("ATA : arr_actual du flux contre notre ATA et notre atterrissage",()=>{
   assert.equal(r.ata.feedActual,3);assert.equal(r.ata.bothAta,2);assert.equal(r.ata.vsAta["0..1"],1);assert.equal(r.ata.gain,1);
   assert.equal(r.ata.vsLanding["4..10"],1);assert.equal(r.ata.examples.diffAta[0].flight,"AH2");assert.equal(r.ata.examples.gain[0].flight,"AH3");
 });
+test("audit par date : une ligne du flux d'un autre jour n'est pas appariée",()=>{
+  const rows=[{flight_iata:"LY326",dep_time:"2026-10-06 22:30",dep_actual:"2026-10-06 23:35",arr_actual:"2026-10-07 01:50",dep_gate:"B25"}];
+  const f=[{designator:"LY326",std:"22:30",dest:"TLV",gate:""}];
+  assert.equal(compareFlights(f,rows,"2026-10-07").matched,0);
+  assert.equal(compareFlights(f,rows,"2026-10-06").matched,1);
+  assert.equal(compareFlights(f,rows).matched,1);
+});

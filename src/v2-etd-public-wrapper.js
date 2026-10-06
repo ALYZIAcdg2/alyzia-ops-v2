@@ -127,7 +127,7 @@ export default {
     }
     if(url.pathname==="/api/admin/fids-compare"&&request.method==="GET"){
       // Lecture seule : compare le flux FIDS flightradar.live à nos vols du jour (ATD, décollage, porte).
-      try{return json(await runFidsCompare(env,{flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json(await runFidsCompare(env,{flight:url.searchParams.get("flight")||"",date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-widget-test"&&request.method==="GET"){
       // Lecture seule : script du widget FIDS flightradar.live (CDG départs) et ses adresses de données.
