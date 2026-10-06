@@ -37,7 +37,7 @@ export function feedWindow(rows){
   for(const r of a){const h=hhmm(r?.dep_time).slice(0,2);if(!h)continue;const o=byHour[h]||(byHour[h]={rows:0,actual:0});o.rows++;if(clean(r.dep_actual))o.actual++}
   return {first:times[0]||null,last:times[times.length-1]||null,byHour};
 }
-export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now()}={}){
+export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now(),flight=""}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const r=await fetchImpl(URL_,{headers:{accept:"application/json","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow"});
   if(r.status!==200)return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"HTTP_"+r.status};
@@ -48,5 +48,7 @@ export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now()}={}){
     if(upper(d.origin||"CDG")!=="CDG")continue;
     const airline=upper(d.airline||x.airline),designator=upper(d.flight||x.flight_number);
     flights.push({designator:designator.startsWith(airline)?designator:airline+String(x.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),std:hhmm(d.std||x.std),atd:hhmm(d.atd),takeoff:hhmm(d.takeoff),gate:clean(d.gate)})}
-  return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,feedWindow:feedWindow(rows),...compareFlights(flights,rows)};
+  const want=upper(flight).replace(/[^A-Z0-9]/g,"");
+  const explain=want?{flight:want,ours:flights.filter(f=>upper(f.designator)===want),feed:(indexFeed(rows).get(want)||[]).map(r=>({flight_iata:r.flight_iata,cs_flight_iata:r.cs_flight_iata,dep_time:r.dep_time,dep_estimated:r.dep_estimated,dep_actual:r.dep_actual,status:r.status,dep_gate:r.dep_gate,arr_iata:r.arr_iata}))}:undefined;
+  return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,explain,feedWindow:feedWindow(rows),...compareFlights(flights,rows)};
 }
