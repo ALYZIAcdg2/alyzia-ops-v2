@@ -38,3 +38,30 @@ test("vol d'hier soir retardé : ATD d'aujourd'hui accepté, futur refusé",()=>
   assert.equal(plausibleActual({...row,dep_actual_ts:now/1000+7200},{std:"22:45",nowMs:now,sameDay:false}),false);
   assert.equal(plausibleActual({...row,dep_actual_ts:row.dep_time_ts+3*86400},{std:"22:45",nowMs:now,sameDay:false}),false);
 });
+import {onTimeAtd} from "./fids-atd-sweep.js";
+test("parti à l'heure : ATD = STD seulement si le flux dit parti, estimé = prévu et décollage 5 à 35 min après",()=>{
+  const row={status:"active",dep_time:"2026-10-06 16:10",dep_estimated:"2026-10-06 16:10",dep_actual:""};
+  const ctx={std:"16:10",takeoff:"16:24",nowMin:1020,date:"2026-10-06"};
+  assert.equal(onTimeAtd(row,ctx),"16:10");
+  assert.equal(onTimeAtd({...row,dep_estimated:"2026-10-06 16:26"},ctx),"");
+  assert.equal(onTimeAtd({...row,status:"scheduled"},ctx),"");
+  assert.equal(onTimeAtd(row,{...ctx,takeoff:"16:55"}),"");
+  assert.equal(onTimeAtd(row,{...ctx,takeoff:"16:12"}),"");
+  assert.equal(onTimeAtd(row,{...ctx,takeoff:""}),"");
+  assert.equal(onTimeAtd({...row,dep_actual:"2026-10-06 16:12"},ctx),"");
+});
+test("balayage : ATD parti à l'heure écrit avec sa source",async()=>{
+  const e=fakeDb([{identity:"1",flight_number:"1826",airline:"TK",std:"16:10",data_json:JSON.stringify({airline:"TK",flight:"TK1826",std:"16:10",origin:"CDG",takeoff:"16:24"})}]);
+  const rows=[{flight_iata:"TK1826",dep_time:"2026-10-06 16:10",dep_estimated:"2026-10-06 16:10",dep_actual:"",status:"active"}];
+  const r=await sweepFidsToday(e,{nowMs:Date.parse("2026-10-06T14:40:00Z"),fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
+  assert.equal(r.updated,1);assert.equal(e.updates[0].atd,"16:10");assert.equal(e.updates[0].atdSource,"PUBLIC_LIVE:FIDS_ONTIME");
+});
+import {classify} from "./admin-dashboard-native-wrapper.js";
+test("ATD parti à l'heure contredit : vol À CONTRÔLER jusqu'à l'arrivée",()=>{
+  const now={date:"2026-10-06",hhmm:"17:00"};
+  const mk=x=>classify({row:{flight_date:"2026-10-06",flight_number:"1826",std:"16:10"},x:{airline:"TK",flight:"TK1826",std:"16:10",sta:"20:45",atd:"16:20",takeoff:"16:24",gate:"24",reg:"TC-A",atdSource:"PUBLIC_LIVE:FLIGHTSTATS",...x}},now);
+  assert.equal(mk({atdConflict:{from:"16:10",to:"16:20"}}).state,"À CONTRÔLER");
+  assert.ok(mk({atdConflict:{from:"16:10",to:"16:20"}}).missing.includes("ATD à vérifier"));
+  assert.notEqual(mk({}).state,"À CONTRÔLER");
+  assert.notEqual(mk({atdConflict:{from:"16:10",to:"16:20"},ata:"20:50"}).state,"À CONTRÔLER");
+});
