@@ -72,7 +72,8 @@ export async function boardLookup(f,opts){
   const semantic={};
   // L'heure d'un vol parti sur le tableau FR24 est l'heure de décollage (roues), comme sur la page du vol : elle alimente TAKEOFF, jamais ATD (heure de porte, lue sur FlightStats / FlightAware).
   if(row.status==="departed"&&row.time)semantic.takeoff=parisClock(row.time);
-  else if(row.time&&row.status!=="canceled")semantic.etd=parisClock(row.time);
+  // ETD seulement si FR24 a une vraie estimation : sinon l'heure du tableau est la STD, qui écraserait l'ETD donné par une autre source (AT779 : 13:16 / 13:05 en boucle).
+  else if(row.time&&row.time!==row.std&&row.status!=="canceled")semantic.etd=parisClock(row.time);
   if(row.gate)semantic.gate=upper(row.gate);if(row.reg)semantic.reg=upper(row.reg);if(row.type)semantic.aircraft=upper(row.type);
   const has=Object.keys(semantic).length>0||row.fr24Id;
   return {attempt:{source:"FR24BOARD",status:has?"OK":"NO_USABLE_DATA",httpStatus:200,checkedAt:at},semantic,fr24Id:row.fr24Id||""};
