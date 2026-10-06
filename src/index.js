@@ -12947,13 +12947,15 @@ async function handlePrepa(request, env, url) {
 
     const identities=[...new Set(flightRows.map(r=>String(r.identity||"").trim()).filter(Boolean))];
 
+    // Une table facultative absente de cette base (pièces jointes, notes) ne doit pas empêcher la suppression du vol.
+    const optionalDb=async(run)=>{try{return await run()}catch(e){if(/no such table/i.test(String(e?.message||e)))return null;throw e}};
     let deletedR2=0;
     for(const identity of identities){
-      const attachments=(await env.OPS_DB.prepare(`
+      const attachments=(await optionalDb(async()=>(await env.OPS_DB.prepare(`
         SELECT id,r2_key
         FROM flight_attachments
         WHERE flight_identity=?
-      `).bind(identity).all()).results||[];
+      `).bind(identity).all()).results))||[];
 
       if(env.OPS_FILES){
         for(const att of attachments){
@@ -12963,8 +12965,8 @@ async function handlePrepa(request, env, url) {
           }
         }
       }
-      await env.OPS_DB.prepare("DELETE FROM flight_attachments WHERE flight_identity=?").bind(identity).run();
-      await env.OPS_DB.prepare("DELETE FROM flight_notes WHERE flight_identity=?").bind(identity).run();
+      await optionalDb(()=>env.OPS_DB.prepare("DELETE FROM flight_attachments WHERE flight_identity=?").bind(identity).run());
+      await optionalDb(()=>env.OPS_DB.prepare("DELETE FROM flight_notes WHERE flight_identity=?").bind(identity).run());
     }
 
     const fdel=await env.OPS_DB.prepare(`
@@ -12975,12 +12977,12 @@ async function handlePrepa(request, env, url) {
     `).bind(airline,flightNumber,flightDate).run();
     if(fdel?.meta?.changes)await bumpFlightsEpoch(env);
 
-    const pdel=await env.OPS_DB.prepare(`
+    const pdel=await optionalDb(()=>env.OPS_DB.prepare(`
       DELETE FROM prepa_inbox
       WHERE UPPER(airline)=?
         AND UPPER(REPLACE(flight_number,' ',''))=?
         AND flight_date=?
-    `).bind(airline,flightNumber,flightDate).run();
+    `).bind(airline,flightNumber,flightDate).run());
 
     return json({
       ok:true,
@@ -12993,7 +12995,7 @@ async function handlePrepa(request, env, url) {
       neutralized:true,
       driveFolderIds,
       flightsDeleted:Number(fdel.meta?.changes||0),
-      prepaDeleted:Number(pdel.meta?.changes||0),
+      prepaDeleted:Number(pdel?.meta?.changes||0),
       r2Deleted:deletedR2,
       identities
     });
