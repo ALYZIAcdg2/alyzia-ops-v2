@@ -9,6 +9,7 @@ const UI=String.raw`<style id="alyzia-admin-dashboard-v3-css">
 #app .admin-native .adn-log-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
 #app .admin-native .adn-log-head h3{margin:0}
 #app .admin-native .adn-log-btn{border:1px solid #cfe0f1;background:#eef6ff;color:#076fd1;border-radius:10px;padding:7px 10px;font-size:10px;font-weight:950;white-space:nowrap}
+.adn-log-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}.adn-log-filters label{display:flex;align-items:center;gap:6px;font-weight:900;font-size:11px;color:#35506f}.adn-log-filters input,.adn-log-filters select{border:1px solid #cfd9e6;border-radius:9px;padding:7px 9px;font:inherit;font-size:12px}.adn-log-filters input[type=search]{flex:1;min-width:140px}.adn-log-count{font-weight:900;font-size:11px;color:#53708f}
 .adn-log-modal-list{display:grid;gap:7px}.adn-log-modal-row{display:grid;grid-template-columns:90px 85px 70px 1fr;gap:8px;align-items:center;border:1px solid #e3eaf2;border-radius:10px;padding:9px 10px;background:#fbfdff;font-size:10px}.adn-log-modal-row.bad{background:#fff5f6}.adn-log-modal-row.partial{background:#fffaf0}.adn-log-modal-row b{font-size:11px}.adn-log-modal-empty{padding:12px;color:#71839a;font-weight:850}
 @media(max-width:700px){#app .admin-native .adn-search-box{min-width:100%}.adn-log-modal-row{grid-template-columns:75px 70px 1fr}.adn-log-modal-row span:last-child{grid-column:1/-1}}
 </style><script id="alyzia-admin-dashboard-v3-js">(()=>{'use strict';
@@ -26,11 +27,18 @@ function patchFlightBack(){
  [0,30,90,180,350].forEach(ms=>setTimeout(()=>{const b=document.querySelector('#app .flight-back-btn');if(!b||b.dataset.adminReturnPatched)return;b.dataset.adminReturnPatched='1';b.onclick=e=>{e?.preventDefault?.();window.renderAdminDashboard?.()};},ms));
 }
 async function openLogModal(){
- const date=document.getElementById('adminDateInput')?.value; if(!date)return;
+ const date0=document.getElementById('adminDateInput')?.value; if(!date0)return;
  let d=null;try{const r=await fetch('/api/admin/flight-processing',{cache:'no-store'});d=await r.json()}catch{}
- const rows=(d?.flights||[]).filter(x=>x.date===date);
- const body=rows.length?'<div class="adn-log-modal-list">'+rows.map(x=>{const s=String(x.state||'');const c=s==='EN ATTENTE'?'partial':s==='OK'?'':'bad';const last=x.checkedAt?new Date(x.checkedAt).toLocaleString('fr-FR'):'—';return '<div class="adn-log-modal-row '+c+'"><b>'+esc(x.flight||'—')+'</b><span>'+esc(x.destination||'—')+'</span><span>'+esc(s||'—')+'</span><span>DERNIER : '+esc(last)+' · MANQUE : '+esc((x.missing||[]).join(', ')||'—')+'</span></div>'}).join('')+'</div>':'<div class="adn-log-modal-empty">AUCUN VOL POUR CETTE DATE</div>';
- if(typeof showModal==='function')showModal('LOG TRAITEMENT',date,body);
+ const all=d?.flights||[],dates=[...new Set(all.map(x=>x.date))].sort();
+ const rowHtml=x=>{const s=String(x.state||'');const c=s==='EN ATTENTE'?'partial':s==='OK'?'':'bad';const last=x.checkedAt?new Date(x.checkedAt).toLocaleString('fr-FR'):'—';return '<div class="adn-log-modal-row '+c+'"><b>'+esc(x.flight||'—')+'</b><span>'+esc(x.destination||'—')+'</span><span>'+esc(s||'—')+'</span><span>DERNIER : '+esc(last)+' · MANQUE : '+esc((x.missing||[]).join(', ')||'—')+'</span></div>'};
+ const shell='<div class="adn-log-filters"><label>DATE <input type="date" id="adnLogDate" value="'+esc(date0)+'"'+(dates.length?' min="'+esc(dates[0])+'" max="'+esc(dates[dates.length-1])+'"':'')+'></label><input type="search" id="adnLogQ" placeholder="VOL · DESTINATION · MANQUE"><select id="adnLogSt"><option value="">TOUS LES STATUTS</option><option>OK</option><option>EN ATTENTE</option><option>À CONTRÔLER</option><option>NON TRAITÉ</option></select><span id="adnLogCount" class="adn-log-count"></span></div><div id="adnLogList" class="adn-log-modal-list"></div>';
+ if(typeof showModal==='function')showModal('LOG TRAITEMENT',date0,shell);
+ setTimeout(()=>{
+  const dEl=document.getElementById('adnLogDate'),qEl=document.getElementById('adnLogQ'),sEl=document.getElementById('adnLogSt'),list=document.getElementById('adnLogList'),cnt=document.getElementById('adnLogCount');if(!list)return;
+  const paint=()=>{const date=dEl?.value||date0,q=norm(qEl?.value||''),st=sEl?.value||'';const rows=all.filter(x=>x.date===date&&(!st||String(x.state||'')===st)&&(!q||norm([x.flight,x.destination,x.state,(x.missing||[]).join(' ')].join(' ')).includes(q)));
+   if(cnt)cnt.textContent=rows.length+' VOL'+(rows.length>1?'S':'');list.innerHTML=rows.length?rows.map(rowHtml).join(''):'<div class="adn-log-modal-empty">AUCUN VOL POUR CES FILTRES</div>'};
+  [dEl,qEl,sEl].forEach(el=>el&&el.addEventListener('input',paint));paint();
+ },0);
 }
 function enhance(){
  const app=document.getElementById('app');const root=app?.querySelector('.admin-native');if(!root)return;

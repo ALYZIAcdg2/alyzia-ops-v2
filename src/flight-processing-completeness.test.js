@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {classify} from './admin-dashboard-native-wrapper.js';
 import {flightOperationalStatus} from './flight-operational-status.js';
 const now={date:'2026-10-02',hhmm:'04:15'};
-const row=(x,date='2026-10-01')=>classify({row:{flight_date:date,flight_number:x.flight||'NH216'},x:{std:'19:20',sta:'15:55',...x}},now);
+const row=(x,date='2026-10-01')=>classify({row:{flight_date:date,flight_number:x.flight||'NH216'},x:{std:'19:20',sta:'15:55',gate:'28',reg:'JA892A',aircraft:'789',...x}},now);
 test('yesterday departed without ATA remains EN ATTENTE',()=>{
  const r=row({atd:'19:15',status:'DECOLLE'});assert.equal(r.state,'EN ATTENTE');assert.equal(r.flightStatus,'EN VOL');assert.ok(r.missing.includes('ATA'));
 });
@@ -24,4 +24,12 @@ test('actual arrival beats stale departed and planned statuses',()=>{
 });
 test('future schedule needs no actual arrival',()=>{
  const r=row({},'2026-10-03');assert.equal(r.state,'OK');assert.equal(r.missing.includes('ATA'),false);
+});
+
+test('information manquante (porte, immat, type) : EN ATTENTE, y compris pour un vol à venir',()=>{
+  const r=row({gate:'',reg:'',aircraft:''},'2026-10-03');
+  assert.equal(r.state,'EN ATTENTE');assert.deepEqual(r.missing,['GATE','REG','A/C']);
+  assert.equal(row({gate:'—'},'2026-10-03').state,'EN ATTENTE');
+  assert.equal(row({},'2026-10-03').state,'OK');
+  assert.equal(row({status:'CANCELLED',gate:'',reg:''}).state,'OK');
 });
