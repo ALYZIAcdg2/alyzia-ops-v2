@@ -43,6 +43,19 @@ export function plausibleActual(row,{std,takeoff,nowMin,nowMs,sameDay}){
   if(a>0&&t>0){const d=(a-t)/60;if(d<-60||d>1440||a*1000>nowMs+60000)return false;return sameDay?plausibleAtd(hhmm(row.dep_actual),{std,takeoff,nowMin:null}):true}
   return sameDay&&plausibleAtd(hhmm(row.dep_actual),{std,takeoff,nowMin});
 }
+// Vol parti « à l'heure » : le flux le dit parti (active / landed), sans heure réelle, avec une heure estimée identique à la STD, et notre décollage
+// (tableau FR24) tombe 5 à 35 min après la STD (le roulage). Dans ce cas seulement, ATD = STD, provisoire : toute autre source qui donne autre chose
+// remplace la valeur et met le vol « À CONTRÔLER ».
+export function onTimeAtd(row,{std,takeoff,nowMin,date}){
+  if(!std||!takeoff||clean(row?.dep_actual))return "";
+  if(!["ACTIVE","LANDED"].includes(upper(row?.status)))return "";
+  if(!clean(row?.dep_time).startsWith(date)||!clean(row?.dep_estimated).startsWith(date))return "";
+  if(hhmm(row.dep_estimated)!==hhmm(row.dep_time)||hhmm(row.dep_time)!==std)return "";
+  const s=mins(std),t=mins(takeoff);if(s==null||t==null)return "";
+  let d=t-s;if(d<-720)d+=1440;if(d<5||d>35)return "";
+  if(nowMin!=null&&s>nowMin+1)return "";
+  return std;
+}
 export function pickFeedRow(index,{designator,std}){return (index.get(upper(designator))||[]).filter(r=>hhmm(r.dep_time)===std).sort((a,b)=>(upper(b.flight_iata)===upper(designator))-(upper(a.flight_iata)===upper(designator)))[0]||null}
 
 export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
@@ -63,12 +76,14 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
       const std=hhmm(x.std||r.std),row=pickFeedRow(index,{designator,std}),key=designator+"|"+std,isToday=date===today;
       if(!row){if(isToday)per[key]="NOT_TRACKED";continue}
       matched++;const act=clean(row.dep_actual);if(isToday)per[key]=act?"OK":"NO_USABLE_DATA";
-      const atd=act?hhmm(act):"";if(!atd)continue;
+      let atd=act?hhmm(act):"",onTime=false;
+      if(!atd&&isToday&&!clean(x.atd)&&!manual(x,"atd")){atd=onTimeAtd(row,{std,takeoff:hhmm(x.takeoff),nowMin,date});onTime=Boolean(atd);if(onTime)per[key]="OK"}
+      if(!atd)continue;
       if(manual(x,"atd")||(clean(x.atd)&&!/FIDS/.test(upper(x.atdSource))))continue;
       if(clean(x.atd)===atd)continue;
-      if(!plausibleActual(row,{std,takeoff:act.startsWith(date)?hhmm(x.takeoff):"",nowMin,nowMs,sameDay:act.startsWith(date)})){rejected++;continue}
-      const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"atd",from:clean(x.atd),to:atd});
-      x.flightInfoLog=log.slice(0,240);x.atd=atd;x.atdSource="PUBLIC_LIVE:FIDS";x.atdUpdatedAt=at;updated++;
+      if(!onTime&&!plausibleActual(row,{std,takeoff:act.startsWith(date)?hhmm(x.takeoff):"",nowMin,nowMs,sameDay:act.startsWith(date)})){rejected++;continue}
+      const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:onTime?"PUBLIC_LIVE:FIDS_ONTIME":"PUBLIC_LIVE:FIDS",field:"atd",from:clean(x.atd),to:atd});
+      x.flightInfoLog=log.slice(0,240);x.atd=atd;x.atdSource=onTime?"PUBLIC_LIVE:FIDS_ONTIME":"PUBLIC_LIVE:FIDS";x.atdUpdatedAt=at;delete x.atdConflict;updated++;
       if(!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
     }
   }
