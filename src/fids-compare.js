@@ -16,8 +16,9 @@ export function indexFeed(rows){
   }
   return idx;
 }
-export function compareFlights(flights,rows){
-  const idx=indexFeed(rows),out={flights:flights.length,matched:0,feedActual:0,bothAtd:0,gain:0,vsAtd:{},vsTakeoff:{},gateBoth:0,gateSame:0,ata:{feedActual:0,bothAta:0,gain:0,vsAta:{},vsLanding:{},examples:{gain:[],diffAta:[]}},unmatched:[],examples:{gain:[],farFromAtd:[],gateDiff:[]}};
+// date (AAAA-MM-JJ) : ne garde que les lignes du flux de ce jour, comme le passage d'écriture ; sans date, toutes les lignes.
+export function compareFlights(flights,rows,date=""){
+  const idx=indexFeed(date?(Array.isArray(rows)?rows:[]).filter(r=>clean(r?.dep_time).startsWith(date)):rows),out={flights:flights.length,matched:0,feedActual:0,bothAtd:0,gain:0,vsAtd:{},vsTakeoff:{},gateBoth:0,gateSame:0,ata:{feedActual:0,bothAta:0,gain:0,vsAta:{},vsLanding:{},examples:{gain:[],diffAta:[]}},unmatched:[],examples:{gain:[],farFromAtd:[],gateDiff:[]}};
   const bump=(o,d)=>{const k=d==null?"?":Math.abs(d)<=1?"0..1":Math.abs(d)<=3?"2..3":Math.abs(d)<=10?"4..10":">10";o[k]=(o[k]||0)+1};
   for(const f of flights){
     const c=(idx.get(upper(f.designator))||[]).filter(r=>hhmm(r.dep_time)===hhmm(f.std));
@@ -43,11 +44,11 @@ export function feedWindow(rows){
   for(const r of a){const h=hhmm(r?.dep_time).slice(0,2);if(!h)continue;const o=byHour[h]||(byHour[h]={rows:0,actual:0});o.rows++;if(clean(r.dep_actual))o.actual++}
   return {first:times[0]||null,last:times[times.length-1]||null,byHour};
 }
-export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now(),flight=""}={}){
+export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now(),flight="",date:dateParam=""}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const r=await fetchImpl(URL_,{headers:{accept:"application/json","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow"});
   if(r.status!==200)return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"HTTP_"+r.status};
-  const rows=await r.json(),date=parisDate(nowMs);
+  const rows=await r.json(),date=/^\d{4}-\d{2}-\d{2}$/.test(dateParam)?dateParam:parisDate(nowMs);
   const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
   const flights=[];
   for(const x of results){let d={};try{d=JSON.parse(x.data_json||"{}")}catch{continue}
@@ -67,6 +68,6 @@ export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now(),fligh
     return ok?{reason:"DEVRAIT ÊTRE ÉCRIT au prochain passage",feedActual:hhmm(act)}:{reason:"refusé par le contrôle de plausibilité",feedActual:hhmm(act),std:f.std,takeoff:f.takeoff,dep_time_ts:row.dep_time_ts,dep_actual_ts:row.dep_actual_ts};
   };
   const lastRun=want?await loadFidsState(env):null;
-  const explain=want?{flight:want,lastFidsRun:lastRun?.at||null,lastFidsStatus:lastRun?.status||null,decisions:flights.filter(f=>upper(f.designator)===want).map(f=>({std:f.std,...decide(f)})),ours:flights.filter(f=>upper(f.designator)===want),feed:(indexFeed(rows).get(want)||[]).map(r=>({flight_iata:r.flight_iata,cs_flight_iata:r.cs_flight_iata,dep_time:r.dep_time,dep_estimated:r.dep_estimated,dep_actual:r.dep_actual,status:r.status,dep_gate:r.dep_gate,arr_iata:r.arr_iata}))}:undefined;
-  return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,explain,feedWindow:feedWindow(rows),...compareFlights(flights,rows)};
+  const explain=want?{flight:want,date,lastFidsRun:lastRun?.at||null,lastFidsStatus:lastRun?.status||null,decisions:flights.filter(f=>upper(f.designator)===want).map(f=>({std:f.std,...decide(f)})),ours:flights.filter(f=>upper(f.designator)===want),feed:(indexFeed(rows).get(want)||[]).map(r=>({flight_iata:r.flight_iata,cs_flight_iata:r.cs_flight_iata,dep_time:r.dep_time,dep_estimated:r.dep_estimated,dep_actual:r.dep_actual,status:r.status,dep_gate:r.dep_gate,arr_iata:r.arr_iata}))}:undefined;
+  return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,explain,feedWindow:feedWindow(rows),...compareFlights(flights,rows,date)};
 }
