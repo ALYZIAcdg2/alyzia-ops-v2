@@ -38,16 +38,22 @@ export async function runTimesCompare(env,{limit=12,offset=0,all=false,nowMs=Dat
   const rows=await mapLimit(slice,3,async f=>{
     const x=f.raw,zoneDest=AIRPORT_TZ[f.destination]||"Europe/Paris";
     const b=board.index?matchRow(board.index,f):null,fd=pickFeedRow(fidsIndex,{designator:f.designator,std:f.std});
-    let s={};try{const r=await fr24(f);s=r?.candidates?.semantic||{}}catch{}
+    let s={},fr24Status="";try{const r=await fr24(f);s=r?.candidates?.semantic||{};fr24Status=clean(r?.status)||(Object.keys(s).length?"OK":"EMPTY")}catch(e){fr24Status="ERROR "+clean(e?.message).slice(0,60)}
     const etd={ours:hhmm(x.etd||x.edt),oursSource:clean(x.etdSource),board:b?clockOf(b.time,"Europe/Paris"):"",fids:hhmm(fd?.dep_estimated),fr24:s.etd?clockOf(s.etd,"Europe/Paris"):""};
     const eta={ours:hhmm(x.eta),oursSource:clean(x.etaSource),fids:hhmm(fd?.arr_estimated),fr24:s.eta?clockOf(s.eta,zoneDest):""};
     const departed=Boolean(clean(x.atd)||clean(x.takeoff));
-    return {flight:f.designator,std:f.std,dest:f.destination,departed,etd:{...etd,...spread({ours:etd.ours,board:etd.board,fids:etd.fids,fr24:etd.fr24})},eta:{...eta,...spread({ours:eta.ours,fids:eta.fids,fr24:eta.fr24})}};
+    // Vol parti : l'heure du tableau est le décollage et dep_estimated de FIDS l'heure de porte ; on les compare à notre décollage / ATD, pas à l'ETD.
+    const out={flight:f.designator,std:f.std,dest:f.destination,departed,fr24Status,eta:{...eta,...spread({ours:eta.ours,fids:eta.fids,fr24:eta.fr24})}};
+    if(departed){
+      out.takeoff={ours:hhmm(x.takeoff),board:etd.board,...spread({ours:hhmm(x.takeoff),board:etd.board},3)};
+      out.atd={ours:hhmm(x.atd),oursSource:clean(x.atdSource),fids:etd.fids,...spread({ours:hhmm(x.atd),fids:etd.fids},3)};
+    }else out.etd={...etd,...spread({ours:etd.ours,board:etd.board,fids:etd.fids,fr24:etd.fr24})};
+    return out;
   });
-  const sum=k=>({compared:rows.filter(r=>r[k].sources>=2).length,flagged:rows.filter(r=>r[k].flag).length});
-  // Pour l'ETD, seuls les vols pas encore partis comptent (après le départ l'ETD n'a plus d'enjeu).
-  const etdRows=rows.filter(r=>!r.departed);
+  const sum=(list,k)=>({compared:list.filter(r=>r[k]?.sources>=2).length,flagged:list.filter(r=>r[k]?.flag).length});
+  const pre=rows.filter(r=>!r.departed),post=rows.filter(r=>r.departed);
   return {ok:true,mode:"TIMES_COMPARE_NO_WRITE",date,at,statuses:{board:board.status,fids:feed.status},eligible:inWindow.length,windowFrom:all?null:Math.max(0,nowParis-180),read:rows.length,offset,
-    etd:{compared:etdRows.filter(r=>r.etd.sources>=2).length,flagged:etdRows.filter(r=>r.etd.flag).length},eta:sum("eta"),
-    flaggedFlights:rows.filter(r=>(!r.departed&&r.etd.flag)||r.eta.flag),rows};
+    fr24Reads:rows.reduce((o,r)=>{o[r.fr24Status]=(o[r.fr24Status]||0)+1;return o},{}),
+    etdAvantDepart:sum(pre,"etd"),eta:sum(rows,"eta"),takeoffApresDepart:sum(post,"takeoff"),atdApresDepart:sum(post,"atd"),
+    flaggedFlights:rows.filter(r=>r.etd?.flag||r.eta.flag||r.takeoff?.flag||r.atd?.flag),rows};
 }

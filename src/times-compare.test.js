@@ -15,7 +15,7 @@ test("compare nos valeurs, FIDS et FR24 par vol",async()=>{
   const r=await runTimesCompare(env,{nowMs:Date.parse("2026-10-06T14:00:00Z"),fr24,fetchImpl:async u=>String(u).includes("fids")?new Response(JSON.stringify(feed),{status:200}):new Response("x",{status:403})});
   const f=r.rows[0];
   assert.equal(f.etd.fr24,"16:26");assert.equal(f.etd.fids,"16:00");assert.equal(f.etd.flag,true);assert.equal(f.etd.maxGap,26);
-  assert.equal(r.etd.flagged,1);assert.equal(r.flaggedFlights.length,1);
+  assert.equal(r.etdAvantDepart.flagged,1);assert.equal(r.flaggedFlights.length,1);
 });
 test("par défaut, seuls les vols des 3 dernières heures ou à venir",async()=>{
   const mk=(n,std)=>({identity:n,flight_date:"2026-10-06",flight_number:n,airline:"AF",std,data_json:JSON.stringify({airline:"AF",flight:"AF"+n,origin:"CDG",destination:"LHR",std})});
@@ -26,4 +26,11 @@ test("par défaut, seuls les vols des 3 dernières heures ou à venir",async()=>
   assert.deepEqual(r.rows.map(x=>x.flight),["AF2","AF3"]);
   const a=await runTimesCompare(env,{nowMs:now,fr24,fetchImpl,all:true});
   assert.equal(a.rows.length,3);
+});
+test("vol parti : décollage et ATD comparés, pas l'ETD",async()=>{
+  const row={identity:"1",flight_date:"2026-10-06",flight_number:"1001",airline:"AH",std:"15:30",data_json:JSON.stringify({airline:"AH",flight:"AH1001",origin:"CDG",destination:"ALG",std:"15:30",etd:"15:55",takeoff:"16:35",atd:"16:16"})};
+  const env={OPS_DB:{prepare:()=>({bind:()=>({all:async()=>({results:[row]})})})}};
+  const feed=[{flight_iata:"AH1001",dep_time:"2026-10-06 15:30",dep_estimated:"2026-10-06 16:16",status:"active"}];
+  const r=await runTimesCompare(env,{nowMs:Date.parse("2026-10-06T17:30:00Z"),fr24:async()=>({candidates:{semantic:{}}}),all:true,fetchImpl:async u=>String(u).includes("fids")?new Response(JSON.stringify(feed),{status:200}):new Response("x",{status:403})});
+  const f=r.rows[0];assert.equal(f.etd,undefined);assert.equal(f.atd.fids,"16:16");assert.equal(f.atd.flag,false);assert.equal(r.etdAvantDepart.flagged,0);assert.equal(r.fr24Reads.EMPTY,1);
 });
