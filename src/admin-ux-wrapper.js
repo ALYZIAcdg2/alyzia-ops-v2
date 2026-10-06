@@ -26,7 +26,7 @@ let page=1,sig='',view='main',queued=false;
 const root=()=>document.querySelector('#app .admin-native');
 const rows=r=>[...r.querySelectorAll('.adn-table tbody tr')];
 
-const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FR24BOARD','TB','FR24 tableau CDG'],['FLIGHTAWARE','FA','FlightAware'],['PLANEFINDER','PF','PlaneFinder'],['SKYSCANNER','SK','Skyscanner']];
+const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FR24BOARD','TB','FR24 tableau CDG'],['FIDS','FD','FIDS flightradar.live'],['FLIGHTAWARE','FA','FlightAware'],['PLANEFINDER','PF','PlaneFinder'],['SKYSCANNER','SK','Skyscanner']];
 const LAB={OK:'Lu avec succès',COOLDOWN:'En pause (limite atteinte récemment)',BLOCKED:'Bloqué par le site',NO_USABLE_DATA:'Page lue, aucune donnée utile',NOT_TRACKED:'Vol non suivi par cette source',NO_OCCURRENCE_URL:'Pas de page pour ce jour',FR24_NO_USABLE_DATA:'Aucune donnée exploitable',TIMEOUT:'Délai dépassé',FETCH_ERROR:'Erreur réseau',OCCURRENCE_MISMATCH:'Autre jour du même vol',HTTP_ERROR:'Erreur du site',NO_SOURCE:'Source non utilisée'};
 function kind(a){if(!a)return 'none';if(a.st==='OK')return 'ok';if(a.h===403||a.h===429||a.st==='BLOCKED'||a.st==='COOLDOWN')return 'block';if(/NO_USABLE|NOT_TRACKED|NO_OCCURRENCE|NO_SOURCE|MISMATCH/.test(a.st))return 'none';return 'err'}
 function label(a){let t=LAB[a.st]||a.st;if(a.h===403)t='Refusé (403) : trop de requêtes ou blocage';else if(a.h===429)t='Trop de requêtes (429) : patienter';else if(a.h&&a.st==='HTTP_ERROR')t='Erreur du site (HTTP '+a.h+')';return t}
