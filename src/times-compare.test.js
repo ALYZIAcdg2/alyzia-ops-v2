@@ -17,3 +17,13 @@ test("compare nos valeurs, FIDS et FR24 par vol",async()=>{
   assert.equal(f.etd.fr24,"16:26");assert.equal(f.etd.fids,"16:00");assert.equal(f.etd.flag,true);assert.equal(f.etd.maxGap,26);
   assert.equal(r.etd.flagged,1);assert.equal(r.flaggedFlights.length,1);
 });
+test("par défaut, seuls les vols des 3 dernières heures ou à venir",async()=>{
+  const mk=(n,std)=>({identity:n,flight_date:"2026-10-06",flight_number:n,airline:"AF",std,data_json:JSON.stringify({airline:"AF",flight:"AF"+n,origin:"CDG",destination:"LHR",std})});
+  const env={OPS_DB:{prepare:()=>({bind:()=>({all:async()=>({results:[mk("1","08:00"),mk("2","15:30"),mk("3","19:00")]})})})}};
+  const fr24=async()=>({candidates:{semantic:{}}});const fetchImpl=async()=>new Response("x",{status:403});
+  const now=Date.parse("2026-10-06T16:00:00Z"); // 18:00 Paris : fenêtre depuis 15:00
+  const r=await runTimesCompare(env,{nowMs:now,fr24,fetchImpl});
+  assert.deepEqual(r.rows.map(x=>x.flight),["AF2","AF3"]);
+  const a=await runTimesCompare(env,{nowMs:now,fr24,fetchImpl,all:true});
+  assert.equal(a.rows.length,3);
+});

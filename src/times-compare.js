@@ -20,7 +20,7 @@ export function spread(values,threshold=5){
 }
 async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{for(;;){const i=next++;if(i>=items.length)return;out[i]=await fn(items[i])}}));return out}
 
-export async function runTimesCompare(env,{limit=12,offset=0,nowMs=Date.now(),fetchImpl=fetch,fr24=fetchFr24Public}={}){
+export async function runTimesCompare(env,{limit=12,offset=0,all=false,nowMs=Date.now(),fetchImpl=fetch,fr24=fetchFr24Public}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const date=parisDate(nowMs),at=new Date(nowMs).toISOString();
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS' ORDER BY std,flight_number`).bind(date).all();
@@ -30,7 +30,10 @@ export async function runTimesCompare(env,{limit=12,offset=0,nowMs=Date.now(),fe
     const airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
     flights.push({date,airline,number,designator,origin:"CDG",destination:upper(x.destination||x.dest||""),std:hhmm(x.std||r.std),raw:x});
   }
-  const slice=flights.slice(Math.max(0,offset),Math.max(0,offset)+Math.min(25,Math.max(1,limit)));
+  // Par défaut : vols dont la STD est dans les 3 dernières heures ou à venir (la fenêtre du tableau FR24 et du flux FIDS) ; all=1 pour tous.
+  const nowParis=(()=>{const p=Object.fromEntries(new Intl.DateTimeFormat("fr-FR",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(nowMs)).map(x=>[x.type,x.value]));return +p.hour*60+ +p.minute})();
+  const inWindow=all?flights:flights.filter(f=>{const m=mins(f.std);return m==null||m>=nowParis-180});
+  const slice=inWindow.slice(Math.max(0,offset),Math.max(0,offset)+Math.min(25,Math.max(1,limit)));
   const board=await getBoard({fetchImpl,nowMs}),feed=await getFeed({fetchImpl,nowMs}),fidsIndex=feed.rows?indexFeed(feed.rows,date):new Map();
   const rows=await mapLimit(slice,3,async f=>{
     const x=f.raw,zoneDest=AIRPORT_TZ[f.destination]||"Europe/Paris";
@@ -44,7 +47,7 @@ export async function runTimesCompare(env,{limit=12,offset=0,nowMs=Date.now(),fe
   const sum=k=>({compared:rows.filter(r=>r[k].sources>=2).length,flagged:rows.filter(r=>r[k].flag).length});
   // Pour l'ETD, seuls les vols pas encore partis comptent (après le départ l'ETD n'a plus d'enjeu).
   const etdRows=rows.filter(r=>!r.departed);
-  return {ok:true,mode:"TIMES_COMPARE_NO_WRITE",date,at,statuses:{board:board.status,fids:feed.status},eligible:flights.length,read:rows.length,offset,
+  return {ok:true,mode:"TIMES_COMPARE_NO_WRITE",date,at,statuses:{board:board.status,fids:feed.status},eligible:inWindow.length,windowFrom:all?null:Math.max(0,nowParis-180),read:rows.length,offset,
     etd:{compared:etdRows.filter(r=>r.etd.sources>=2).length,flagged:etdRows.filter(r=>r.etd.flag).length},eta:sum("eta"),
     flaggedFlights:rows.filter(r=>(!r.departed&&r.etd.flag)||r.eta.flag),rows};
 }
