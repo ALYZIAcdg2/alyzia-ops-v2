@@ -26,3 +26,15 @@ test("ETD = STD écrit par le tableau : remet l'ancien ETD, ou le retire",async(
   await sweepBoardToday(e2,{nowMs:NOW,fetchImpl:fetchOf([mk()])});
   const s2=JSON.parse(e2.writes[0][0]);assert.equal(s2.etd,undefined);assert.equal(s2.etdSource,undefined);
 });
+test("tableau revenu à la STD : l'ETD qui venait du tableau est retiré, pas celui d'une autre source",async()=>{
+  __reset();
+  const base={gate:"M24",reg:"F-GSPL",aircraftActual:"772"};
+  const e=env([row({...base,etd:"13:14",etdSource:"PUBLIC_LIVE:FR24BOARD"})]);
+  const r=await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});
+  const saved=JSON.parse(e.writes[0][0]);assert.equal(saved.etd,undefined);assert.equal(saved.etdSource,undefined);assert.equal(r.counts.etdCleared,1);
+  assert.equal(saved.flightInfoLog[0].to,"");
+  __reset();
+  const e2=env([row({...base,etd:"13:14",etdSource:"PUBLIC_ETD:FR24"})]);
+  await sweepBoardToday(e2,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});
+  assert.equal(e2.writes.length,0);
+});

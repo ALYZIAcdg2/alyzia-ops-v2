@@ -126,7 +126,7 @@ export default {
     }
     if(url.pathname==="/api/admin/fids-widget-test"&&request.method==="GET"){
       // Lecture seule : script du widget FIDS flightradar.live (CDG départs) et ses adresses de données.
-      try{return json(await runFidsWidgetTest({flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json(await runFidsWidgetTest({flight:url.searchParams.get("flight")||"",dest:url.searchParams.get("dest")||"",std:url.searchParams.get("std")||"",date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/flightera-board-test"&&request.method==="GET"){
       // Lecture seule : une page du tableau des départs Flightera de CDG, pour voir si elle répond depuis le Worker.
