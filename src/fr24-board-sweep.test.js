@@ -13,3 +13,16 @@ test("saisie manuelle jamais touchée",async()=>{__reset();const e=env([row({gat
 test("rien ne change : aucune écriture",async()=>{__reset();const e=env([row({gate:"M24",reg:"F-GSPL",aircraftActual:"772",takeoff:"13:25",takeoffSource:"PUBLIC_LIVE:FR24BOARD"})]);const r=await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk()])});assert.equal(e.writes.length,0);assert.equal(r.updated,0)});
 test("vol pas encore parti : ETD",async()=>{__reset();const e=env([row({gate:"M24",reg:"F-GSPL",aircraftActual:"772"})]);await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"}})])});const s=JSON.parse(e.writes[0][0]);assert.equal(s.etd,"13:25");assert.equal(s.takeoff,undefined)});
 test("tableau en pause : rien lu",async()=>{__reset();const e=env([row({})]);const r=await sweepBoardToday(e,{nowMs:NOW,fetchImpl:async()=>new Response("x",{status:403})});assert.equal(r.checked,0);assert.equal(e.writes.length,0)});
+test("ETD = STD écrit par le tableau : remet l'ancien ETD, ou le retire",async()=>{
+  __reset();
+  const mkLog=from=>[{at:"x",source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from,to:"13:00"}];
+  const base={gate:"M24",reg:"F-GSPL",aircraftActual:"772",takeoff:"13:25",takeoffSource:"PUBLIC_LIVE:FR24BOARD",etd:"13:00",etdSource:"PUBLIC_LIVE:FR24BOARD"};
+  const e=env([row({...base,flightInfoLog:mkLog("13:16")})]);
+  const r=await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk()])});
+  const saved=JSON.parse(e.writes[0][0]);
+  assert.equal(saved.etd,"13:16");assert.equal(saved.etdSource,"PUBLIC_LIVE:ETD_RESTORED");assert.equal(r.counts.etdRestored,1);
+  __reset();
+  const e2=env([row({...base,flightInfoLog:mkLog("")})]);
+  await sweepBoardToday(e2,{nowMs:NOW,fetchImpl:fetchOf([mk()])});
+  const s2=JSON.parse(e2.writes[0][0]);assert.equal(s2.etd,undefined);assert.equal(s2.etdSource,undefined);
+});
