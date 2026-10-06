@@ -34,3 +34,12 @@ test("vol parti : décollage et ATD comparés, pas l'ETD",async()=>{
   const r=await runTimesCompare(env,{nowMs:Date.parse("2026-10-06T17:30:00Z"),fr24:async()=>({candidates:{semantic:{}}}),all:true,fetchImpl:async u=>String(u).includes("fids")?new Response(JSON.stringify(feed),{status:200}):new Response("x",{status:403})});
   const f=r.rows[0];assert.equal(f.etd,undefined);assert.equal(f.atd.fids,"16:16");assert.equal(f.atd.flag,false);assert.equal(r.etdAvantDepart.flagged,0);assert.equal(r.fr24Reads.EMPTY,1);
 });
+test("l'identifiant FR24 du tableau est transmis à la lecture par vol",async()=>{
+  let seen=null;
+  const row={identity:"1",flight_date:"2026-10-06",flight_number:"789",airline:"AT",std:"18:30",data_json:JSON.stringify({airline:"AT",flight:"AT789",origin:"CDG",destination:"CMN",std:"18:30"})};
+  const env={OPS_DB:{prepare:()=>({bind:()=>({all:async()=>({results:[row]})})})}};
+  const std=Date.parse("2026-10-06T16:30:00Z")/1000;
+  const page=`<div data-page="${JSON.stringify({props:{flights:[{flightNumber:"AT789",status:{name:"estimated"},scheduledTime:std,estimatedTime:std,flightId:"abc123",gate:"A1"}],meta:{hasMoreNextData:false}}}).replace(/&/g,"&amp;").replace(/"/g,"&quot;")}"></div>`;
+  await runTimesCompare(env,{nowMs:Date.parse("2026-10-06T18:40:00Z"),all:true,fr24:async f=>{seen=f.raw?.fr24OccurrenceId;return {candidates:{semantic:{}}}},fetchImpl:async u=>String(u).includes("flightradar24")?new Response(page,{status:200}):new Response("x",{status:403})});
+  assert.equal(seen,"abc123");
+});
