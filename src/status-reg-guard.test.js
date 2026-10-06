@@ -238,3 +238,9 @@ test("vol arrivé sans ATD : relu avant les vols sans enjeu, pas avant les vols 
   assert.equal(priority({std:"11:15"},{...landed,publicLiveBackfill:{checkedAt:iso(-3)}},900,now)[0]>1.6,true);
   assert.equal(priority({std:"11:15"},{...landed,atd:"11:20",reg:"F-GSPL"},900,now)[0]>1.6,true);
 });
+test("vol de la veille arrivé mais sans ATD : encore relu",async()=>{const {needsLiveRead}=await import("./ops-public-live-flow-optimized.js");
+  assert.equal(needsLiveRead("2026-10-05","2026-10-06",{ata:"13:14",atd:""}),true);
+  assert.equal(needsLiveRead("2026-10-05","2026-10-06",{ata:"13:14",atd:"11:20"}),false);
+  assert.equal(needsLiveRead("2026-10-05","2026-10-06",{atd:"11:20"}),true);
+  assert.equal(needsLiveRead("2026-10-06","2026-10-06",{ata:"13:14",reg:"F-GSPL",aircraft:"320"}),false);
+});
