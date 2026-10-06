@@ -4,6 +4,7 @@ const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, l
 const JS_URL="https://fids.flightradar.live/static/js/flight-status-min.js?v=20260525.1";
 const PAGE_URL="https://flightradar.live/en/flights/eur/fr/paris-charles-de-gaulle-airport-cdg-departures/";
 const clean=v=>String(v??"").replace(/\s+/g," ").trim();
+const upper=v=>clean(v).toUpperCase();
 const WALL=/just a moment|verify you are human|captcha|access denied|unusual traffic|cf-chl|login/i;
 
 export function extractEndpoints(js){
@@ -35,7 +36,7 @@ async function probeSchedule(fetchImpl){
     return {url,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),...(rows?summariseSchedule(rows):{sample:clean(p.text).slice(0,200)})};
   }catch(e){return {url,error:String(e?.message||e).slice(0,120)}}
 }
-export async function runFidsWidgetTest({fetchImpl=fetch}={}){
+export async function runFidsWidgetTest({fetchImpl=fetch,flight=""}={}){
   const out={ok:true,mode:"FIDS_WIDGET_TEST_NO_WRITE",jsUrl:JS_URL};
   try{
     const {r,text}=await get(fetchImpl,JS_URL,"*/*");
@@ -43,8 +44,13 @@ export async function runFidsWidgetTest({fetchImpl=fetch}={}){
     if(r.status!==200)return {...out,verdict:"HTTP_"+r.status,sample:clean(text).slice(0,300)};
     const eps=extractEndpoints(text);out.endpoints=eps;
     out.fieldHints=["atd","actual","takeoff","gate","reg","aircraft","status","estimated","scheduled"].filter(k=>new RegExp(k,"i").test(text));
-    out.snippets=["api/schedules","flight_type","fetch(","XMLHttpRequest","actual"].map(k=>{const i=text.indexOf(k);return i<0?null:{key:k,text:text.slice(Math.max(0,i-300),i+500)}}).filter(Boolean);
+    out.snippets=["api/schedules","flight_type","fetch(","XMLHttpRequest","actual","flight-tracker"].map(k=>{const i=text.indexOf(k);return i<0?null:{key:k,text:text.slice(Math.max(0,i-300),i+500)}}).filter(Boolean);
     out.schedule=await probeSchedule(fetchImpl);
+    const fl=upper(flight).replace(/[^A-Z0-9]/g,"");
+    if(fl){out.tracker=[];for(const u of [`https://flightradar.live/en/flight-tracker/${fl}/`,`https://fids.flightradar.live/flight-status/${fl}`,`https://fids.flightradar.live/api/flight/${fl}`,`https://fids.flightradar.live/api/schedules/flight/${fl}`]){
+      try{const p=await get(fetchImpl,u,"text/html,application/json,*/*");let shape=null;try{shape=keysOf(JSON.parse(p.text))}catch{}
+        out.tracker.push({url:u,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),shape,hasActual:/actual|dep_actual|takeoff/i.test(p.text),sample:shape?undefined:clean(p.text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi," ")).slice(0,500)})}
+      catch(e){out.tracker.push({url:u,error:String(e?.message||e).slice(0,120)})}}}
     out.probes=[];
     const cands=eps.filter(u=>/api|data|flight|fids/i.test(u)&&!/\.js(\?|$)/i.test(u)).slice(0,3);
     for(const e of cands){
