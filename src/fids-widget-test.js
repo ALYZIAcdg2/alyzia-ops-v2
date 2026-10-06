@@ -30,6 +30,7 @@ export async function runFidsWidgetTest({fetchImpl=fetch}={}){
     if(r.status!==200)return {...out,verdict:"HTTP_"+r.status,sample:clean(text).slice(0,300)};
     const eps=extractEndpoints(text);out.endpoints=eps;
     out.fieldHints=["atd","actual","takeoff","gate","reg","aircraft","status","estimated","scheduled"].filter(k=>new RegExp(k,"i").test(text));
+    out.snippets=["api/schedules","flight_type","fetch(","XMLHttpRequest","actual"].map(k=>{const i=text.indexOf(k);return i<0?null:{key:k,text:text.slice(Math.max(0,i-300),i+500)}}).filter(Boolean);
     out.probes=[];
     const cands=eps.filter(u=>/api|data|flight|fids/i.test(u)&&!/\.js(\?|$)/i.test(u)).slice(0,3);
     for(const e of cands){
