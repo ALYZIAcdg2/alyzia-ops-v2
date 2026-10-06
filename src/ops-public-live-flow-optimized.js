@@ -1,4 +1,4 @@
-import {guardDepartureClock,zoneOffsetMinutes} from "./local-time-guard.js";
+import {guardDepartureClock,guardArrivalClock,zoneOffsetMinutes} from "./local-time-guard.js";
 import {isWebWordRegistration,isJunkRegistration} from "./registration-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {boardLookup,gateValue} from "./fr24-board.js";
@@ -231,6 +231,12 @@ export function confirmation(map,field,value){
   const sources=Object.entries(map||{}).filter(([,v])=>{const b=clockMin(v?.[field]);if(b===null)return false;let d=Math.abs(a-b);if(d>720)d=1440-d;return d<=2}).map(([k])=>k);
   return {confirmed:sources.length>=2,sources};
 }
+// ETA / atterrissage / ATA lus en heure de l'origine (page en heure de Paris) : convertis en heure locale de destination d'après la durée de vol prévue (STD -> STA).
+function arrivalLocal(h,current,f){
+  if(!h?.value)return h;
+  const g=guardArrivalClock(h.value,{std:current.std||f.std,sta:current.sta,date:f.date,originZone:AIRPORT_TZ[upper(f.origin)]||"Europe/Paris",destZone:AIRPORT_TZ[upper(f.destination)]||"Europe/Paris"});
+  return g.status==="SHIFTED"?{...h,value:g.value,source:`${h.source}+DEST_LOCAL`}:h;
+}
 function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   // Departure clocks must be local to the origin: a UTC reading (more than 50 min before STD) is shifted, an impossible one refused.
   if(field==="atd"||field==="takeoff"){const g=guardDepartureClock(hit.value,x.std,x.activeDate||x.date,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris");if(g.status==="REJECTED")return false;if(g.status==="SHIFTED")hit={...hit,value:g.value,source:`${hit.source}+LOCALIZED`}}
@@ -327,7 +333,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
    if(e&&!clean(current.atd)&&!clean(current.takeoff)&&!manual(current,"etd")&&from!==e&&(!from||own||stale)){const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from,to:e});current.flightInfoLog=log.slice(0,240);current.etd=e;current.edt=e;current.etdSource="PUBLIC_LIVE:FR24BOARD";current.etdUpdatedAt=at;current.etdTimeBasis="CDG_LOCAL";changed=true}}
   // Porte du tableau FR24 : source de référence pour CDG, relue à chaque passage ; elle remplace une autre porte si elle change (jamais une saisie manuelle).
   {const g=upper(map.FR24BOARD?.gate),from=gateValue(current);if(g&&!manual(current,"gate")&&from!==g){const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"gate",from,to:g});current.flightInfoLog=log.slice(0,240);current.gate=g;current.gateSource="PUBLIC_LIVE:FR24BOARD";current.gateUpdatedAt=at;changed=true}}
-  const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),landing=choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),ata=choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
+  const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=arrivalLocal(choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),current,f),landing=arrivalLocal(choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),current,f),ata=arrivalLocal(choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),current,f),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   // Une immatriculation / un type venant de FR24 (tableau ou page du vol) n'est jamais remplacé par une page publique lue en texte (PlaneFinder, Skyscanner, FlightStats) : D-AIHV s'était ainsi copié sur plusieurs vols.
   const fr24Own=src=>/FR24/.test(upper(src));if(!fr24Own(reg.source)&&clean(current.reg||current.registration)&&!isJunkRegistration(current.reg||current.registration)&&fr24Own(current.regSource))reg.value="";if(!fr24Own(ac.source)&&clean(current.aircraftActual)&&fr24Own(current.aircraftActualSource))ac.value="";
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
