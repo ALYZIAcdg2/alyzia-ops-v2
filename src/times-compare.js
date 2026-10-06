@@ -38,7 +38,9 @@ export async function runTimesCompare(env,{limit=12,offset=0,all=false,nowMs=Dat
   const rows=await mapLimit(slice,3,async f=>{
     const x=f.raw,zoneDest=AIRPORT_TZ[f.destination]||"Europe/Paris";
     const b=board.index?matchRow(board.index,f):null,fd=pickFeedRow(fidsIndex,{designator:f.designator,std:f.std});
-    let s={},fr24Status="";try{const r=await fr24(f);s=r?.candidates?.semantic||{};fr24Status=clean(r?.status)||(Object.keys(s).length?"OK":"EMPTY")}catch(e){fr24Status="ERROR "+clean(e?.message).slice(0,60)}
+    // Comme le passage réel : l'identifiant FR24 du vol vient du tableau quand on le connaît.
+    const f2=b?.fr24Id&&!clean(f.raw?.fr24OccurrenceId)?{...f,raw:{...f.raw,fr24OccurrenceId:b.fr24Id}}:f;
+    let s={},fr24Status="";try{const r=await fr24(f2);s=r?.candidates?.semantic||{};fr24Status=clean(r?.status)||(Object.keys(s).length?"OK":"EMPTY")}catch(e){fr24Status="ERROR "+clean(e?.message).slice(0,60)}
     const etd={ours:hhmm(x.etd||x.edt),oursSource:clean(x.etdSource),board:b?clockOf(b.time,"Europe/Paris"):"",fids:hhmm(fd?.dep_estimated),fr24:s.etd?clockOf(s.etd,"Europe/Paris"):""};
     const eta={ours:hhmm(x.eta),oursSource:clean(x.etaSource),fids:hhmm(fd?.arr_estimated),fr24:s.eta?clockOf(s.eta,zoneDest):""};
     const departed=Boolean(clean(x.atd)||clean(x.takeoff));
