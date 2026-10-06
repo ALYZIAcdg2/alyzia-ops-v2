@@ -17,13 +17,18 @@ export function indexFeed(rows){
   return idx;
 }
 export function compareFlights(flights,rows){
-  const idx=indexFeed(rows),out={flights:flights.length,matched:0,feedActual:0,bothAtd:0,gain:0,vsAtd:{},vsTakeoff:{},gateBoth:0,gateSame:0,unmatched:[],examples:{gain:[],farFromAtd:[],gateDiff:[]}};
+  const idx=indexFeed(rows),out={flights:flights.length,matched:0,feedActual:0,bothAtd:0,gain:0,vsAtd:{},vsTakeoff:{},gateBoth:0,gateSame:0,ata:{feedActual:0,bothAta:0,gain:0,vsAta:{},vsLanding:{},examples:{gain:[],diffAta:[]}},unmatched:[],examples:{gain:[],farFromAtd:[],gateDiff:[]}};
   const bump=(o,d)=>{const k=d==null?"?":Math.abs(d)<=1?"0..1":Math.abs(d)<=3?"2..3":Math.abs(d)<=10?"4..10":">10";o[k]=(o[k]||0)+1};
   for(const f of flights){
     const c=(idx.get(upper(f.designator))||[]).filter(r=>hhmm(r.dep_time)===hhmm(f.std));
     const r=c.find(x=>upper(x.flight_iata)===upper(f.designator))||c[0];
     if(!r){if(out.unmatched.length<40)out.unmatched.push({flight:f.designator,std:f.std,inFeedWithOtherTime:(idx.get(upper(f.designator))||[]).map(x=>hhmm(x.dep_time)).join(",")||null});continue}
     out.matched++;
+    // ATA : heure d'arrivée réelle du flux (heure locale de la destination) contre notre ATA et notre atterrissage.
+    {const arr=hhmm(r.arr_actual);if(arr){const A=out.ata;A.feedActual++;
+      if(f.ata){A.bothAta++;const d=diff(arr,f.ata);bump(A.vsAta,d);if(d!=null&&Math.abs(d)>3&&A.examples.diffAta.length<12)A.examples.diffAta.push({flight:f.designator,dest:f.dest,feedArrActual:arr,ourAta:f.ata,ourAtaSource:f.ataSource,ourLanding:f.landing||""})}
+      if(f.landing)bump(A.vsLanding,diff(arr,f.landing));
+      if(!f.ata){A.gain++;if(A.examples.gain.length<12)A.examples.gain.push({flight:f.designator,dest:f.dest,feedArrActual:arr,ourLanding:f.landing||"",status:r.status})}}}
     const act=hhmm(r.dep_actual);if(act)out.feedActual++;
     if(act&&f.atd){out.bothAtd++;const d=diff(act,f.atd);bump(out.vsAtd,d);if(d!=null&&Math.abs(d)>3&&out.examples.farFromAtd.length<12)out.examples.farFromAtd.push({flight:f.designator,std:f.std,feedActual:act,ourAtd:f.atd,ourTakeoff:f.takeoff||""})}
     if(act&&f.takeoff)bump(out.vsTakeoff,diff(act,f.takeoff));
@@ -48,7 +53,7 @@ export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now(),fligh
   for(const x of results){let d={};try{d=JSON.parse(x.data_json||"{}")}catch{continue}
     if(upper(d.origin||"CDG")!=="CDG")continue;
     const airline=upper(d.airline||x.airline),designator=upper(d.flight||x.flight_number);
-    flights.push({designator:designator.startsWith(airline)?designator:airline+String(x.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),std:hhmm(d.std||x.std),atd:hhmm(d.atd),takeoff:hhmm(d.takeoff),gate:clean(d.gate),atdSource:clean(d.atdSource),manualAtd:upper(d.atdSource).includes("MANUAL")||Boolean(d.manual?.atd||d.manualOverrides?.atd||d.manual_fields?.atd)})}
+    flights.push({designator:designator.startsWith(airline)?designator:airline+String(x.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),std:hhmm(d.std||x.std),atd:hhmm(d.atd),takeoff:hhmm(d.takeoff),ata:hhmm(d.ata),ataSource:clean(d.ataSource),landing:hhmm(d.landing),dest:upper(d.destination||d.dest||""),gate:clean(d.gate),atdSource:clean(d.atdSource),manualAtd:upper(d.atdSource).includes("MANUAL")||Boolean(d.manual?.atd||d.manualOverrides?.atd||d.manual_fields?.atd)})}
   const want=upper(flight).replace(/[^A-Z0-9]/g,"");
   // Décision que prendrait le passage FIDS pour chacun de nos vols de ce numéro (sans rien écrire).
   const decide=f=>{

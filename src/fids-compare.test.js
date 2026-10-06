@@ -24,3 +24,14 @@ test("explication : décision du passage FIDS pour un vol",async()=>{
   assert.match((await run(mkEnv([mk("20:00",{atd:"20:31",atdSource:"PUBLIC_LIVE:FLIGHTSTATS"})]))).explain.decisions[0].reason,/autre source/);
   assert.match((await run(mkEnv([mk("20:00",{takeoff:"20:20"})]))).explain.decisions[0].reason,/DEVRAIT|plausibilité/);
 });
+test("ATA : arr_actual du flux contre notre ATA et notre atterrissage",()=>{
+  const rows=[
+    {flight_iata:"AH1",dep_time:"2026-10-06 12:00",arr_actual:"2026-10-06 14:10"},
+    {flight_iata:"AH2",dep_time:"2026-10-06 12:00",arr_actual:"2026-10-06 14:30"},
+    {flight_iata:"AH3",dep_time:"2026-10-06 12:00",arr_actual:"2026-10-06 15:00"},
+    {flight_iata:"AH4",dep_time:"2026-10-06 12:00",arr_actual:""}];
+  const f=(n,o)=>({designator:"AH"+n,std:"12:00",dest:"ALG",...o});
+  const r=compareFlights([f(1,{ata:"14:09"}),f(2,{ata:"14:50",ataSource:"PUBLIC_LIVE:FLIGHTSTATS"}),f(3,{landing:"14:52"}),f(4,{})],rows);
+  assert.equal(r.ata.feedActual,3);assert.equal(r.ata.bothAta,2);assert.equal(r.ata.vsAta["0..1"],1);assert.equal(r.ata.gain,1);
+  assert.equal(r.ata.vsLanding["4..10"],1);assert.equal(r.ata.examples.diffAta[0].flight,"AH2");assert.equal(r.ata.examples.gain[0].flight,"AH3");
+});
