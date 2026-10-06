@@ -56,7 +56,15 @@ export function onTimeAtd(row,{std,takeoff,nowMin,date}){
   if(nowMin!=null&&s>nowMin+1)return "";
   return std;
 }
-export function pickFeedRow(index,{designator,std}){return (index.get(upper(designator))||[]).filter(r=>hhmm(r.dep_time)===std).sort((a,b)=>(upper(b.flight_iata)===upper(designator))-(upper(a.flight_iata)===upper(designator)))[0]||null}
+// Même numéro de vol et même STD ; à défaut, l'unique ligne du même vol (même jour) à ±15 min de notre STD. Lecture seulement : notre STD n'est jamais modifiée.
+export function pickFeedRow(index,{designator,std},tolerance=15){
+  const rows=index.get(upper(designator))||[],prefer=(a,b)=>(upper(b.flight_iata)===upper(designator))-(upper(a.flight_iata)===upper(designator));
+  const exact=rows.filter(r=>hhmm(r.dep_time)===std).sort(prefer)[0];
+  if(exact||!tolerance)return exact||null;
+  const s=mins(std);if(s==null)return null;
+  const near=rows.filter(r=>{const m=mins(hhmm(r.dep_time));if(m==null)return false;let d=Math.abs(m-s);d=Math.min(d,1440-d);return d<=tolerance});
+  return new Set(near.map(r=>hhmm(r.dep_time))).size===1?near.sort(prefer)[0]:null;
+}
 
 export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};

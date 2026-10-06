@@ -1,5 +1,5 @@
 import test from "node:test";import assert from "node:assert/strict";
-import {boardLookup,getBoard,__reset} from "./fr24-board.js";
+import {boardLookup,getBoard,__reset,matchRow,indexRows} from "./fr24-board.js";
 const NOW=Date.parse("2026-10-05T12:00:00Z"); // 14:00 Paris
 const STD=Date.parse("2026-10-05T11:00:00Z")/1000; // 13:00 Paris
 const page=(flights,more=false)=>`<div data-page="${JSON.stringify({props:{flights,meta:{hasMoreNextData:more,nextPage:2}}}).replace(/&/g,"&amp;").replace(/"/g,"&quot;")}"></div>`;
@@ -14,3 +14,10 @@ test("hors CDG : pas de lecture",async()=>{assert.equal(await boardLookup({...f,
 test("lit la porte du tableau",async()=>{__reset();const r=await boardLookup(f,{fetchImpl:ok(),nowMs:NOW});assert.equal(r.semantic.gate,"M24")});
 test("vol pas encore parti : ETD au lieu d'ATD",async()=>{__reset();const est={...row,status:{name:"estimated"}};const r=await boardLookup(f,{fetchImpl:async()=>new Response(page([est]),{status:200}),nowMs:NOW});assert.equal(r.semantic.etd,"13:25");assert.equal(r.semantic.takeoff,undefined);assert.equal(r.semantic.gate,"M24");assert.equal(r.semantic.reg,"F-GSPL");assert.equal(r.semantic.aircraft,"B772")});
 test("heure du tableau égale à la STD : pas d'ETD (aucune estimation)",async()=>{__reset();const est={...row,status:{name:"estimated"},estimatedTime:STD};const r=await boardLookup(f,{fetchImpl:async()=>new Response(page([est]),{status:200}),nowMs:NOW});assert.equal(r.semantic.etd,undefined);assert.equal(r.semantic.gate,"M24")});
+test("appariement souple du tableau : unique ligne à ±15 min, sinon rien",()=>{
+  const S=Date.parse("2026-10-06T18:35:00Z")/1000; // 20:35 Paris
+  const idx=indexRows([{flight:"JU243",std:S},{flight:"TU441",std:S-3*3600},{flight:"TU441",std:S-3*3600+600}]);
+  assert.equal(matchRow(idx,{date:"2026-10-06",airline:"JU",number:"243",designator:"JU243",std:"20:30"}).std,S);
+  assert.equal(matchRow(idx,{date:"2026-10-06",airline:"JU",number:"243",designator:"JU243",std:"19:00"}),null);
+  assert.equal(matchRow(idx,{date:"2026-10-06",airline:"TU",number:"441",designator:"TU441",std:"17:40"}),null);
+});
