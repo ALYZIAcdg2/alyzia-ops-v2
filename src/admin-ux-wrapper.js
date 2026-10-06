@@ -46,9 +46,12 @@ function decorate(r){
   const table=r.querySelector('.adn-table');if(!table||!flightsCache)return;
   const heads=[...table.querySelectorAll('thead th')].map(t=>t.textContent.trim().toUpperCase()),col=heads.indexOf('DERNIER TRAITEMENT');if(col<0)return;
   const date=document.getElementById('adminDateInput')?.value||'';
-  rows(r).forEach(tr=>{const cell=tr.cells[col],fl=(tr.cells[0]?.textContent||'').trim();if(!cell||!fl)return;const x=find(fl,date);if(!x||!x.attempts||!x.attempts.length)return;
-    const sig=x.liveAt+'|'+x.attempts.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig&&cell.querySelector('.adx-srcs'))return;cell.dataset.adxSig=sig;
-    cell.innerHTML='<div class="adx-srcs" title="Cliquer pour le détail">'+pills(x)+'</div><div style="font-size:10px;color:#6b7c90;font-weight:800;margin-top:2px">'+hm(x.liveAt)+'</div>';
+  rows(r).forEach(tr=>{const cell=tr.cells[col],fl=(tr.cells[0]?.textContent||'').trim();if(!cell||!fl)return;const x=find(fl,date);if(!x)return;
+    // Un vol pas encore lu par aucune source (jour suivant, vol récent) garde ses pastilles, en gris « pas encore lu », avec son dernier traitement connu.
+    const att=x.attempts||[],sig=x.liveAt+'|'+att.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig&&cell.querySelector('.adx-srcs'))return;cell.dataset.adxSig=sig;
+    if(!cell.querySelector('.adx-srcs'))cell.dataset.adxOrig=cell.textContent.replace(/\s+/g,' ').trim();
+    const last=att.length?hm(x.liveAt):(cell.dataset.adxOrig||'—');
+    cell.innerHTML='<div class="adx-srcs" title="Cliquer pour le détail">'+pills(x)+'</div><div style="font-size:10px;color:#6b7c90;font-weight:800;margin-top:2px">'+esc(last)+'</div>';
     cell.querySelector('.adx-srcs').addEventListener('click',e=>{e.stopPropagation();e.preventDefault();openDetail(x)},true)});
   health(r,table,date);
 }

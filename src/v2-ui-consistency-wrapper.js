@@ -88,6 +88,13 @@ function v2xBack(){var o='';try{o=window.__alyziaFlightOriginView||''}catch{}if(
 // The top bar RETOUR calls backToFlightListSamePosition directly: a flight opened from the ADMIN table goes back to that table.
 (function(){var orig=window.backToFlightListSamePosition;if(typeof orig!=='function'||orig.__adm)return;var w=function(){var o='';try{o=window.__alyziaFlightOriginView||''}catch{}if(o==='admin'&&typeof window.renderAdminDashboard==='function'){try{setView('admin')}catch{}window.renderAdminDashboard();return}return orig.apply(this,arguments)};w.__adm=1;window.backToFlightListSamePosition=w})();
 window.v2xBack=v2xBack;
+// INFOS VOL : bouton pour supprimer ce vol de la liste. Même confirmation et même suppression que OUTILS > AJOUTER / SUPPRIMER UN VOL (fiche, PRÉPA et données associées).
+(function(){var base=window.openFlightInfo;if(typeof base!=='function'||base.__v2xDel)return;
+var w=function(){var r=base.apply(this,arguments);try{var x=typeof f==='function'?f():null,body=document.getElementById('modalBody');
+if(x&&body&&!body.querySelector('.v2x-delete-flight')){var d=document.createElement('div');d.className='v2x-delete-flight';d.style.cssText='margin-top:14px;padding-top:12px;border-top:1px solid #dbe3ee;display:flex;justify-content:flex-end';
+var b=document.createElement('button');b.type='button';b.className='v2x-act danger';b.textContent='🗑 SUPPRIMER CE VOL DE LA LISTE';
+b.onclick=function(){if(typeof window.openDeleteFlightConfirmation==='function')window.openDeleteFlightConfirmation(x.airline,x.flight,x.date)};d.appendChild(b);body.appendChild(d)}}catch(e){}return r};
+w.__v2xDel=true;window.openFlightInfo=w})();
 function apply(){syncList();renderDetail()}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json();live=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];apply()}catch{}}
 let queued=false;function queue(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply()})}
