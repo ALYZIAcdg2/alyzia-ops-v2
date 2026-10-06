@@ -12,6 +12,7 @@ import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
+import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -106,6 +107,10 @@ export default {
     if(url.pathname==="/api/admin/board-backfill"&&request.method==="GET"){
       // Rattrapage / contrôle des portes, immatriculations et types depuis le tableau FR24 de CDG. Sans apply=1 : aperçu seulement.
       try{return json(await backfillBoardGates(env,{date:url.searchParams.get("date")||"",apply:url.searchParams.get("apply")==="1",fields:url.searchParams.get("fields")||"gate,reg,type",replace:url.searchParams.get("replace")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/flightera-board-test"&&request.method==="GET"){
+      // Lecture seule : une page du tableau des départs Flightera de CDG, pour voir si elle répond depuis le Worker.
+      try{return json(await runFlighteraBoardTest({date:url.searchParams.get("date")||"",time:url.searchParams.get("time")||"00_00"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/core-source-diagnostic"&&request.method==="GET"){
       try{return json(await runCoreSourceDiagnosticTest({date:url.searchParams.get('date')||'',flight:url.searchParams.get('flight')||'',origin:url.searchParams.get('origin')||'CDG',destination:url.searchParams.get('destination')||''}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
