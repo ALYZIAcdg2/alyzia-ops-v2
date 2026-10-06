@@ -14,6 +14,7 @@ import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
+import {runFidsWidgetTest} from "./fids-widget-test.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -109,6 +110,10 @@ export default {
     if(url.pathname==="/api/admin/board-backfill"&&request.method==="GET"){
       // Rattrapage / contrôle des portes, immatriculations et types depuis le tableau FR24 de CDG. Sans apply=1 : aperçu seulement.
       try{return json(await backfillBoardGates(env,{date:url.searchParams.get("date")||"",apply:url.searchParams.get("apply")==="1",fields:url.searchParams.get("fields")||"gate,reg,type",replace:url.searchParams.get("replace")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/fids-widget-test"&&request.method==="GET"){
+      // Lecture seule : script du widget FIDS flightradar.live (CDG départs) et ses adresses de données.
+      try{return json(await runFidsWidgetTest({}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/flightera-board-test"&&request.method==="GET"){
       // Lecture seule : une page du tableau des départs Flightera de CDG, pour voir si elle répond depuis le Worker.

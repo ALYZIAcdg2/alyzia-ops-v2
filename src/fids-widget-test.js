@@ -1,0 +1,47 @@
+// Diagnostic LECTURE SEULE du widget FIDS flightradar.live (CDG départs). N'écrit rien.
+// GET /api/admin/fids-widget-test : lit le script du widget, en extrait les adresses de données et teste les 3 premières.
+const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+const JS_URL="https://fids.flightradar.live/static/js/flight-status-min.js?v=20260525.1";
+const PAGE_URL="https://flightradar.live/en/flights/eur/fr/paris-charles-de-gaulle-airport-cdg-departures/";
+const clean=v=>String(v??"").replace(/\s+/g," ").trim();
+const WALL=/just a moment|verify you are human|captcha|access denied|unusual traffic|cf-chl|login/i;
+
+export function extractEndpoints(js){
+  const s=String(js||""),out=new Set();
+  for(const m of s.matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]+|\/(?:api|widgets?|fids|ajax|data|flights?)[^"'`\s]*)["'`]/gi)){
+    const u=m[1];if(/\.(css|png|jpe?g|svg|gif|woff2?|ico)(\?|$)/i.test(u))continue;out.add(u);
+  }
+  return [...out].slice(0,40);
+}
+export function keysOf(v,depth=0){
+  if(Array.isArray(v))return v.length?{array:v.length,item:keysOf(v[0],depth+1)}:{array:0};
+  if(v&&typeof v==="object"){if(depth>3)return "{…}";return Object.fromEntries(Object.entries(v).slice(0,40).map(([k,x])=>[k,keysOf(x,depth+1)]))}
+  return typeof v;
+}
+async function get(fetchImpl,url,accept){
+  const r=await fetchImpl(url,{headers:{accept,"user-agent":UA,"accept-language":"fr-FR,fr;q=0.9,en;q=0.8",referer:PAGE_URL},redirect:"follow"});
+  return {r,text:await r.text()};
+}
+export async function runFidsWidgetTest({fetchImpl=fetch}={}){
+  const out={ok:true,mode:"FIDS_WIDGET_TEST_NO_WRITE",jsUrl:JS_URL};
+  try{
+    const {r,text}=await get(fetchImpl,JS_URL,"*/*");
+    out.js={httpStatus:r.status,bytes:text.length,wall:WALL.test(text.slice(0,3000))&&text.length<5000};
+    if(r.status!==200)return {...out,verdict:"HTTP_"+r.status,sample:clean(text).slice(0,300)};
+    const eps=extractEndpoints(text);out.endpoints=eps;
+    out.fieldHints=["atd","actual","takeoff","gate","reg","aircraft","status","estimated","scheduled"].filter(k=>new RegExp(k,"i").test(text));
+    out.probes=[];
+    const cands=eps.filter(u=>/api|data|flight|fids/i.test(u)&&!/\.js(\?|$)/i.test(u)).slice(0,3);
+    for(const e of cands){
+      let u=e.startsWith("//")?"https:"+e:e.startsWith("/")?"https://fids.flightradar.live"+e:e;
+      u+= (u.includes("?")?"&":"?")+"iata_code=CDG&flight_type=departures";
+      try{
+        const p=await get(fetchImpl,u,"application/json,text/plain,*/*");
+        let shape=null;try{shape=keysOf(JSON.parse(p.text))}catch{}
+        out.probes.push({url:u,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),shape,sample:shape?undefined:clean(p.text).slice(0,200)});
+      }catch(e2){out.probes.push({url:u,error:String(e2?.message||e2).slice(0,120)})}
+    }
+    out.verdict=out.probes.some(p=>p.shape&&!p.wall)?"JSON_TROUVE":(eps.length?"ENDPOINTS_A_VOIR":"RIEN_TROUVE");
+    return out;
+  }catch(e){return {...out,ok:false,verdict:"ERREUR_RESEAU",error:String(e?.message||e).slice(0,200)}}
+}
