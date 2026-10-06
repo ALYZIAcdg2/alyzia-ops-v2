@@ -18,6 +18,12 @@ export function indexRows(rows){const m=new Map();for(const r of rows){const k=u
 export function matchRow(index,f){
   const keys=[upper(f.designator),...flightLookupVariants({airline:f.airline,number:f.number}).map(v=>upper(v.airline)+upper(v.number))];
   for(const k of keys){for(const r of index.get(k)||[]){if((!f.date||parisDay(r.std)===f.date)&&(!f.std||parisClock(r.std)===f.std))return r}}
+  // À défaut : l'unique ligne du même vol (même jour) à ±15 min de notre STD. Lecture seulement, notre STD n'est jamais modifiée.
+  const mm=h=>{const m=/^(\d{2}):(\d{2})$/.exec(h||"");return m?+m[1]*60+ +m[2]:null},s=mm(f.std);
+  if(s!=null){
+    const near=[];for(const k of keys)for(const r of index.get(k)||[]){if(f.date&&parisDay(r.std)!==f.date)continue;const m=mm(parisClock(r.std));if(m==null)continue;let d=Math.abs(m-s);d=Math.min(d,1440-d);if(d<=15)near.push(r)}
+    if(new Set(near.map(r=>r.std)).size===1)return near[0];
+  }
   return null;
 }
 

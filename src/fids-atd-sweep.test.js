@@ -65,3 +65,12 @@ test("ATD parti à l'heure contredit : vol À CONTRÔLER jusqu'à l'arrivée",()
   assert.notEqual(mk({}).state,"À CONTRÔLER");
   assert.notEqual(mk({atdConflict:{from:"16:10",to:"16:20"},ata:"20:50"}).state,"À CONTRÔLER");
 });
+test("appariement souple : l'unique ligne à ±15 min, jamais plusieurs ni une STD modifiée",()=>{
+  const rows=[{flight_iata:"JU243",dep_time:"2026-10-06 20:35"},{flight_iata:"XX1",cs_flight_iata:"JU243",dep_time:"2026-10-06 20:35"},{flight_iata:"TU441",dep_time:"2026-10-06 08:00"},{flight_iata:"TU441",dep_time:"2026-10-06 08:10"}];
+  const idx=indexFeed(rows,"2026-10-06");
+  assert.equal(pickFeedRow(idx,{designator:"JU243",std:"20:30"}).flight_iata,"JU243");
+  assert.equal(pickFeedRow(idx,{designator:"JU243",std:"20:30"},0),null);
+  assert.equal(pickFeedRow(idx,{designator:"JU243",std:"19:00"}),null);
+  assert.equal(pickFeedRow(idx,{designator:"TU441",std:"08:05"}),null);
+  assert.equal(pickFeedRow(idx,{designator:"TU441",std:"08:10"}).dep_time,"2026-10-06 08:10");
+});
