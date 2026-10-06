@@ -152,6 +152,9 @@ const FS_BREAKER={page:{refusals:0,until:0,after:2,pause:90000,level:0,steps:[1,
 export function flightStatsNoteResult(status,now=Date.now(),kind="page"){const b=FS_BREAKER[kind]||FS_BREAKER.page;if(status===403||status===429){b.refusals++;if(b.refusals>=b.after){b.until=now+b.pause*b.steps[Math.min(b.level,b.steps.length-1)];b.level++}}else if(status>=200&&status<400){b.refusals=0;b.level=0}}
 export function flightStatsPaused(now=Date.now(),kind="page"){return now<(FS_BREAKER[kind]||FS_BREAKER.page).until}
 export function flightStatsReset(){for(const b of Object.values(FS_BREAKER)){b.refusals=0;b.until=0;b.level=0}}
+// État des disjoncteurs conservé entre deux passages du cron (voir runtime-state.js) : on garde l'état dont la pause finit le plus tard.
+export function flightStatsExport(){return JSON.parse(JSON.stringify(FS_BREAKER))}
+export function flightStatsImport(st){if(!st)return;for(const k of Object.keys(FS_BREAKER)){const o=st[k],b=FS_BREAKER[k];if(o&&Number(o.until)>b.until){b.until=Number(o.until)||0;b.refusals=Number(o.refusals)||0;b.level=Number(o.level)||0}else if(o&&b.until===0&&b.refusals===0&&b.level===0&&(Number(o.refusals)||Number(o.level))){b.refusals=Number(o.refusals)||0;b.level=Number(o.level)||0}}}
 // Lectures de la page FlightStats (sans identifiant mémorisé) par passage du cron : au plus FS_PAGE_BUDGET ; l'appel léger par identifiant n'est pas compté. Un vol refusé n'est pas redemandé avant 20 min.
 const FS_PAGE_BUDGET=4,FS_RETRY_MIN=20;let fsPageLeft=FS_PAGE_BUDGET;
 export function flightStatsResetBudget(n=FS_PAGE_BUDGET){fsPageLeft=n}

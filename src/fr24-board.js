@@ -56,7 +56,7 @@ export async function getBoard({fetchImpl=fetch,nowMs=Date.now()}={}){
   if(!inflight)inflight=(async()=>{
     try{const r=await loadPages(fetchImpl,nowMs);lastHttp=r.httpStatus;
       if(r.verdict!=="OK"&&!r.rows.length){if(r.verdict==="BLOCKED"||r.httpStatus===409)pausedUntil=Date.now()+PAUSE_MS;return {status:r.verdict==="BLOCKED"?"BLOCKED":r.verdict,httpStatus:r.httpStatus,index:null}}
-      cache={at:Date.now(),index:indexRows(r.rows)};return {status:"OK",httpStatus:200,index:cache.index}}
+      cache={at:nowMs,index:indexRows(r.rows)};return {status:"OK",httpStatus:200,index:cache.index}}
     catch(e){lastHttp=0;pausedUntil=Date.now()+2*60000;return {status:"FETCH_ERROR",httpStatus:0,index:null}}
     finally{inflight=null}})();
   return inflight;
@@ -79,4 +79,11 @@ export async function boardLookup(f,opts){
 }
 // Porte absente comme ADMIN la compte : vide ou valeur de remplissage (« — », « - », N/A…), en lisant les mêmes champs (gate, departureGate).
 export const gateValue=x=>{const v=clean(x?.gate||x?.departureGate||x?.departure_gate);return /^(—|–|-+|n\/?a|tbd|\?+|null|none|unknown)$/i.test(v)?"":v};
+// État conservé entre deux passages du cron (voir runtime-state.js) : pause et cache du tableau.
+export function boardExport(){return {pausedUntil,lastHttp,cache:cache?{at:cache.at,rows:[...cache.index.values()].flat()}:null}}
+export function boardImport(st){
+  if(!st)return;
+  if(Number(st.pausedUntil)>pausedUntil){pausedUntil=Number(st.pausedUntil);lastHttp=Number(st.lastHttp)||lastHttp}
+  if(st.cache&&Number(st.cache.at)&&Array.isArray(st.cache.rows)&&(!cache||Number(st.cache.at)>cache.at))cache={at:Number(st.cache.at),index:indexRows(st.cache.rows)};
+}
 export const __reset=()=>{cache=null;pausedUntil=0;inflight=null};

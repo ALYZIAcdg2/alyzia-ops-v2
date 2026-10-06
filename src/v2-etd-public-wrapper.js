@@ -11,6 +11,7 @@ import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-so
 import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
+import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -150,6 +151,8 @@ export default {
       // The cron runs every 2 minutes: a run still in progress (lock younger than 100 s) is not doubled.
       if(!(await acquireCronLock(env)))return;
       try{
+        // Pauses FlightStats et cache du tableau FR24 : relus ici, réécrits à la fin (la mémoire du Worker peut être vide à chaque passage).
+        await loadRuntimeState(env);
         // Live facts (ATD, takeoff, landing…) first: they are the most time-critical; the ETD pass over every flight can be long.
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
         await runEtd(env).catch(()=>{});
@@ -157,7 +160,7 @@ export default {
         // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.
         if(isDailyCheckWindow())await runPublicLiveFlow(env,{limit:12,concurrency:4,recheck:true}).catch(()=>{});
         await runStatusModelTest(env).catch(()=>{});
-      }finally{await releaseCronLock(env)}
+      }finally{await saveRuntimeState(env);await releaseCronLock(env)}
     })());
   }
 };
