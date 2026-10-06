@@ -24,7 +24,7 @@ export async function getFeed({fetchImpl=fetch,nowMs=Date.now()}={}){
   if(cache&&nowMs-cache.at<TTL_MS)return {status:"OK",rows:cache.rows};
   try{
     const r=await fetchImpl(FEED,{headers:{accept:"application/json","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow"});
-    if(r.status!==200){if([403,429,503].includes(r.status))pausedUntil=nowMs+PAUSE_MS;return {status:"HTTP_"+r.status,rows:null}}
+    if(r.status!==200){if([403,429,503].includes(r.status))pausedUntil=nowMs+PAUSE_MS;return {status:r.status===403||r.status===429?"BLOCKED":"HTTP_ERROR",httpStatus:r.status,rows:null}}
     const rows=await r.json();if(!Array.isArray(rows)||!rows.length){pausedUntil=nowMs+2*60000;return {status:"EMPTY",rows:null}}
     cache={at:nowMs,rows};return {status:"OK",rows};
   }catch{pausedUntil=nowMs+2*60000;return {status:"FETCH_ERROR",rows:null}}
@@ -41,15 +41,16 @@ export function pickFeedRow(index,{designator,std}){return (index.get(upper(desi
 
 export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
-  const feed=await getFeed({fetchImpl,nowMs});if(!feed.rows)return {ok:true,status:feed.status,updated:0};
+  const feed=await getFeed({fetchImpl,nowMs});
+  if(!feed.rows){const out={ok:true,status:feed.status,updated:0};if(!dryRun)await saveFidsState(env,{status:feed.status,http:feed.httpStatus||0,flights:{}},nowMs);return out}
   const date=parisDate(nowMs),nowMin=parisMinutes(nowMs),index=indexFeed(feed.rows,date),at=new Date(nowMs).toISOString();
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
-  let matched=0,updated=0,rejected=0;
+  let matched=0,updated=0,rejected=0;const per={};
   for(const r of results){
     let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
     if(upper(x.origin||"CDG")!=="CDG")continue;
     const airline=upper(x.airline||r.airline),flight=upper(x.flight||r.flight_number),designator=flight.startsWith(airline)?flight:airline+String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
-    const std=hhmm(x.std||r.std),row=pickFeedRow(index,{designator,std});if(!row)continue;matched++;
+    const std=hhmm(x.std||r.std),row=pickFeedRow(index,{designator,std}),key=designator+"|"+std;if(!row){per[key]="NOT_TRACKED";continue}matched++;per[key]=clean(row.dep_actual).startsWith(date)?"OK":"NO_USABLE_DATA";
     const atd=clean(row.dep_actual)&&clean(row.dep_actual).startsWith(date)?hhmm(row.dep_actual):"";if(!atd)continue;
     if(manual(x,"atd")||(clean(x.atd)&&!/FIDS/.test(upper(x.atdSource))))continue;
     if(clean(x.atd)===atd)continue;
@@ -58,5 +59,28 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
     x.flightInfoLog=log.slice(0,240);x.atd=atd;x.atdSource="PUBLIC_LIVE:FIDS";x.atdUpdatedAt=at;updated++;
     if(!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
   }
+  if(!dryRun)await saveFidsState(env,{status:"OK",http:200,flights:per},nowMs);
   return {ok:true,status:"OK",date,flights:results.length,matched,updated,rejected};
+}
+
+// État de la dernière lecture, gardé dans ops_meta pour le bilan ADMIN (une ligne, réécrite seulement si elle change ou toutes les 10 min).
+const STATE_KEY="fids_state_v1";let lastState="",lastStateAt=0;
+export async function saveFidsState(env,state,nowMs=Date.now()){
+  try{
+    const body=JSON.stringify(state);if(body===lastState&&nowMs-lastStateAt<10*60000)return false;
+    await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();
+    await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(STATE_KEY,JSON.stringify({at:new Date(nowMs).toISOString(),...state})).run();
+    lastState=body;lastStateAt=nowMs;return true;
+  }catch{return false}
+}
+export async function loadFidsState(env){
+  try{const row=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k=?`).bind(STATE_KEY).first();return row?.v?JSON.parse(row.v):null}catch{return null}
+}
+// Lecture FIDS d'un vol pour le bilan : même forme qu'une tentative de source.
+export function fidsAttempt(state,flight,std){
+  if(!state)return null;
+  const at=state.at||"";
+  if(state.status!=="OK")return {source:"FIDS",status:state.status==="BLOCKED"?"BLOCKED":state.status==="COOLDOWN"?"COOLDOWN":"HTTP_ERROR",httpStatus:state.http||0,checkedAt:at};
+  const st=state.flights?.[upper(flight)+"|"+std];
+  return {source:"FIDS",status:st||"NOT_TRACKED",httpStatus:200,checkedAt:at};
 }

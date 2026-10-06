@@ -1,5 +1,6 @@
 import app from "./flight-card-v2-wrapper.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
+import {loadFidsState,fidsAttempt} from "./fids-atd-sweep.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -75,6 +76,8 @@ async function dashboard(env){
   const now=parisParts(),since=addDays(now.date,-1),until=addDays(now.date,2),tomorrow=addDays(now.date,1);
   const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_date,flight_number,std,updated_at,data_json FROM flights WHERE flight_date>=? AND flight_date<=? ORDER BY flight_date,std,flight_number`).bind(since,until).all();
   const flights=results.map(parseRow).map(z=>classify(z,now));
+  // Flux FIDS flightradar.live : lecture globale (une par passage), reportée vol par vol pour le bilan.
+  {const fs=await loadFidsState(env);if(fs)for(const x of flights){if(x.date!==now.date||!x.attempts?.length)continue;const a=fidsAttempt(fs,x.flight,x.std);if(a)x.attempts.push({s:"FIDS",st:a.status,h:a.httpStatus,d:"",at:a.checkedAt})}}
   const today=flights.filter(x=>x.date===now.date),future=flights.filter(x=>x.date>now.date),past=flights.filter(x=>x.date<now.date);
   const summarize=list=>({total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="PARTIEL").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
   let quotas=[];

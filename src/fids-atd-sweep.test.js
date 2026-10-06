@@ -20,3 +20,13 @@ test("écrit l'ATD manquant, respecte manuel et ATD déjà présent",async()=>{
   const r=await sweepFidsToday(env,{nowMs,fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
   assert.equal(r.updated,1);assert.equal(env.updates[0].atd,"12:47");assert.equal(env.updates[0].atdSource,"PUBLIC_LIVE:FIDS");
 });
+import {fidsAttempt} from "./fids-atd-sweep.js";
+test("tentative FIDS pour le bilan : lu, sans donnée, refusé",()=>{
+  const ok={at:"x",status:"OK",http:200,flights:{"TK1832|12:25":"OK","AF1|12:25":"NO_USABLE_DATA"}};
+  assert.equal(fidsAttempt(ok,"tk1832","12:25").status,"OK");
+  assert.equal(fidsAttempt(ok,"AF1","12:25").status,"NO_USABLE_DATA");
+  assert.equal(fidsAttempt(ok,"ZZ9","12:25").status,"NOT_TRACKED");
+  const bad=fidsAttempt({status:"BLOCKED",http:403},"TK1832","12:25");
+  assert.equal(bad.status,"BLOCKED");assert.equal(bad.httpStatus,403);
+  assert.equal(fidsAttempt(null,"TK1832","12:25"),null);
+});
