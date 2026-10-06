@@ -12,6 +12,7 @@ import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
+import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
@@ -27,8 +28,9 @@ async function runLive(env,opts){
   const recovery=await recoverValidatedLiveFacts(env);
   const parisAeroport=await runParisAirportStatusFlow(env);
   const regFix=await sanitizeTodayRegistrations(env);
+  const arrivalFix=await sanitizeArrivalClocks(env).catch(()=>null);
   const statusModel=await runStatusModelTest(env);
-  return {...live,boardSweep,flightAwareExact,recovery,parisAeroport,regFix,statusModel};
+  return {...live,boardSweep,arrivalFix,flightAwareExact,recovery,parisAeroport,regFix,statusModel};
 }
 async function runGround(env){const ground=await runGroundPublicFlow(env);const regFix=await sanitizeTodayRegistrations(env);return {...ground,regFix}}
 async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=true}={}){

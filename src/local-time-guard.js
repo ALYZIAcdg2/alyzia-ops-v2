@@ -22,3 +22,18 @@ export function guardDepartureClock(value,std,date,zone="Europe/Paris"){
   if(gap>=-30&&gap<=240)return {value:clockText(shifted),status:"SHIFTED"};
   return {value:"",status:"REJECTED"};
 }
+
+// Arrival clocks (ETA / landing / ATA) are the LOCAL time of the destination. A page that gives them in the ORIGIN's time (TS251 CDG-YUL: landing "18:45" for a
+// takeoff at 10:36, i.e. Paris time instead of Montreal time) is detected from the SCHEDULED block time (STD at origin -> STA at destination): when the value is
+// far from the scheduled arrival as a destination clock, but close to it as an origin clock, it is converted. -> {value, status}: "OK", "SHIFTED" or "UNCHECKED".
+export function guardArrivalClock(value,{std,sta,date,originZone="Europe/Paris",destZone="Europe/Paris"}={}){
+  const v=clockMinutes(value),s=clockMinutes(std),a=clockMinutes(sta);
+  if(v===null||s===null||a===null||originZone===destZone)return {value:clean(value),status:"UNCHECKED"};
+  const oo=zoneOffsetMinutes(date,originZone),od=zoneOffsetMinutes(date,destZone),sched=(((a-od)-(s-oo))%1440+1440)%1440;
+  const gapOf=clockInDest=>{const dur=(((clockInDest-od)-(s-oo))%1440+1440)%1440;return signedGap(dur,sched)};
+  const g=gapOf(v);
+  if(g>=-90&&g<=300)return {value:clockText(v),status:"OK"};
+  const converted=v-oo+od,g2=gapOf(converted);
+  if(g2>=-90&&g2<=300)return {value:clockText(converted),status:"SHIFTED"};
+  return {value:clockText(v),status:"UNCHECKED"};
+}
