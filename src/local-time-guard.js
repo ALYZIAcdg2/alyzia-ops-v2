@@ -37,3 +37,15 @@ export function guardArrivalClock(value,{std,sta,date,originZone="Europe/Paris",
   if(g2>=-90&&g2<=300)return {value:clockText(converted),status:"SHIFTED"};
   return {value:clockText(v),status:"UNCHECKED"};
 }
+
+// Une heure RÉELLE (atterrissage, ATA) ne peut pas être dans le futur : c'est une estimation lue comme un fait (TS251 en vol « atterri à 18:45 »).
+// L'heure est une heure locale de destination ; elle est placée après le décollage (ou la STD) pour trouver le bon jour.
+export function isFutureActual(value,{date,std,takeoff,originZone="Europe/Paris",destZone="Europe/Paris",nowMs=Date.now(),graceMin=5}={}){
+  const v=clockMinutes(value),s=clockMinutes(takeoff)??clockMinutes(std);
+  const m=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(v===null||s===null||!m)return false;
+  const dayUtc=Date.UTC(+m[1],+m[2]-1,+m[3]),oo=zoneOffsetMinutes(date,originZone),od=zoneOffsetMinutes(date,destZone);
+  const depEpoch=dayUtc+(s-oo)*60000;
+  let arr=dayUtc+(v-od)*60000;while(arr<depEpoch)arr+=86400000;
+  return arr>nowMs+graceMin*60000;
+}

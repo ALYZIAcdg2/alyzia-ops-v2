@@ -12,3 +12,20 @@ test("TS251 enregistré : atterrissage et ATA corrigés",()=>{const c=fixArrival
 test("valeurs déjà locales ou saisie manuelle : inchangées",()=>{assert.deepEqual(fixArrivalClocks({...ts251,landing:"12:45",ata:"12:55"},"2026-10-05"),[]);assert.deepEqual(fixArrivalClocks({...ts251,landingSource:"MANUAL",ataSource:"MANUAL"},"2026-10-05"),[])});
 test("le passage corrige et écrit une seule fois",async()=>{const writes=[];const env={OPS_DB:{prepare:q=>({bind:(...a)=>({all:async()=>({results:[{identity:"1",flight_date:"2026-10-05",data_json:JSON.stringify(ts251)}]}),run:async()=>{writes.push(a)}})})}};
   const r=await sanitizeArrivalClocks(env,{nowMs:Date.parse("2026-10-05T20:00:00Z")});assert.equal(r.updated,1);assert.equal(r.fixed,2);const s=JSON.parse(writes[0][0]);assert.equal(s.landing,"12:45");assert.equal(s.flightInfoLog[0].source,"ARRIVAL_TZ_FIX")});
+import {isFutureActual} from "./local-time-guard.js";
+const fut={date:"2026-10-06",std:"10:10",takeoff:"10:36",originZone:"Europe/Paris",destZone:"America/Toronto"};
+test("atterrissage 12:45 Montréal (16:45 UTC) alors qu'il est 13:00 UTC : dans le futur",()=>{
+  const now=Date.parse("2026-10-06T13:00:00Z");assert.equal(isFutureActual("12:45",{...fut,nowMs:now}),true);
+  assert.equal(isFutureActual("12:45",{...fut,nowMs:Date.parse("2026-10-06T17:00:00Z")}),false);
+  assert.equal(isFutureActual("04:45",{...fut,nowMs:Date.parse("2026-10-06T17:00:00Z")}),false);   // 04:45 locale = 08:45 UTC : juste après le décollage, donc passé
+});
+test("TS251 en vol : atterrissage 18:45 enregistré → retiré, devient ETA 12:45, statut EN VOL",async()=>{
+  const flight={origin:"CDG",destination:"YUL",std:"10:10",sta:"12:15",takeoff:"10:36",landing:"18:45",status:"ATTERI"};const writes=[];
+  const env={OPS_DB:{prepare:q=>({bind:(...a)=>({all:async()=>({results:[{identity:"1",flight_date:"2026-10-06",data_json:JSON.stringify(flight)}]}),run:async()=>{writes.push(a)}})})}};
+  const r=await sanitizeArrivalClocks(env,{nowMs:Date.parse("2026-10-06T13:00:00Z")});assert.equal(r.updated,1);
+  const s=JSON.parse(writes[0][0]);assert.equal(s.landing,undefined);assert.equal(s.eta,"12:45");assert.equal(s.status,"EN VOL");
+  // une fois l'heure passée, un atterrissage réel n'est plus touché
+  const flight2={...flight,landing:"12:45",ata:"12:55",status:"ARRIVÉE"};writes.length=0;
+  env.OPS_DB.prepare=q=>({bind:(...a)=>({all:async()=>({results:[{identity:"1",flight_date:"2026-10-06",data_json:JSON.stringify(flight2)}]}),run:async()=>{writes.push(a)}})});
+  await sanitizeArrivalClocks(env,{nowMs:Date.parse("2026-10-06T18:00:00Z")});assert.equal(writes.length,0);
+});
