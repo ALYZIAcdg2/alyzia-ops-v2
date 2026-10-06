@@ -173,7 +173,9 @@ test("a flight that took off without ATD is asked again by the cron (FlightStats
   assert.equal(priority({std:"11:10"},x,750,now)[0],0.4);
   assert.equal(priority({std:"11:10"},{...x,publicLiveBackfill:{checkedAt:iso(-2)}},750,now)[0],1);
   assert.equal(priority({std:"11:10"},{...x,atd:"11:50"},750,now)[0],1);
-  assert.equal(priority({std:"08:00"},{...x,takeoff:"08:10"},750,now)[0],1);
+  assert.equal(priority({std:"00:00"},{...x,std:"00:00",takeoff:"00:10"},750,now)[0],1);   // décollage il y a plus de 12 h
+  assert.equal(priority({std:"08:00"},{...x,takeoff:"08:10"},750,now)[0],0.4);   // il y a 4 h : relu aussi
+  assert.equal(priority({std:"11:10",flight_date:"2026-10-05"},{...x,flightStatsId:"1412363884",flightStatsIdDate:"2026-10-05"},750,now)[0],0.3);   // identifiant FlightStats connu : en premier
 });
 
 test("flightId found in the path form and in the JSON data of the page (TS111, 5 Oct)",()=>{
@@ -228,4 +230,11 @@ test("disjoncteurs FlightStats séparés : la page refusée ne bloque pas l'API"
   flightStatsNoteResult(429,t,"api");flightStatsNoteResult(429,t,"api");assert.equal(flightStatsPaused(t+1000,"api"),false);
   flightStatsNoteResult(429,t,"api");assert.equal(flightStatsPaused(t+1000,"api"),true);assert.equal(flightStatsPaused(t+61000,"api"),false);
   flightStatsReset();
+});
+test("vol arrivé sans ATD : relu avant les vols sans enjeu, pas avant les vols en l'air",()=>{
+  const now=Date.UTC(2026,9,5,15,0),iso=m=>new Date(now+m*60000).toISOString();
+  const landed={std:"11:15",takeoff:"11:30",ata:"13:14",publicLiveBackfill:{checkedAt:iso(-30)}};
+  assert.equal(priority({std:"11:15"},landed,900,now)[0],1.6);
+  assert.equal(priority({std:"11:15"},{...landed,publicLiveBackfill:{checkedAt:iso(-3)}},900,now)[0]>1.6,true);
+  assert.equal(priority({std:"11:15"},{...landed,atd:"11:20",reg:"F-GSPL"},900,now)[0]>1.6,true);
 });
