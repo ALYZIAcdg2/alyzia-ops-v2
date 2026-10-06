@@ -242,7 +242,7 @@ function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   if(field==="atd"||field==="takeoff"){const g=guardDepartureClock(hit.value,x.std,x.activeDate||x.date,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris");if(g.status==="REJECTED")return false;if(g.status==="SHIFTED")hit={...hit,value:g.value,source:`${hit.source}+LOCALIZED`}}
   const before=clean(x[field]);if(before===hit.value)return false;
   if(field==="atd"&&before&&/FIDS_ONTIME/.test(upper(x.atdSource))&&!/FIDS/.test(upper(hit.source)))x.atdConflict={from:before,to:hit.value,source:hit.source,at};/* ATD « parti à l'heure » (flux FIDS) contredit par une autre source : le vol passe À CONTRÔLER */const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:`PUBLIC_LIVE:${hit.source}`,field,from:before,to:hit.value});x.flightInfoLog=log.slice(0,240);x[field]=hit.value;x[field+"Source"]=`PUBLIC_LIVE:${hit.source}`;x[field+"UpdatedAt"]=at;if(field==="reg"){x.registration=hit.value;x.aircraftRegistration=hit.value}return true}
-function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x)||(/FIDS/.test(upper(x.atdSource))&&!manual(x,"atd")),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isJunkRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
+function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x)||(/FIDS/.test(upper(x.atdSource))&&!manual(x,"atd")),eta:!clean(x.eta),ata:!clean(x.ata)||(/FIDS/.test(upper(x.ataSource))&&!manual(x,"ata")),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isJunkRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
 function anyNeed(n,keys){return keys.some(k=>n[k])}
 async function readCurrent(env,id){const r=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(id).first();if(!r)return null;try{return JSON.parse(r.data_json||"{}")}catch{return {}}}
 async function saveMeta(env,data){try{await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_public_live_last',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(JSON.stringify(data)).run()}catch{}}
@@ -266,6 +266,8 @@ export function deriveAta(landingValue,zone,airline,now=new Date()){
 }
 // An ATD that is only the FR24 takeoff copied over (older readings): it is re-read first so FlightStats / FlightAware can give the real gate departure.
 // ATD venu du flux FIDS : provisoire, FlightStats / FlightAware doivent encore le confirmer.
+// ATA venu du flux FIDS : provisoire aussi.
+function fidsAta(x){return Boolean(clean(x?.ata))&&/FIDS/.test(upper(x.ataSource))&&!manual(x,"ata")}
 function fidsAtd(x){return Boolean(clean(x?.atd))&&/FIDS/.test(upper(x.atdSource))&&!manual(x,"atd")}
 export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clean(x.takeoff)&&/FR24/.test(upper(x.atdSource))&&!manual(x,"atd")}
 // Airborne flight arriving within 2 h (or just overdue): its ETA moves most, so it is re-read first, at most every 3 minutes.
@@ -274,14 +276,14 @@ export function arrivingSoon(x,nowMs=Date.now()){const a=Date.parse(clean(x?.sta
 export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];
   // Took off but no ATD yet (FR24 no longer gives it): FlightStats / FlightAware are asked again, every 5 minutes at most, for 12 h after takeoff ; the flights whose FlightStats id is known (light API call) come first.
   if((!clean(x.atd)||fidsAtd(x))&&clean(x.takeoff)&&!clean(x.ata)&&nowMs-checked>=5*60000){const since=minutesSinceLocalClock(x.takeoff,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris",new Date(nowMs));if(since!==null&&since<=720)return [/^\d+$/.test(clean(x.flightStatsId))&&clean(x.flightStatsIdDate)===row.flight_date?0.3:0.4,checked]}// Déjà arrivé mais ATD (ou immatriculation) toujours manquant : relu après les vols en l'air, avant les vols sans enjeu (au plus toutes les 10 min par vol). Sans cela ces vols restaient dans le dernier groupe et n'étaient presque jamais repris.
-  if(clean(x.ata)&&(!clean(x.atd)||fidsAtd(x)||!clean(x.reg||x.registration))&&nowMs-checked>=10*60000)return [1.6,checked];
+  if(clean(x.ata)&&(!clean(x.atd)||fidsAtd(x)||fidsAta(x)||!clean(x.reg||x.registration))&&nowMs-checked>=10*60000)return [1.6,checked];
   if(departed&&!clean(x.ata)&&arrivingSoon(x,nowMs)&&nowMs-checked>=INFLIGHT_REREAD_MIN*60000)return [0.5,checked];if(!departed&&std!=null&&std<=nowMin+30)return [nowMin-std>360?2:0,checked];if(departed&&!clean(x.ata))return [1,checked];if(!clean(x.eta)&&clean(x.atd))return [2,checked];if(std!=null&&std<=nowMin+120)return [3,checked];return [4,checked]}
 // A quarter of the slots (at least one) is kept for flights of the second tier or later (missing ETA, departure missed long ago): otherwise the airborne
 // flights, which are always more numerous than the slots in the evening, would starve them for good.
 // Vol à relire : ceux du jour tant qu'ATA, immatriculation ou type manquent ; ceux de la veille tant qu'ils n'ont pas d'ATA **ou pas d'ATD** (sans cela un vol arrivé la veille sans ATD n'était plus jamais relu après minuit : LO334, SK566, BJ511…).
 export function needsLiveRead(flightDate,today,x){
   if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft));
-  return !clean(x.ata)||!clean(x.atd)||fidsAtd(x);
+  return !clean(x.ata)||!clean(x.atd)||fidsAtd(x)||fidsAta(x);
 }
 export function pickSlots(sorted,size){
   const reserve=Math.min(size,Math.max(1,Math.floor(size/4))),head=sorted.slice(0,size-reserve),rest=sorted.slice(size-reserve),late=rest.filter(z=>z.p[0]>=2).slice(0,reserve);
