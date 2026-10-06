@@ -37,30 +37,43 @@ export function plausibleAtd(atd,{std,takeoff,nowMin}){
   const t=mins(takeoff);if(t!=null&&a>t)return false;
   return true;
 }
+// Avec les horodatages du flux : retard entre -60 min et +24 h, jamais dans le futur ; le décollage connu borne l'ATD le même jour. Sans horodatage, contrôle sur les heures seules (même jour).
+export function plausibleActual(row,{std,takeoff,nowMin,nowMs,sameDay}){
+  const a=Number(row?.dep_actual_ts),t=Number(row?.dep_time_ts);
+  if(a>0&&t>0){const d=(a-t)/60;if(d<-60||d>1440||a*1000>nowMs+60000)return false;return sameDay?plausibleAtd(hhmm(row.dep_actual),{std,takeoff,nowMin:null}):true}
+  return sameDay&&plausibleAtd(hhmm(row.dep_actual),{std,takeoff,nowMin});
+}
 export function pickFeedRow(index,{designator,std}){return (index.get(upper(designator))||[]).filter(r=>hhmm(r.dep_time)===std).sort((a,b)=>(upper(b.flight_iata)===upper(designator))-(upper(a.flight_iata)===upper(designator)))[0]||null}
 
 export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const feed=await getFeed({fetchImpl,nowMs});
   if(!feed.rows){const out={ok:true,status:feed.status,updated:0};if(!dryRun)await saveFidsState(env,{status:feed.status,http:feed.httpStatus||0,flights:{}},nowMs);return out}
-  const date=parisDate(nowMs),nowMin=parisMinutes(nowMs),index=indexFeed(feed.rows,date),at=new Date(nowMs).toISOString();
-  const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
-  let matched=0,updated=0,rejected=0;const per={};
-  for(const r of results){
-    let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
-    if(upper(x.origin||"CDG")!=="CDG")continue;
-    const airline=upper(x.airline||r.airline),flight=upper(x.flight||r.flight_number),designator=flight.startsWith(airline)?flight:airline+String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
-    const std=hhmm(x.std||r.std),row=pickFeedRow(index,{designator,std}),key=designator+"|"+std;if(!row){per[key]="NOT_TRACKED";continue}matched++;per[key]=clean(row.dep_actual).startsWith(date)?"OK":"NO_USABLE_DATA";
-    const atd=clean(row.dep_actual)&&clean(row.dep_actual).startsWith(date)?hhmm(row.dep_actual):"";if(!atd)continue;
-    if(manual(x,"atd")||(clean(x.atd)&&!/FIDS/.test(upper(x.atdSource))))continue;
-    if(clean(x.atd)===atd)continue;
-    if(!plausibleAtd(atd,{std,takeoff:hhmm(x.takeoff),nowMin})){rejected++;continue}
-    const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"atd",from:clean(x.atd),to:atd});
-    x.flightInfoLog=log.slice(0,240);x.atd=atd;x.atdSource="PUBLIC_LIVE:FIDS";x.atdUpdatedAt=at;updated++;
-    if(!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
+  const today=parisDate(nowMs),yesterday=parisDate(nowMs-86400000),nowMin=parisMinutes(nowMs),at=new Date(nowMs).toISOString();
+  let matched=0,updated=0,rejected=0,flightsSeen=0;const per={};
+  // Aujourd'hui, et hier : un vol d'hier soir retardé après minuit reçoit son ATD aujourd'hui (la date du vol reste celle d'hier, la STD n'est jamais modifiée).
+  for(const date of [today,yesterday]){
+    const index=indexFeed(feed.rows,date);
+    const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
+    flightsSeen+=results.length;
+    for(const r of results){
+      let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
+      if(upper(x.origin||"CDG")!=="CDG")continue;
+      const airline=upper(x.airline||r.airline),flight=upper(x.flight||r.flight_number),designator=flight.startsWith(airline)?flight:airline+String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
+      const std=hhmm(x.std||r.std),row=pickFeedRow(index,{designator,std}),key=designator+"|"+std,isToday=date===today;
+      if(!row){if(isToday)per[key]="NOT_TRACKED";continue}
+      matched++;const act=clean(row.dep_actual);if(isToday)per[key]=act?"OK":"NO_USABLE_DATA";
+      const atd=act?hhmm(act):"";if(!atd)continue;
+      if(manual(x,"atd")||(clean(x.atd)&&!/FIDS/.test(upper(x.atdSource))))continue;
+      if(clean(x.atd)===atd)continue;
+      if(!plausibleActual(row,{std,takeoff:act.startsWith(date)?hhmm(x.takeoff):"",nowMin,nowMs,sameDay:act.startsWith(date)})){rejected++;continue}
+      const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"atd",from:clean(x.atd),to:atd});
+      x.flightInfoLog=log.slice(0,240);x.atd=atd;x.atdSource="PUBLIC_LIVE:FIDS";x.atdUpdatedAt=at;updated++;
+      if(!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
+    }
   }
   if(!dryRun)await saveFidsState(env,{status:"OK",http:200,flights:per},nowMs);
-  return {ok:true,status:"OK",date,flights:results.length,matched,updated,rejected};
+  return {ok:true,status:"OK",date:today,flights:flightsSeen,matched,updated,rejected};
 }
 
 // État de la dernière lecture, gardé dans ops_meta pour le bilan ADMIN (une ligne, réécrite seulement si elle change ou toutes les 10 min).

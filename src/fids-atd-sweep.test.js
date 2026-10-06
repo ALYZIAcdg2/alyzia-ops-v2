@@ -30,3 +30,11 @@ test("tentative FIDS pour le bilan : lu, sans donnée, refusé",()=>{
   assert.equal(bad.status,"BLOCKED");assert.equal(bad.httpStatus,403);
   assert.equal(fidsAttempt(null,"TK1832","12:25"),null);
 });
+import {plausibleActual} from "./fids-atd-sweep.js";
+test("vol d'hier soir retardé : ATD d'aujourd'hui accepté, futur refusé",()=>{
+  const now=Date.parse("2026-10-06T13:00:00Z");
+  const row={dep_time_ts:Date.parse("2026-10-05T20:45:00Z")/1000,dep_actual_ts:Date.parse("2026-10-06T12:04:00Z")/1000,dep_actual:"2026-10-06 14:04"};
+  assert.equal(plausibleActual(row,{std:"22:45",nowMs:now,sameDay:false}),true);
+  assert.equal(plausibleActual({...row,dep_actual_ts:now/1000+7200},{std:"22:45",nowMs:now,sameDay:false}),false);
+  assert.equal(plausibleActual({...row,dep_actual_ts:row.dep_time_ts+3*86400},{std:"22:45",nowMs:now,sameDay:false}),false);
+});
