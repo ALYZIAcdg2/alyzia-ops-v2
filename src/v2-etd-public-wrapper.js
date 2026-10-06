@@ -17,6 +17,7 @@ import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
 import {runFidsCompare} from "./fids-compare.js";
+import {runFidsPages} from "./fids-pages-test.js";
 import {runTimesCompare} from "./times-compare.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
@@ -119,6 +120,10 @@ export default {
     if(url.pathname==="/api/admin/times-compare"&&request.method==="GET"){
       // Lecture seule : ETD / ETA de nos vols du jour comparés au tableau FR24, au flux FIDS et à FR24 par vol (une lecture FR24 par vol).
       try{return json(await runTimesCompare(env,{limit:Number(url.searchParams.get("limit")||12),offset:Number(url.searchParams.get("offset")||0),all:url.searchParams.get("all")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
+      // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
+      try{return json(await runFidsPages({list:url.searchParams.get("list")||"",date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-compare"&&request.method==="GET"){
       // Lecture seule : compare le flux FIDS flightradar.live à nos vols du jour (ATD, décollage, porte).
