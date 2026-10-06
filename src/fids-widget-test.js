@@ -22,6 +22,19 @@ async function get(fetchImpl,url,accept){
   const r=await fetchImpl(url,{headers:{accept,"user-agent":UA,"accept-language":"fr-FR,fr;q=0.9,en;q=0.8",referer:PAGE_URL},redirect:"follow"});
   return {r,text:await r.text()};
 }
+export function summariseSchedule(rows){
+  const a=Array.isArray(rows)?rows:[],has=k=>a.filter(r=>r&&String(r[k]??"").trim()!=="").length;
+  const keys=[...new Set(a.flatMap(r=>Object.keys(r||{})))];
+  return {count:a.length,keys,filled:Object.fromEntries(keys.map(k=>[k,has(k)])),withActual:a.filter(r=>String(r?.dep_actual??"").trim()!=="").slice(0,3),sample:a.slice(0,2)};
+}
+async function probeSchedule(fetchImpl){
+  const url="https://fids.flightradar.live/api/schedules/departures/CDG";
+  try{
+    const p=await get(fetchImpl,url,"application/json,text/plain,*/*");
+    let rows=null;try{rows=JSON.parse(p.text)}catch{}
+    return {url,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),...(rows?summariseSchedule(rows):{sample:clean(p.text).slice(0,200)})};
+  }catch(e){return {url,error:String(e?.message||e).slice(0,120)}}
+}
 export async function runFidsWidgetTest({fetchImpl=fetch}={}){
   const out={ok:true,mode:"FIDS_WIDGET_TEST_NO_WRITE",jsUrl:JS_URL};
   try{
@@ -31,6 +44,7 @@ export async function runFidsWidgetTest({fetchImpl=fetch}={}){
     const eps=extractEndpoints(text);out.endpoints=eps;
     out.fieldHints=["atd","actual","takeoff","gate","reg","aircraft","status","estimated","scheduled"].filter(k=>new RegExp(k,"i").test(text));
     out.snippets=["api/schedules","flight_type","fetch(","XMLHttpRequest","actual"].map(k=>{const i=text.indexOf(k);return i<0?null:{key:k,text:text.slice(Math.max(0,i-300),i+500)}}).filter(Boolean);
+    out.schedule=await probeSchedule(fetchImpl);
     out.probes=[];
     const cands=eps.filter(u=>/api|data|flight|fids/i.test(u)&&!/\.js(\?|$)/i.test(u)).slice(0,3);
     for(const e of cands){
@@ -42,7 +56,7 @@ export async function runFidsWidgetTest({fetchImpl=fetch}={}){
         out.probes.push({url:u,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),shape,sample:shape?undefined:clean(p.text).slice(0,200)});
       }catch(e2){out.probes.push({url:u,error:String(e2?.message||e2).slice(0,120)})}
     }
-    out.verdict=out.probes.some(p=>p.shape&&!p.wall)?"JSON_TROUVE":(eps.length?"ENDPOINTS_A_VOIR":"RIEN_TROUVE");
+    out.verdict=(out.schedule?.count>0&&!out.schedule.wall)||out.probes.some(p=>p.shape&&!p.wall)?"JSON_TROUVE":(eps.length?"ENDPOINTS_A_VOIR":"RIEN_TROUVE");
     return out;
   }catch(e){return {...out,ok:false,verdict:"ERREUR_RESEAU",error:String(e?.message||e).slice(0,200)}}
 }
