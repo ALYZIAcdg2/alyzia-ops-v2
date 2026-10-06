@@ -23,6 +23,9 @@ export function classify({row,x},now){
   const gate=clean(x.gate||x.departureGate||x.departure_gate),reg=clean(x.reg||x.registration||x.aircraftRegistration);
   const flight=upper(x.flight||x.flight_number||row.flight_number),destination=upper(x.destination||x.dest||x.arrival||"");
   const missing=[];if(!std)missing.push("STD");if(!sta)missing.push("STA");
+  const cancelledEarly=isCancelled(x),acType=clean(x.aircraftActual||x.aircraft);
+  // Toute information manquante (porte, immatriculation, type d'appareil) met le vol EN ATTENTE, quelle que soit sa date.
+  if(!cancelledEarly){if(!gate||gate==="—")missing.push("GATE");if(!reg)missing.push("REG");if(!acType)missing.push("A/C")}
   const today=date===now.date,future=date>now.date,past=date<now.date;
   const nowMin=minute(now.hhmm),stdMin=minute(std),delta=today&&nowMin!==null&&stdMin!==null?stdMin-nowMin:null;
   const cancelled=isCancelled(x),flightStatus=flightOperationalStatus(x);
