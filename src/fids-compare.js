@@ -1,5 +1,6 @@
 // Comparaison LECTURE SEULE : le flux FIDS flightradar.live (CDG départs) contre nos vols du jour. N'écrit rien.
 // GET /api/admin/fids-compare : écart entre dep_actual du flux et notre ATD / décollage, et vols où le flux apporterait un ATD qui manque.
+import {indexFeed as indexFeedByDate,pickFeedRow,plausibleActual,loadFidsState} from "./fids-atd-sweep.js";
 const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 const URL_="https://fids.flightradar.live/api/schedules/departures/CDG";
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
@@ -47,8 +48,20 @@ export async function runFidsCompare(env,{fetchImpl=fetch,nowMs=Date.now(),fligh
   for(const x of results){let d={};try{d=JSON.parse(x.data_json||"{}")}catch{continue}
     if(upper(d.origin||"CDG")!=="CDG")continue;
     const airline=upper(d.airline||x.airline),designator=upper(d.flight||x.flight_number);
-    flights.push({designator:designator.startsWith(airline)?designator:airline+String(x.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),std:hhmm(d.std||x.std),atd:hhmm(d.atd),takeoff:hhmm(d.takeoff),gate:clean(d.gate)})}
+    flights.push({designator:designator.startsWith(airline)?designator:airline+String(x.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),std:hhmm(d.std||x.std),atd:hhmm(d.atd),takeoff:hhmm(d.takeoff),gate:clean(d.gate),atdSource:clean(d.atdSource),manualAtd:upper(d.atdSource).includes("MANUAL")||Boolean(d.manual?.atd||d.manualOverrides?.atd||d.manual_fields?.atd)})}
   const want=upper(flight).replace(/[^A-Z0-9]/g,"");
-  const explain=want?{flight:want,ours:flights.filter(f=>upper(f.designator)===want),feed:(indexFeed(rows).get(want)||[]).map(r=>({flight_iata:r.flight_iata,cs_flight_iata:r.cs_flight_iata,dep_time:r.dep_time,dep_estimated:r.dep_estimated,dep_actual:r.dep_actual,status:r.status,dep_gate:r.dep_gate,arr_iata:r.arr_iata}))}:undefined;
+  // Décision que prendrait le passage FIDS pour chacun de nos vols de ce numéro (sans rien écrire).
+  const decide=f=>{
+    const idx=indexFeedByDate(rows,date),row=pickFeedRow(idx,{designator:f.designator,std:f.std});
+    if(!row)return {reason:"aucune ligne du flux avec ce numéro et cette STD",feedOtherTimes:(idx.get(upper(f.designator))||[]).map(r=>hhmm(r.dep_time))};
+    const act=clean(row.dep_actual);if(!act)return {reason:"le flux n'a pas d'heure réelle",feedStatus:row.status};
+    if(f.manualAtd)return {reason:"saisie manuelle : jamais touchée"};
+    if(f.atd&&!/FIDS/.test(upper(f.atdSource)))return {reason:"ATD déjà présent d'une autre source",source:f.atdSource,atd:f.atd};
+    if(f.atd===hhmm(act))return {reason:"ATD déjà égal à l'heure du flux"};
+    const ok=plausibleActual(row,{std:f.std,takeoff:act.startsWith(date)?f.takeoff:"",nowMin:null,nowMs,sameDay:act.startsWith(date)});
+    return ok?{reason:"DEVRAIT ÊTRE ÉCRIT au prochain passage",feedActual:hhmm(act)}:{reason:"refusé par le contrôle de plausibilité",feedActual:hhmm(act),std:f.std,takeoff:f.takeoff,dep_time_ts:row.dep_time_ts,dep_actual_ts:row.dep_actual_ts};
+  };
+  const lastRun=want?await loadFidsState(env):null;
+  const explain=want?{flight:want,lastFidsRun:lastRun?.at||null,lastFidsStatus:lastRun?.status||null,decisions:flights.filter(f=>upper(f.designator)===want).map(f=>({std:f.std,...decide(f)})),ours:flights.filter(f=>upper(f.designator)===want),feed:(indexFeed(rows).get(want)||[]).map(r=>({flight_iata:r.flight_iata,cs_flight_iata:r.cs_flight_iata,dep_time:r.dep_time,dep_estimated:r.dep_estimated,dep_actual:r.dep_actual,status:r.status,dep_gate:r.dep_gate,arr_iata:r.arr_iata}))}:undefined;
   return {ok:true,mode:"FIDS_COMPARE_NO_WRITE",verdict:"OK",date,feedRows:rows.length,explain,feedWindow:feedWindow(rows),...compareFlights(flights,rows)};
 }

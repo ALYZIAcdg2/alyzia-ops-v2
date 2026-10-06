@@ -14,3 +14,13 @@ test("mode explication : lignes du flux et nos valeurs pour un vol",async()=>{
   const r=await runFidsCompare(env,{flight:"a9628",nowMs:Date.parse("2026-10-06T14:40:00Z"),fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
   assert.equal(r.explain.ours[0].takeoff,"16:32");assert.equal(r.explain.feed[0].dep_actual,"");
 });
+test("explication : décision du passage FIDS pour un vol",async()=>{
+  const mk=(std,extra={})=>({flight_number:"1063",airline:"AH",std,data_json:JSON.stringify({airline:"AH",flight:"AH1063",origin:"CDG",std,takeoff:"20:46",...extra})});
+  const mkEnv=rowsDb=>({OPS_DB:{prepare:q=>({bind:()=>({all:async()=>({results:rowsDb}),first:async()=>null})})}});
+  const feed=[{flight_iata:"AH1063",dep_time:"2026-10-06 20:00",dep_actual:"2026-10-06 20:30",dep_time_ts:Date.parse("2026-10-06T18:00:00Z")/1000,dep_actual_ts:Date.parse("2026-10-06T18:30:00Z")/1000,status:"active"}];
+  const run=env=>runFidsCompare(env,{flight:"ah1063",nowMs:Date.parse("2026-10-06T20:00:00Z"),fetchImpl:async()=>new Response(JSON.stringify(feed),{status:200})});
+  assert.match((await run(mkEnv([mk("20:00")]))).explain.decisions[0].reason,/DEVRAIT/);
+  assert.match((await run(mkEnv([mk("20:10")]))).explain.decisions[0].reason,/aucune ligne/);
+  assert.match((await run(mkEnv([mk("20:00",{atd:"20:31",atdSource:"PUBLIC_LIVE:FLIGHTSTATS"})]))).explain.decisions[0].reason,/autre source/);
+  assert.match((await run(mkEnv([mk("20:00",{takeoff:"20:20"})]))).explain.decisions[0].reason,/DEVRAIT|plausibilité/);
+});
