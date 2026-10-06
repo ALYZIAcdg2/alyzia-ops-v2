@@ -27,14 +27,14 @@ export function classify({row,x},now){
   const nowMin=minute(now.hhmm),stdMin=minute(std),delta=today&&nowMin!==null&&stdMin!==null?stdMin-nowMin:null;
   const cancelled=isCancelled(x),flightStatus=flightOperationalStatus(x);
   const departed=Boolean(atd||hhmm(x.takeoff))||["EN VOL","ATTERI","ARRIVÉE"].includes(flightStatus);
-  let state=missing.length?"PARTIEL":"OK";
+  let state=missing.length?"EN ATTENTE":"OK";
   const atdConflict=Boolean(x.atdConflict&&!hhmm(x.ata)&&!upper(x.atdSource).includes("MANUAL"));
   if(cancelled){state="OK";missing.length=0}
   else if(future){if(!std&&!sta)state="NON TRAITÉ"}
   else if(past||departed){
     if(!atd)missing.push("ATD");
     if(!ata)missing.push("ATA");
-    state=missing.length?"PARTIEL":"OK";
+    state=missing.length?"EN ATTENTE":"OK";
   }else if(today){
     // Reference departure time: ETD when announced, else STD. "À CONTRÔLER" only once it has passed without ATD;
     // a flight whose STD (or ETD) is still ahead is never flagged, even without ETD.
@@ -49,13 +49,14 @@ export function classify({row,x},now){
       if(!etd)missing.push("ETD/ATD");
       if(!gate||gate==="—")missing.push("GATE");
       if(!reg)missing.push("REG");
-      state=missing.length?"PARTIEL":"OK";
+      state=missing.length?"EN ATTENTE":"OK";
     }
     if(!sta&&!etd&&!atd&&!eta&&!ata&&(!gate||gate==="—")&&!reg)state="NON TRAITÉ";
   }
   // ATD « parti à l'heure » (flux FIDS) contredit par une autre source : à vérifier tant que le vol n'est pas arrivé.
   if(atdConflict&&!cancelled){state="À CONTRÔLER";missing.push("ATD à vérifier")}
-  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus,std,sta,etd,atd,eta,ata,gate,reg,aircraft:clean(x.aircraftActual||x.aircraft),changes:(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field&&Date.now()-(Date.parse(e.at)||0)<6*3600000).slice(0,8).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:clean(e.source)})),state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at),liveAt:clean(x.publicLiveBackfill?.checkedAt),attempts:(Array.isArray(x.publicLiveBackfill?.attempts)?x.publicLiveBackfill.attempts:[]).map(a=>({s:upper(a.source),st:clean(a.status),h:Number(a.httpStatus||0)||0,d:clean(a.detailsInfo),at:clean(a.checkedAt)}))};
+  const log=(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field).slice(0,80).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:clean(e.source)}));
+  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus,std,sta,etd,atd,eta,ata,gate,reg,aircraft:clean(x.aircraftActual||x.aircraft),log,changes:(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field&&Date.now()-(Date.parse(e.at)||0)<6*3600000).slice(0,8).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:clean(e.source)})),state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at),liveAt:clean(x.publicLiveBackfill?.checkedAt),attempts:(Array.isArray(x.publicLiveBackfill?.attempts)?x.publicLiveBackfill.attempts:[]).map(a=>({s:upper(a.source),st:clean(a.status),h:Number(a.httpStatus||0)||0,d:clean(a.detailsInfo),at:clean(a.checkedAt)}))};
 }
 function baseProvider(v){const p=upper(v);if(p.startsWith("AIRLABS"))return "AIRLABS";if(p.startsWith("SKYLINK"))return "SKYLINK";if(p.startsWith("OAG"))return "OAG";if(p.includes("AERODATABOX")||p.startsWith("ADB"))return "AERODATABOX";if(p.startsWith("OPENSKY"))return "OPENSKY";if(p.startsWith("QUARK"))return "QUARK";if(p.startsWith("AVIATIONDATA"))return "AVIATIONDATA";if(p.startsWith("FLIGHTERA"))return "FLIGHTERA";if(p.startsWith("KAYAK"))return "KAYAK";if(p.startsWith("SERPAPI"))return "SERPAPI";if(p.startsWith("FLIGHTRADAR1"))return "FLIGHTRADAR1";if(p.startsWith("FLIGHTRADAR8"))return "FLIGHTRADAR8";if(p.startsWith("FR24DEP"))return "FR24DEP";if(p.startsWith("FR24API"))return "FR24API";if(p.startsWith("CDGBOARD"))return "CDGBOARD";return p}
 function quotaLimit(env,key){
@@ -82,7 +83,7 @@ async function dashboard(env){
   // Flux FIDS flightradar.live : lecture globale (une par passage), reportée vol par vol pour le bilan.
   {const fs=await loadFidsState(env);if(fs)for(const x of flights){if(x.date!==now.date||!x.attempts?.length)continue;const a=fidsAttempt(fs,x.flight,x.std);if(a)x.attempts.push({s:"FIDS",st:a.status,h:a.httpStatus,d:"",at:a.checkedAt})}}
   const today=flights.filter(x=>x.date===now.date),future=flights.filter(x=>x.date>now.date),past=flights.filter(x=>x.date<now.date);
-  const summarize=list=>({total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="PARTIEL").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
+  const summarize=list=>({total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="EN ATTENTE").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
   let quotas=[];
   try{
     const month=now.date.slice(0,7),{results:q=[]}=await env.OPS_DB.prepare(`SELECT provider,period,calls,last_status,last_at FROM api_provider_usage WHERE period IN (?,?) ORDER BY provider,period`).bind(month,now.date).all();
@@ -100,8 +101,8 @@ const UI=String.raw`<style id="alyzia-admin-native-css">
 .adn-table td.adn-maj{white-space:normal;min-width:150px;font-size:10px;line-height:1.25}.adn-maj-i small{color:#8190a3;font-weight:800}.adn-maj-i b{color:#0a6abf}.adn-badge{display:inline-flex;padding:4px 7px;border-radius:999px;font-weight:950}.adn-badge.OK{background:#e2f6eb;color:#087443}.adn-badge.PARTIEL{background:#fff0d2;color:#986100}.adn-badge.CTRL{background:#ffe5e9;color:#c6283c}.adn-badge.NONE{background:#eef1f4;color:#616d7c}@media(max-width:700px){#app .admin-native{padding:4px 0 100px}.adn-cards{grid-template-columns:1fr}.adn-title{font-size:21px}}
 </style><script id="alyzia-admin-native-js">(()=>{'use strict';
 const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
-const cls=s=>s==='OK'?'OK':s==='PARTIEL'?'PARTIEL':String(s).includes('CONTRÔLER')?'CTRL':'NONE';
-const card=(title,s)=>'<div class="adn-card"><b>'+title+' · '+(s?.total||0)+'</b><div class="adn-mini"><span class="ok">OK '+(s?.ok||0)+'</span><span class="part">PARTIEL '+(s?.partial||0)+'</span><span class="check">À CONTRÔLER '+(s?.check||0)+'</span><span class="none">NON TRAITÉ '+(s?.untreated||0)+'</span></div></div>';
+const cls=s=>s==='OK'?'OK':s==='EN ATTENTE'?'PARTIEL':String(s).includes('CONTRÔLER')?'CTRL':'NONE';
+const card=(title,s)=>'<div class="adn-card"><b>'+title+' · '+(s?.total||0)+'</b><div class="adn-mini"><span class="ok">OK '+(s?.ok||0)+'</span><span class="part">EN ATTENTE '+(s?.partial||0)+'</span><span class="check">À CONTRÔLER '+(s?.check||0)+'</span><span class="none">NON TRAITÉ '+(s?.untreated||0)+'</span></div></div>';
 window.adminPushNow=async function(){
   const btn=document.getElementById('adminPushBtn'),msg=document.getElementById('adnPushMsg');
   if(btn){btn.disabled=true;btn.textContent='⚡ EN COURS…'}

@@ -4,21 +4,14 @@ const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const json=(o,status=200)=>new Response(JSON.stringify(o),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}});
 
+// Sources utiles seulement : celles qui alimentent les vols aujourd'hui. Les autres (PlaneFinder, Skyscanner, FlightView, Wego, Ixigo, Kayak, Flighty, SimpleFlying, Flightradars24.fr, Flightera) n'ont jamais rien apporté ou sont refusées en permanence.
 const SOURCES=[
-  {key:"FR24",label:"Flightradar24",role:"ETD / TAKEOFF / ETA / LANDING / TYPE / IMMAT"},
+  {key:"FR24BOARD",label:"FR24 tableau CDG",role:"TAKEOFF / ETD / GATE / IMMAT / TYPE (un appel pour tous les vols)"},
+  {key:"FIDS",label:"FIDS flightradar.live",role:"ATD / ATA / ETA des vols en l'air / GATE (un appel pour tous les vols)"},
+  {key:"FR24",label:"Flightradar24 par vol",role:"ETD / TAKEOFF / ETA / LANDING / TYPE / IMMAT"},
+  {key:"FLIGHTSTATS",label:"FlightStats",role:"ATD / ATA / ETA / statut"},
   {key:"FLIGHTAWARE",label:"FlightAware",role:"ATD / ETA / ATA / suivi vol"},
-  {key:"FLIGHTSTATS",label:"FlightStats",role:"STA / ATD / ETA / ATA / statut"},
-  {key:"PLANEFINDER",label:"PlaneFinder",role:"suivi vol / TYPE / IMMAT"},
-  {key:"SKYSCANNER",label:"Skyscanner",role:"horaires / statut"},
-  {key:"FLIGHTVIEW",label:"FlightView",role:"horaires / statut"},
-  {key:"WEGO",label:"Wego",role:"horaires"},
-  {key:"IXIGO",label:"Ixigo",role:"statut / horaires"},
-  {key:"KAYAK",label:"Kayak",role:"suivi / horaires"},
-  {key:"FLIGHTY",label:"Flighty",role:"tableau départs CDG"},
-  {key:"PARIS_AEROPORT",label:"Paris Aéroport",role:"GATE / statut / horaires CDG"},
-  {key:"SIMPLEFLYING",label:"SimpleFlying",role:"fallback public"},
-  {key:"FLIGHTRADARS24_FR",label:"Flightradars24.fr",role:"départs CDG"},
-  {key:"FLIGHTERA",label:"Flightera",role:"horaires / statut / fallback"}
+  {key:"PARIS_AEROPORT",label:"Paris Aéroport",role:"GATE / statut / décollage / horaires CDG"}
 ];
 const FIELDS=["sta","etd","atd","takeoff","eta","landing","ata","gate","reg","aircraftActual","status"];
 const FIELD_LABEL={sta:"STA",etd:"ETD",atd:"ATD",takeoff:"TAKEOFF",eta:"ETA",landing:"LANDING",ata:"ATA",gate:"GATE",reg:"IMMAT",aircraftActual:"TYPE",status:"STATUS"};
@@ -28,19 +21,11 @@ function addDays(date,n){const d=new Date(`${date}T12:00:00Z`);d.setUTCDate(d.ge
 function sourceKey(v){
   const s=upper(v);
   if(!s)return "";
+  if(s.includes("FR24BOARD"))return "FR24BOARD";
+  if(s.includes("FIDS"))return "FIDS";
   if(s.includes("FLIGHTSTATS"))return "FLIGHTSTATS";
   if(s.includes("FLIGHTAWARE"))return "FLIGHTAWARE";
-  if(s.includes("PLANEFINDER"))return "PLANEFINDER";
-  if(s.includes("SKYSCANNER"))return "SKYSCANNER";
-  if(s.includes("FLIGHTVIEW"))return "FLIGHTVIEW";
-  if(s.includes("WEGO"))return "WEGO";
-  if(s.includes("IXIGO"))return "IXIGO";
-  if(s.includes("KAYAK"))return "KAYAK";
-  if(s.includes("FLIGHTY"))return "FLIGHTY";
   if(s.includes("PARIS_AEROPORT")||s.includes("PARIS AEROPORT"))return "PARIS_AEROPORT";
-  if(s.includes("SIMPLEFLYING"))return "SIMPLEFLYING";
-  if(s.includes("FLIGHTRADARS24"))return "FLIGHTRADARS24_FR";
-  if(s.includes("FLIGHTERA"))return "FLIGHTERA";
   if(s==="FR24"||s.includes("FR24")||s.includes("FLIGHTRADAR24"))return "FR24";
   return "";
 }
@@ -167,9 +152,9 @@ function patch(data){
   removeProviderSections();const sections=[...document.querySelectorAll('#app .admin-native .adn-section')];let sec=sections.find(s=>/SOURCES PUBLIQUES|QUOTAS API/i.test(s.querySelector('h3')?.textContent||''));if(!sec&&sections.length){sec=document.createElement('div');sec.className='adn-section';sections[0].after(sec)}
   if(sec&&data){
    // A source that never produced a field nor a successful read is hidden (counted in the footer, one click to show them).
-   const all=data.sources||[],useful=all.filter(s=>Number(s.fieldTotal)>0||Number(s.ok)>0).sort((a,b)=>Number(b.fieldTotal)-Number(a.fieldTotal)||Number(b.ok)-Number(a.ok)),unused=all.filter(s=>!useful.includes(s)),shown=showUnused?[...useful,...unused]:useful;
+   const all=data.sources||[],useful=all.filter(s=>Number(s.fieldTotal)>0||Number(s.ok)>0||Number(s.attempts)>0).sort((a,b)=>Number(b.fieldTotal)-Number(a.fieldTotal)||Number(b.ok)-Number(a.ok)),unused=all.filter(s=>!useful.includes(s)),shown=all;
    const row=s=>'<tr class="'+(Number(s.fieldTotal)>0||Number(s.ok)>0?'':'ps-unused')+'"><td class="ps-name"><b>'+esc(s.label)+'</b><small>'+esc(s.role)+'</small></td><td class="ps-num ps-ok">'+esc(s.ok)+'</td><td class="ps-num">'+esc(s.attempts)+'</td><td class="ps-num '+(s.failed?'ps-warn':'')+'">'+esc(s.failed)+'</td><td class="ps-fields">'+esc((s.fieldList||[]).map(x=>x.field+' '+x.count).join(' · ')||'—')+'</td><td class="ps-fail">'+((s.failureList||[]).slice(0,2).map(x=>esc(x.label)+' '+esc(x.count)).join(' · ')||'—')+'</td><td class="ps-last">'+esc(fmt(s.lastAt))+'</td></tr>';
-   const foot=unused.length?'<button type="button" class="ps-toggle" id="psToggle">'+(showUnused?'MASQUER':'AFFICHER')+' LES '+unused.length+' SOURCE'+(unused.length>1?'S':'')+' SANS APPORT</button>':'';
+   const foot='';
    sec.innerHTML='<h3>SOURCES PUBLIQUES · '+useful.length+' ACTIVE'+(useful.length>1?'S':'')+'</h3><div class="adn-source-note">J/J+1 : '+esc(data.totalFlights)+' VOLS · STA MANQUANTS : '+esc(data.missingSta)+' · IATA → OACI</div><div class="ps-table-wrap"><table class="ps-table"><thead><tr><th>SOURCE</th><th>OK</th><th>TENT.</th><th>KO</th><th>CHAMPS RETENUS</th><th>ÉCHECS</th><th>DERNIER</th></tr></thead><tbody>'+(shown.map(row).join('')||'<tr><td colspan="7">AUCUNE SOURCE ACTIVE</td></tr>')+'</tbody></table></div>'+foot;
    const t=sec.querySelector('#psToggle');if(t)t.onclick=()=>{showUnused=!showUnused;patch(cache)};
   }

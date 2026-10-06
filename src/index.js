@@ -12938,12 +12938,21 @@ async function handlePrepa(request, env, url) {
     });
 
     const flightRows=(await env.OPS_DB.prepare(`
-      SELECT identity
+      SELECT identity,airline,flight_number,flight_date,std,data_json
       FROM flights
       WHERE UPPER(airline)=?
         AND UPPER(REPLACE(flight_number,' ',''))=?
         AND flight_date=?
     `).bind(airline,flightNumber,flightDate).all()).results||[];
+
+    // Historique des vols supprimés : un instantané de la fiche et de sa PRÉPA reste dans D1 (table deleted_flights_log) avant toute suppression.
+    try{
+      await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS deleted_flights_log(id INTEGER PRIMARY KEY AUTOINCREMENT,deleted_at TEXT NOT NULL,identity TEXT,airline TEXT,flight_number TEXT,flight_date TEXT,std TEXT,data_json TEXT,prepa_json TEXT,deleted_from TEXT)`).run();
+      const prepaSnapshot=JSON.stringify(prepaRows||[]).slice(0,900000);
+      for(const fr of flightRows){
+        await env.OPS_DB.prepare(`INSERT INTO deleted_flights_log(deleted_at,identity,airline,flight_number,flight_date,std,data_json,prepa_json,deleted_from) VALUES(?,?,?,?,?,?,?,?,?)`).bind(new Date().toISOString(),String(fr.identity||""),String(fr.airline||airline),String(fr.flight_number||flightNumber),String(fr.flight_date||flightDate),String(fr.std||""),String(fr.data_json||"").slice(0,900000),prepaSnapshot,"DELETE /api/prepa/flight").run();
+      }
+    }catch(e){console.log("deleted_flights_log:",String(e?.message||e))}
 
     const identities=[...new Set(flightRows.map(r=>String(r.identity||"").trim()).filter(Boolean))];
 

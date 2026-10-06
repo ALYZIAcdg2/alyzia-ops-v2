@@ -544,6 +544,13 @@ const DELETE_FLIGHT_UI = String.raw`
         modalStack.length=0;
         if(toolsSnapshot)modalStack.push(toolsSnapshot);
       }
+      // Suppression lancée depuis la fiche vol : on ferme les fenêtres et on revient à la liste des vols.
+      if(window.__alyziaDeleteFromSheet===airline+'|'+flight+'|'+date){
+        window.__alyziaDeleteFromSheet='';
+        try{if(typeof closeAllModals==='function')closeAllModals()}catch(_){}
+        try{if(typeof window.v2xBack==='function')window.v2xBack();else if(typeof backToFlightListSamePosition==='function')backToFlightListSamePosition()}catch(_){}
+        return;
+      }
       openDeleteFlight(true,flight+' · '+deleteFlightDateLabel(date)+' A ÉTÉ SUPPRIMÉ. VOUS RESTEZ DANS LA LISTE DE SUPPRESSION.');
     }catch(error){
       if(body)body.innerHTML='<div class="import-status err">SUPPRESSION IMPOSSIBLE : '+escapeHtml(String(error&&error.message||error))+'</div><div class="delete-flight-actions"><button class="cancel" onclick="modalBack()">RETOUR</button><button class="danger" onclick=\'openDeleteFlightConfirmation('+JSON.stringify(airline)+','+JSON.stringify(flight)+','+JSON.stringify(date)+')\'>RÉESSAYER</button></div>';

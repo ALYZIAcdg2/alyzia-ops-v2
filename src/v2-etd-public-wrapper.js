@@ -27,11 +27,11 @@ function json(data,status=200){return new Response(JSON.stringify(data),{status,
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
 async function runLive(env,opts){
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
+  // Flux FIDS d'abord : ATD / ATA de tous les vols en un appel, pour que le passage par vol ne lise FlightStats / FlightAware que pour ce qui manque encore.
+  const fidsSweep=await sweepFidsToday(env).catch(()=>null);
   const live=await runPublicLiveFlow(env,opts);
   // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
   const boardSweep=await sweepBoardToday(env).catch(()=>null);
-  // Flux FIDS flightradar.live : ATD manquant des vols partis (remplacé par FlightStats / FlightAware quand ils répondent).
-  const fidsSweep=await sweepFidsToday(env).catch(()=>null);
   const recovery=await recoverValidatedLiveFacts(env);
   const parisAeroport=await runParisAirportStatusFlow(env);
   const regFix=await sanitizeTodayRegistrations(env);

@@ -17,6 +17,7 @@ const UI=String.raw`<style id="alyzia-admin-ux-css">
 .adx-srcs{display:flex;gap:3px;flex-wrap:wrap;cursor:pointer}.adx-p{display:inline-block;min-width:26px;text-align:center;padding:2px 5px;border-radius:7px;font-size:9px;font-weight:950;letter-spacing:.02em;border:1px solid transparent}
 .adx-p.ok{background:#e1f6ec;color:#0f8a5f;border-color:#bfe6d3}.adx-p.block{background:#ffe9d6;color:#b25400;border-color:#f6cba3}.adx-p.none{background:#eef2f6;color:#6b7c90;border-color:#dbe3ec}.adx-p.err{background:#ffe3e7;color:#c0213a;border-color:#f5bcc5}
 .adx-health{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}.adx-h{border:1px solid #dfe9f2;border-radius:10px;padding:6px 10px;background:#fbfdff;font-size:11px;font-weight:900;color:#536d87}.adx-h b{color:#10233f}.adx-h .g{color:#0f8a5f}.adx-h .o{color:#b25400}.adx-h .r{color:#c0213a}
+.adx-add{margin-top:3px;font-size:11px;line-height:1.5;color:#35506f}.adx-add.none{color:#8a97a6;font-style:italic}.adx-c{display:inline-block;margin:0 8px 2px 0}.adx-c small{color:#6b7c90;font-weight:700}
 .adx-modal table{width:100%;border-collapse:collapse;font-size:12px}.adx-modal th,.adx-modal td{padding:7px 8px;border-bottom:1px solid #e4ebf2;text-align:left;vertical-align:top}.adx-modal th{font-size:10px;color:#6b7c90}.adx-modal .miss{margin:10px 0;font-weight:900;font-size:12px}
 .adx-srchead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 14px}.adx-srchead b{font-size:22px;font-weight:950;color:#10233f}
 </style><script id="alyzia-admin-ux-js">(()=>{'use strict';
@@ -37,8 +38,14 @@ function loadFlights(){if(loading||Date.now()-flightsAt<15000)return;loading=tru
 function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&x.date===date)}
 function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
 function pills(x){return SRC.map(s=>{const a=latest(x,s[0]);const k=kind(a);return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+(a?label(a):'pas encore lu'))+'">'+s[1]+'</span>'}).join('')}
+// Qui a apporté quoi : dernière valeur de chaque champ écrite par chaque source, d'après le journal du vol.
+const FLD={etd:'ETD',atd:'ATD',eta:'ETA',ata:'ATA',takeoff:'TO',landing:'LDG',gate:'GATE',reg:'REG',aircraft:'A/C',status:'STATUT'};
+function srcKeyOf(src){const u=String(src||'').toUpperCase();if(u.includes('FR24BOARD'))return 'FR24BOARD';if(u.includes('FIDS'))return 'FIDS'+(u.includes('ONTIME')?'':'');if(u.includes('FLIGHTSTATS'))return 'FLIGHTSTATS';if(u.includes('FLIGHTAWARE'))return 'FLIGHTAWARE';if(u.includes('PLANEFINDER'))return 'PLANEFINDER';if(u.includes('SKYSCANNER'))return 'SKYSCANNER';if(u.includes('FR24'))return 'FR24';return 'AUTRE'}
+function contributions(x){const by={},seen={};(x.log||[]).forEach(e=>{const k=srcKeyOf(e.s),f=String(e.f||'').toLowerCase();if(!FLD[f]||!e.to)return;const id=k+'|'+f;if(seen[id])return;seen[id]=1;(by[k]=by[k]||[]).push({f:FLD[f],v:e.to,at:e.at,s:e.s,onTime:/ONTIME/i.test(e.s||''),derived:/DERIVED/i.test(e.s||'')})});return by}
+function contribHtml(list){return list.map(c=>'<span class="adx-c"><b>'+esc(c.f)+'</b> '+esc(c.v)+' <small>'+hm(c.at)+(c.onTime?' · à l\'heure (estimé = prévu)':'')+(c.derived?' · calculé':'')+'</small></span>').join('')}
 function openDetail(x){
-  const rows=SRC.map(s=>{const a=latest(x,s[0]);if(!a)return '<tr><td><b>'+s[2]+'</b></td><td colspan="3">Pas encore lu pour ce vol</td></tr>';const k=kind(a);return '<tr><td><b>'+s[2]+'</b></td><td><span class="adx-p '+k+'">'+(k==='ok'?'OK':k==='block'?'LIMITÉ':k==='none'?'VIDE':'ERREUR')+'</span> '+esc(label(a))+'</td><td>'+esc(a.d||'—')+'</td><td>'+hm(a.at)+'</td></tr>'}).join('');
+  const by=contributions(x);
+  const rows=SRC.map(s=>{const a=latest(x,s[0]);const c=by[s[0]];const add=c?'<div class="adx-add">A apporté : '+contribHtml(c)+'</div>':(a?'<div class="adx-add none">Rien apporté</div>':'');if(!a)return '<tr><td><b>'+s[2]+'</b></td><td colspan="3">Pas encore lu pour ce vol'+add+'</td></tr>';const k=kind(a);return '<tr><td><b>'+s[2]+'</b></td><td><span class="adx-p '+k+'">'+(k==='ok'?'OK':k==='block'?'LIMITÉ':k==='none'?'VIDE':'ERREUR')+'</span> '+esc(label(a))+add+'</td><td>'+esc(a.d||'—')+'</td><td>'+hm(a.at)+'</td></tr>'}).join('')+(by.AUTRE?'<tr><td><b>Autres</b></td><td colspan="3"><div class="adx-add">A apporté : '+contribHtml(by.AUTRE)+'</div></td></tr>':'');
   const html='<div class="adx-modal"><div class="miss">'+(x.missing&&x.missing.length?'Manque : '+esc(x.missing.join(', ')):'Rien ne manque')+' · dernière lecture '+hm(x.liveAt)+'</div><table><thead><tr><th>SOURCE</th><th>RÉSULTAT</th><th>DÉTAIL</th><th>HEURE</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   if(typeof showModal==='function')showModal(x.flight+' · lectures des sources',x.date,html);
 }
@@ -70,7 +77,7 @@ function cards(r){
   cs.slice(0,3).forEach((c,i)=>{const l=flightsCache.filter(groups[i]);const n=st=>l.filter(x=>st(String(x.state||''))).length;
     const set=(cls,t)=>{const el=c.querySelector('.adn-mini .'+cls);if(el&&el.textContent!==t)el.textContent=t};
     const b=c.querySelector(':scope>b');const tt=(b?.textContent||'').split('·')[0].trim();if(b&&l.length){const nt=tt+' · '+l.length;if(b.textContent!==nt)b.textContent=nt}
-    if(!l.length)return;set('ok','OK '+n(v=>v==='OK'));set('part','PARTIEL '+n(v=>v==='PARTIEL'));set('check','À CONTRÔLER '+n(v=>v.includes('CONTRÔLER')));set('none','NON TRAITÉ '+n(v=>v==='NON TRAITÉ'))});
+    if(!l.length)return;set('ok','OK '+n(v=>v==='OK'));set('part','EN ATTENTE '+n(v=>v==='EN ATTENTE'));set('check','À CONTRÔLER '+n(v=>v.includes('CONTRÔLER')));set('none','NON TRAITÉ '+n(v=>v==='NON TRAITÉ'))});
 }
 function tidy(r){
   r.querySelectorAll('.adn-section').forEach(sec=>{
