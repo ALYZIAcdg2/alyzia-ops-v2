@@ -11,7 +11,7 @@ const UI=String.raw`<style id="alyzia-admin-dashboard-v4-css">
 if(window.__alyziaAdminV4)return;window.__alyziaAdminV4=true;
 const norm=v=>String(v||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
 function setView(view){try{currentView=view}catch(e){}}
-function statusKey(text){const t=norm(text);if(t.startsWith('OK '))return 'OK';if(t.startsWith('PARTIEL '))return 'PARTIEL';if(t.startsWith('A CONTROLER '))return 'A CONTROLER';if(t.startsWith('NON TRAITE '))return 'NON TRAITE';return ''}
+function statusKey(text){const t=norm(text);if(t.startsWith('OK '))return 'OK';if(t.startsWith('EN ATTENTE '))return 'PARTIEL';if(t.startsWith('A CONTROLER '))return 'A CONTROLER';if(t.startsWith('NON TRAITE '))return 'NON TRAITE';return ''}
 function tableMini(root){return [...root.querySelectorAll('.adn-section')].find(s=>s.querySelector('.adn-table'))?.querySelector('.adn-mini')||null}
 function activeStatus(root){return tableMini(root)?.querySelector('.adn-status-active')?.dataset?.adminStatus||'ALL'}
 function syncTopKpis(root){const active=activeStatus(root);root.querySelectorAll('.adn-cards .adn-mini span').forEach(s=>s.classList.toggle('v4-active',statusKey(s.textContent)===active))}

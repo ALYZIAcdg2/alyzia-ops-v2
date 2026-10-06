@@ -74,3 +74,25 @@ test("appariement souple : l'unique ligne à ±15 min, jamais plusieurs ni une S
   assert.equal(pickFeedRow(idx,{designator:"TU441",std:"08:05"}),null);
   assert.equal(pickFeedRow(idx,{designator:"TU441",std:"08:10"}).dep_time,"2026-10-06 08:10");
 });
+import {ataFromRow} from "./fids-atd-sweep.js";
+test("ATA du flux : plausible seulement (pas futur, durée, après l'atterrissage connu)",()=>{
+  const now=Date.parse("2026-10-06T16:00:00Z");
+  const dep=Date.parse("2026-10-06T12:00:00Z")/1000,row=(arrMin,extra={})=>({arr_actual:"2026-10-06 17:45",arr_actual_ts:dep+arrMin*60,dep_actual_ts:dep,...extra});
+  assert.equal(ataFromRow(row(120),{},now),"17:45");
+  assert.equal(ataFromRow(row(10),{},now),"");            // arrivée 10 min après le départ : impossible
+  assert.equal(ataFromRow({...row(120),arr_actual_ts:now/1000+3600},{},now),"");   // futur
+  assert.equal(ataFromRow(row(120),{landing:"17:30"},now),"17:45");   // 15 min après l'atterrissage : porte
+  assert.equal(ataFromRow(row(120),{landing:"17:44"},now),"");        // égale à l'atterrissage : piste
+  assert.equal(ataFromRow(row(120),{landing:"16:30"},now),"");        // trop loin de l'atterrissage
+  assert.equal(ataFromRow({...row(120),arr_actual:""},{},now),"");
+});
+test("balayage : ATA du flux écrit, provisoire, sans écraser FlightStats ni une saisie manuelle",async()=>{
+  const nowMs=Date.parse("2026-10-06T16:00:00Z"),dep=Date.parse("2026-10-06T12:00:00Z")/1000;
+  const mkRow=(n,d)=>({identity:n,flight_number:n.slice(2),airline:n.slice(0,2),std:"14:00",data_json:JSON.stringify({airline:n.slice(0,2),flight:n,std:"14:00",origin:"CDG",...d})});
+  const e=fakeDb([mkRow("AH1",{}),mkRow("AH2",{ata:"19:50",ataSource:"PUBLIC_LIVE:FLIGHTSTATS"}),mkRow("AH3",{ata:"19:40",ataSource:"MANUAL"})]);
+  const rows=["AH1","AH2","AH3"].map(f=>({flight_iata:f,dep_time:"2026-10-06 14:00",dep_actual:"2026-10-06 14:05",dep_actual_ts:dep,dep_time_ts:dep,arr_actual:"2026-10-06 17:45",arr_actual_ts:dep+120*60}));
+  const r=await sweepFidsToday(e,{nowMs,fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
+  const ata=e.updates.map(u=>[u.flight,u.ata,u.ataSource]).filter(x=>x[1]);
+  assert.equal(r.ataUpdated,1);assert.deepEqual(ata.find(x=>x[0]==="AH1"),["AH1","17:45","PUBLIC_LIVE:FIDS"]);
+  assert.ok(!ata.some(x=>x[0]==="AH2"&&x[2]==="PUBLIC_LIVE:FIDS"));assert.ok(!ata.some(x=>x[0]==="AH3"&&x[2]==="PUBLIC_LIVE:FIDS"));
+});

@@ -95,7 +95,7 @@ window.v2xDeleteCurrent=function(){try{var x=typeof f==='function'?f():null;if(x
 var w=function(){var r=base.apply(this,arguments);try{var x=typeof f==='function'?f():null,body=document.getElementById('modalBody');
 if(x&&body&&!body.querySelector('.v2x-delete-flight')){var d=document.createElement('div');d.className='v2x-delete-flight';d.style.cssText='margin-top:14px;padding-top:12px;border-top:1px solid #dbe3ee;display:flex;justify-content:flex-end';
 var b=document.createElement('button');b.type='button';b.className='v2x-act danger';b.textContent='🗑 SUPPRIMER CE VOL DE LA LISTE';
-b.onclick=function(){if(typeof window.openDeleteFlightConfirmation==='function')window.openDeleteFlightConfirmation(x.airline,x.flight,x.date)};d.appendChild(b);body.appendChild(d)}}catch(e){}return r};
+b.onclick=function(){if(typeof window.openDeleteFlightConfirmation==='function'){window.__alyziaDeleteFromSheet=String(x.airline||'').trim()+'|'+String(x.flight||'').trim()+'|'+String(x.date||'').trim();window.openDeleteFlightConfirmation(x.airline,x.flight,x.date)}};d.appendChild(b);body.appendChild(d)}}catch(e){}return r};
 w.__v2xDel=true;window.openFlightInfo=w})();
 function apply(){syncList();renderDetail()}
 async function refresh(){try{const r=await fetch('/api/flights',{cache:'no-store'});if(!r.ok)return;const j=await r.json();live=Array.isArray(j)?j:Array.isArray(j?.flights)?j.flights:Array.isArray(j?.items)?j.items:[];apply()}catch{}}

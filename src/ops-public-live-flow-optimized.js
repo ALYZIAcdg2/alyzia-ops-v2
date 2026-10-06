@@ -23,7 +23,8 @@ export const LIVE_PUBLIC_SOURCE_ORDER={
   atd:["FlightStats","FlightAware exact","FR24","PlaneFinder","Skyscanner"],
   status:["FR24","FlightStats","PlaneFinder","Skyscanner"],
   eta:["FR24","FlightAware exact","FlightStats","PlaneFinder","Skyscanner"],
-  ata:["FlightStats","FlightAware exact","PlaneFinder","Skyscanner"],
+  // ATA : FIDS d'abord (passage en lot avant ce passage), puis FlightStats, puis FlightAware ; le premier qui donne l'heure la garde.
+  ata:["FlightStats","FlightAware exact"],
   takeoff:["FR24","FR24Board","FlightAware exact","PlaneFinder","FlightStats"],
   landing:["FR24","FlightAware exact","FlightStats","PlaneFinder"],
   aircraft:["FR24Board","FR24","PlaneFinder","FlightStats","Skyscanner"],
@@ -241,6 +242,8 @@ function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   // Departure clocks must be local to the origin: a UTC reading (more than 50 min before STD) is shifted, an impossible one refused.
   if(field==="atd"||field==="takeoff"){const g=guardDepartureClock(hit.value,x.std,x.activeDate||x.date,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris");if(g.status==="REJECTED")return false;if(g.status==="SHIFTED")hit={...hit,value:g.value,source:`${hit.source}+LOCALIZED`}}
   const before=clean(x[field]);if(before===hit.value)return false;
+  /* ATA : le premier qui donne l'heure la garde (FIDS, FlightStats, FlightAware) ; une autre source ne la remplace pas, seule une ATA calculée est remplacée. */
+  if(field==="ata"&&before&&/FIDS|FLIGHTSTATS|FLIGHTAWARE/.test(upper(x.ataSource))){const key=v=>upper(v).replace(/^PUBLIC_LIVE:/,"").replace(/EXACT$/,"").replace(/[^A-Z]/g,"");if(key(x.ataSource)!==key(hit.source))return false}
   if(field==="atd"&&before&&/FIDS_ONTIME/.test(upper(x.atdSource))&&!/FIDS/.test(upper(hit.source)))x.atdConflict={from:before,to:hit.value,source:hit.source,at};/* ATD « parti à l'heure » (flux FIDS) contredit par une autre source : le vol passe À CONTRÔLER */const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:`PUBLIC_LIVE:${hit.source}`,field,from:before,to:hit.value});x.flightInfoLog=log.slice(0,240);x[field]=hit.value;x[field+"Source"]=`PUBLIC_LIVE:${hit.source}`;x[field+"UpdatedAt"]=at;if(field==="reg"){x.registration=hit.value;x.aircraftRegistration=hit.value}return true}
 function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x)||(/FIDS/.test(upper(x.atdSource))&&!manual(x,"atd")),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isJunkRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
 function anyNeed(n,keys){return keys.some(k=>n[k])}
