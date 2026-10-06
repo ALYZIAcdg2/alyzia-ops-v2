@@ -35,7 +35,7 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
       const ty=upper(row.type);if(ty&&!manual(x,"aircraftActual")){const before=clean(x.aircraftActual);if(noteActualAircraft(x,ty,"PUBLIC_LIVE:FR24BOARD",at)&&clean(x.aircraftActual)!==before){const l=log[0];changed=true;counts.type++;log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"aircraft",from:before,to:clean(x.aircraftActual)});void l}}
       if(row.time&&row.status==="departed"){
         const tk=parisClock(row.time);if(!clean(x.takeoff)||(/FR24BOARD/.test(upper(x.takeoffSource))&&clean(x.takeoff)!==tk)){if(!manual(x,"takeoff")){note("takeoff",clean(x.takeoff),tk);x.takeoff=tk;x.takeoffSource="PUBLIC_LIVE:FR24BOARD";x.takeoffUpdatedAt=at}}
-      }else if(row.time&&row.status!=="departed"&&row.status!=="canceled"&&!clean(x.atd)&&!clean(x.takeoff)&&!manual(x,"etd")){
+      }else if(row.time&&row.time!==row.std&&row.status!=="departed"&&row.status!=="canceled"&&!clean(x.atd)&&!clean(x.takeoff)&&!manual(x,"etd")){
         const e=parisClock(row.time),from=clean(x.etd||x.edt),stale=nowMs-(Date.parse(x.etdUpdatedAt||0)||0)>15*60000;
         if(e!==from&&(!from||/FR24BOARD/.test(upper(x.etdSource))||stale)){note("etd",from,e);x.etd=e;x.edt=e;x.etdSource="PUBLIC_LIVE:FR24BOARD";x.etdUpdatedAt=at;x.etdTimeBasis="CDG_LOCAL"}
       }
