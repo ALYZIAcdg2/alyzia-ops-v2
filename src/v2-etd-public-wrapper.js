@@ -17,6 +17,7 @@ import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
 import {runFidsCompare} from "./fids-compare.js";
+import {runFidsArrivalsTest} from "./fids-arrivals-test.js";
 import {runFidsPages} from "./fids-pages-test.js";
 import {runTimesCompare} from "./times-compare.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
@@ -124,6 +125,10 @@ export default {
     if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
       // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
       try{return json(await runFidsPages({list:url.searchParams.get("list")||"",date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/fids-arrivals-test"&&request.method==="GET"){
+      // Lecture seule : flux d'arrivées FIDS de quelques aéroports de destination (heure réelle d'arrivée des vols venant de CDG).
+      try{return json(await runFidsArrivalsTest({iata:url.searchParams.get("iata")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-compare"&&request.method==="GET"){
       // Lecture seule : compare le flux FIDS flightradar.live à nos vols du jour (ATD, décollage, porte).
