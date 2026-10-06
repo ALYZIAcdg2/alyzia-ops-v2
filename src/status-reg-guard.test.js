@@ -244,3 +244,22 @@ test("vol de la veille arrivé mais sans ATD : encore relu",async()=>{const {nee
   assert.equal(needsLiveRead("2026-10-05","2026-10-06",{atd:"11:20"}),true);
   assert.equal(needsLiveRead("2026-10-06","2026-10-06",{ata:"13:14",reg:"F-GSPL",aircraft:"320"}),false);
 });
+test("FlightStats: la pause de la page s'allonge si les refus continuent, un succès la remet à zéro",async()=>{
+  const m=await import("./ops-public-live-flow-optimized.js");m.flightStatsReset();const t=Date.UTC(2026,9,6,10,0);
+  m.flightStatsNoteResult(403,t);m.flightStatsNoteResult(403,t);                       // 1re pause : 90 s
+  assert.equal(m.flightStatsPaused(t+89000),true);assert.equal(m.flightStatsPaused(t+91000),false);
+  m.flightStatsNoteResult(429,t+100000);                                              // refus après la pause : 5 min environ
+  assert.equal(m.flightStatsPaused(t+100000+300000),true);assert.equal(m.flightStatsPaused(t+100000+310000),false);
+  m.flightStatsNoteResult(403,t+500000);assert.equal(m.flightStatsPaused(t+500000+800000),true);   // puis 15 min
+  m.flightStatsNoteResult(200,t+2000000);m.flightStatsNoteResult(403,t+2000001);m.flightStatsNoteResult(403,t+2000002);
+  assert.equal(m.flightStatsPaused(t+2000002+91000),false);                            // remise à 90 s
+  m.flightStatsReset();
+});
+test("FlightStats: lectures de page limitées par passage, délai de 20 min après un refus, appel léger toujours permis",async()=>{
+  const m=await import("./ops-public-live-flow-optimized.js");const now=Date.UTC(2026,9,6,10,0),iso=min=>new Date(now+min*60000).toISOString();
+  assert.equal(m.flightStatsMayTry({date:"2026-10-06"},now,4),true);
+  assert.equal(m.flightStatsMayTry({date:"2026-10-06"},now,0),false);
+  assert.equal(m.flightStatsMayTry({date:"2026-10-06",flightStatsRefusedAt:iso(-5)},now,4),false);
+  assert.equal(m.flightStatsMayTry({date:"2026-10-06",flightStatsRefusedAt:iso(-25)},now,4),true);
+  assert.equal(m.flightStatsMayTry({date:"2026-10-06",flightStatsId:"123",flightStatsIdDate:"2026-10-06",flightStatsRefusedAt:iso(-1)},now,0),true);
+});
