@@ -18,3 +18,10 @@ test("page par vol testée quand un vol est demandé",async()=>{
   const r=await runFidsWidgetTest({fetchImpl,flight:"lo334"});
   assert.equal(r.tracker[0].hasActual,true);assert.ok(r.tracker[0].url.endsWith("LO334/"));
 });
+test("page par vol complète : adresse avec origine, destination et date-heure",async()=>{
+  const urls=[];
+  const fetchImpl=async u=>{urls.push(String(u));return String(u).includes("/flight-status/LO334/")?new Response("<html>Flight Departure Times Scheduled 07:05 Actual 07:12</html>",{status:200}):String(u).includes(".js")?new Response("x",{status:200}):new Response("n",{status:404})};
+  const r=await runFidsWidgetTest({fetchImpl,flight:"lo334",dest:"waw",std:"07:05",date:"2026-10-06"});
+  assert.ok(urls.includes("https://fids.flightradar.live/flight-status/LO334/CDG/WAW/202610060705"));
+  assert.equal(r.flightPage.httpStatus,200);assert.equal(r.flightPage.hasActual,true);
+});

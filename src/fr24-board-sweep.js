@@ -36,6 +36,12 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
         log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from:cur,to:back});
         if(back){x.etd=back;x.edt=back;x.etdSource="PUBLIC_LIVE:ETD_RESTORED";x.etdUpdatedAt=at}else{delete x.etd;delete x.edt;delete x.etdSource;delete x.etdUpdatedAt}
         changed=true;counts.etdRestored=(counts.etdRestored||0)+1}}
+    // Le tableau est repassé à la STD (plus de retard annoncé) alors que notre ETD vient de lui : cet ETD est périmé, on le retire (vérifié sur FR24 : LO336, ETD 19:59 chez nous, 19:45 sur FR24).
+    if(row&&row.time&&row.time===row.std&&row.status!=="departed"&&row.status!=="canceled"&&!clean(x.atd)&&!clean(x.takeoff)&&!manual(x,"etd")){
+      const cur=hhmm(x.etd||x.edt),std=hhmm(x.std||r.std);
+      if(cur&&cur!==std&&/FR24BOARD/.test(upper(x.etdSource))){
+        log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from:cur,to:""});
+        delete x.etd;delete x.edt;delete x.etdSource;delete x.etdUpdatedAt;changed=true;counts.etdCleared=(counts.etdCleared||0)+1}}
     if(row){
       checked++;
       const g=upper(row.gate);if(g&&g!==upper(gateValue(x))&&!manual(x,"gate")){note("gate",gateValue(x),g);x.gate=g;x.gateSource="PUBLIC_LIVE:FR24BOARD";x.gateUpdatedAt=at}

@@ -36,7 +36,7 @@ async function probeSchedule(fetchImpl){
     return {url,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),...(rows?summariseSchedule(rows):{sample:clean(p.text).slice(0,200)})};
   }catch(e){return {url,error:String(e?.message||e).slice(0,120)}}
 }
-export async function runFidsWidgetTest({fetchImpl=fetch,flight=""}={}){
+export async function runFidsWidgetTest({fetchImpl=fetch,flight="",dest="",std="",date=""}={}){
   const out={ok:true,mode:"FIDS_WIDGET_TEST_NO_WRITE",jsUrl:JS_URL};
   try{
     const {r,text}=await get(fetchImpl,JS_URL,"*/*");
@@ -47,6 +47,12 @@ export async function runFidsWidgetTest({fetchImpl=fetch,flight=""}={}){
     out.snippets=["api/schedules","flight_type","fetch(","XMLHttpRequest","actual","flight-tracker"].map(k=>{const i=text.indexOf(k);return i<0?null:{key:k,text:text.slice(Math.max(0,i-300),i+500)}}).filter(Boolean);
     out.schedule=await probeSchedule(fetchImpl);
     const fl=upper(flight).replace(/[^A-Z0-9]/g,"");
+    // Page par vol complète (vol / origine / destination / date-heure prévue) : flight=LO334&dest=WAW&std=07:05&date=2026-10-06
+    const dt=upper(dest).replace(/[^A-Z]/g,""),hm=clean(std).match(/^(\d{2}):(\d{2})$/),dd=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(fl&&dt&&hm&&dd){const u=`https://fids.flightradar.live/flight-status/${fl}/CDG/${dt}/${dd[1]}${dd[2]}${dd[3]}${hm[1]}${hm[2]}`;
+      try{const p=await get(fetchImpl,u,"text/html,*/*");const txt=clean(p.text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi," "));
+        out.flightPage={url:u,httpStatus:p.r.status,bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),hasActual:/actual\s*(departure|arrival)?\s*:?\s*\d{1,2}:\d{2}/i.test(txt),text:txt.slice(0,900)}}
+      catch(e){out.flightPage={url:u,error:String(e?.message||e).slice(0,120)}}}
     if(fl){out.tracker=[];for(const u of [`https://flightradar.live/en/flight-tracker/${fl}/`,`https://fids.flightradar.live/flight-status/${fl}`,`https://fids.flightradar.live/api/flight/${fl}`,`https://fids.flightradar.live/api/schedules/flight/${fl}`]){
       try{const p=await get(fetchImpl,u,"text/html,application/json,*/*");let shape=null;try{shape=keysOf(JSON.parse(p.text))}catch{}
         out.tracker.push({url:u,httpStatus:p.r.status,contentType:clean(p.r.headers.get("content-type")),bytes:p.text.length,wall:WALL.test(p.text.slice(0,2000)),shape,hasActual:/actual|dep_actual|takeoff/i.test(p.text),sample:shape?undefined:clean(p.text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi," ")).slice(0,500)})}
