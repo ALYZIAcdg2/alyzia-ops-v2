@@ -13,3 +13,8 @@ test("test complet avec réseau simulé",async()=>{
   const r=await runFidsWidgetTest({fetchImpl});
   assert.equal(r.verdict,"JSON_TROUVE");assert.ok(r.fieldHints.includes("atd"));
 });
+test("page par vol testée quand un vol est demandé",async()=>{
+  const fetchImpl=async u=>String(u).includes("flight-tracker")?new Response("<html>Departure actual 07:10</html>",{status:200}):String(u).includes(".js")?new Response('fetch("/api/flights")',{status:200}):new Response("[]",{status:404});
+  const r=await runFidsWidgetTest({fetchImpl,flight:"lo334"});
+  assert.equal(r.tracker[0].hasActual,true);assert.ok(r.tracker[0].url.endsWith("LO334/"));
+});
