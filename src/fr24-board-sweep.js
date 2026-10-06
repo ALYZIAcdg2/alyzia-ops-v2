@@ -28,6 +28,14 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
     const note=(field,from,to)=>{log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field,from,to});changed=true;counts[field==="aircraft"?"type":field]=(counts[field==="aircraft"?"type":field]||0)+1};
     // ATD écrit à partir du tableau par une version précédente : c'était l'heure de décollage.
     if(clean(x.atd)&&/FR24BOARD/.test(upper(x.atdSource))&&!manual(x,"atd")){log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"atd",from:clean(x.atd),to:""});delete x.atd;delete x.atdSource;delete x.atdUpdatedAt;delete x.atdConfirmed;delete x.atdSources;changed=true;counts.atdRemoved++}
+    // ETD écrit par le tableau avec l'heure de la STD (ancienne version) : il avait remplacé le vrai ETD. On remet le dernier ETD d'avant, ou on le retire.
+    {const std=hhmm(x.std||r.std),cur=hhmm(x.etd||x.edt);
+      if(std&&cur===std&&/FR24BOARD/.test(upper(x.etdSource))&&!manual(x,"etd")){
+        const e=log.find(l=>l&&l.field==="etd"&&/FR24BOARD/.test(upper(l.source))&&hhmm(l.to)===std),prev=e?hhmm(e.from):"";
+        const back=prev&&prev!==std?prev:"";
+        log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from:cur,to:back});
+        if(back){x.etd=back;x.edt=back;x.etdSource="PUBLIC_LIVE:ETD_RESTORED";x.etdUpdatedAt=at}else{delete x.etd;delete x.edt;delete x.etdSource;delete x.etdUpdatedAt}
+        changed=true;counts.etdRestored=(counts.etdRestored||0)+1}}
     if(row){
       checked++;
       const g=upper(row.gate);if(g&&g!==upper(gateValue(x))&&!manual(x,"gate")){note("gate",gateValue(x),g);x.gate=g;x.gateSource="PUBLIC_LIVE:FR24BOARD";x.gateUpdatedAt=at}
