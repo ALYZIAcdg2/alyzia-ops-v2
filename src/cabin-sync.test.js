@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
-const mkEnv=(rows,bare=[])=>{const writes=[];return {writes,OPS_DB:{prepare:q=>({bind:(...a)=>({all:async()=>({results:q.includes("'$.sariaConfigKey'")?bare:rows}),run:async()=>{writes.push(a)}})})}}};
+const mkEnv=(rows,bare=[])=>{const writes=[];return {writes,OPS_DB:{prepare:q=>({bind:(...a)=>({all:async()=>({results:q.includes("cabinConfigAuto")?[]:q.includes("'$.sariaConfigKey'")?bare:rows}),run:async()=>{writes.push(a)}})})}}};
 test("aucun vol avec changement d'appareil : rien à faire",async()=>{const e=mkEnv([]);const r=await syncCabinAfterAircraftChange(e);assert.deepEqual([r.checked,r.updated],[0,0]);assert.equal(e.writes.length,0)});
 test("la config suit le type réel ; écrit seulement si elle a changé",async()=>{
   const rows=[{identity:"1",data_json:JSON.stringify({airline:"TK",flight:"TK1822",aircraft:"77B",aircraftChange:{from:"77B",to:"333"}})},{identity:"2",data_json:JSON.stringify({airline:"TK",flight:"TK9",aircraftChange:{from:"32Q",to:"32Q"}})},{identity:"3",data_json:JSON.stringify({airline:"TK",flight:"TK3"})}];
@@ -19,4 +19,10 @@ test("airline absent du JSON : repris de la colonne pour choisir le plan",async(
   let seen=null;
   const r=await syncCabinAfterAircraftChange(e,{autoApply:async(env,x)=>{seen=x.airline+"|"+x.flight;x.sariaConfigKey="JU|320|180Y"}});
   assert.equal(seen,"JU|JU241");assert.equal(r.updated,1);
+});
+test("plan auto d'un autre type : réaligné",async()=>{
+  const writes=[];
+  const env={OPS_DB:{prepare:q=>({bind:()=>({all:async()=>({results:q.includes("cabinConfigAuto")?[{identity:"5",airline:"JU",flight_number:"JU241",data_json:JSON.stringify({aircraft:"320",sariaConfigKey:"JU|319|144Y",cabinConfigAuto:true})}]:[]}),run:async()=>{writes.push(1)}})})}};
+  const r=await syncCabinAfterAircraftChange(env,{realign:async(en,x)=>{x.sariaConfigKey="JU|320|180Y";return true}});
+  assert.equal(r.updated,1);assert.equal(writes.length,1);
 });
