@@ -278,7 +278,8 @@ export async function applyCabinConfigForActualAircraft(env,x){
 export async function realignAutoCabinConfig(env,x){
   try{
     if(!x?.sariaConfigKey||x.cabinConfigAuto!==true)return false;
-    const type=String(toIata(x.aircraft)||x.aircraft||"").trim().toUpperCase();
+    const raw=x.aircraftChange?.to||x.aircraftActual||x.aircraft; // même type réel que l'audit
+    const type=String(toIata(raw)||raw||"").trim().toUpperCase();
     if(!type)return false;
     const keyType=String(x.sariaConfigKey).split("|")[1]||"";
     if(!keyType||configCodes(type).includes(keyType.toUpperCase()))return false;
