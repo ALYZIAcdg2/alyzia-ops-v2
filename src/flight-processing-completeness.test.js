@@ -5,7 +5,7 @@ import {flightOperationalStatus} from './flight-operational-status.js';
 const now={date:'2026-10-02',hhmm:'04:15'};
 const row=(x,date='2026-10-01')=>classify({row:{flight_date:date,flight_number:x.flight||'NH216'},x:{std:'19:20',sta:'15:55',gate:'28',reg:'JA892A',aircraft:'789',...x}},now);
 test('yesterday departed without ATA remains EN ATTENTE',()=>{
- const r=row({atd:'19:15',status:'DECOLLE'});assert.equal(r.state,'EN ATTENTE');assert.equal(r.flightStatus,'EN VOL');assert.ok(r.missing.includes('ATA'));
+ const r=row({atd:'19:15',status:'DECOLLE'});assert.equal(r.state,'EN ATTENTE');assert.equal(r.flightStatus,'PARTI');assert.ok(r.missing.includes('ATA'));
 });
 test('today ETA passed does not close missing ATA',()=>{
  const r=row({std:'00:10',sta:'01:00',atd:'00:15',status:'DECOLLE'},now.date);assert.equal(r.state,'EN ATTENTE');assert.ok(r.missing.includes('ATA'));
@@ -20,7 +20,7 @@ test('scheduled arrival alone never proves arrival',()=>{
  const r=row({std:'00:10',sta:'01:00',status:'PRÉVU'},now.date);assert.equal(r.state,'À CONTRÔLER');
 });
 test('actual arrival beats stale departed and planned statuses',()=>{
- assert.equal(flightOperationalStatus({status:'DECOLLE',ata:'03:10'}),'ARRIVÉE');assert.equal(flightOperationalStatus({status:'PRÉVU',atd:'03:10'}),'EN VOL');assert.equal(flightOperationalStatus({status:'DECOLLE',takeoff:'03:15'}),'EN VOL');assert.equal(flightOperationalStatus({status:'ANNULÉ',cancelledSource:'FLIGHTSTATS',atd:'03:10'}),'ANNULÉ');assert.equal(flightOperationalStatus({status:'CANCELLED',atd:'03:10'}),'EN VOL');
+ assert.equal(flightOperationalStatus({status:'DECOLLE',ata:'03:10'}),'ARRIVÉE');assert.equal(flightOperationalStatus({status:'PRÉVU',atd:'03:10'}),'PARTI');assert.equal(flightOperationalStatus({status:'DECOLLE',takeoff:'03:15'}),'EN VOL');assert.equal(flightOperationalStatus({status:'ANNULÉ',cancelledSource:'FLIGHTSTATS',atd:'03:10'}),'ANNULÉ');assert.equal(flightOperationalStatus({status:'CANCELLED',atd:'03:10'}),'PARTI');
 });
 test('future schedule needs no actual arrival',()=>{
  const r=row({},'2026-10-03');assert.equal(r.state,'OK');assert.equal(r.missing.includes('ATA'),false);

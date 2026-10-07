@@ -52,7 +52,9 @@ function normalizedStatus(x,now,flightDate){
   if(cancelledRaw(raw))return {status:"ANNULÉ",reason:"provider"};
   if(clean(x.ata)||arrivedRaw(raw))return {status:"ARRIVÉ",reason:"actual_arrival"};
   if(clean(x.atd)&&etaPassedBy15(x,now,flightDate))return {status:"ARRIVÉ",reason:"estimated_arrival_plus_15"};
-  if(clean(x.atd))return {status:"EN VOL",reason:"actual_departure"};
+  if(clean(x.landing))return {status:"ATTERRI",reason:"landing"};
+  if(clean(x.takeoff))return {status:"EN VOL",reason:"takeoff"};
+  if(clean(x.atd))return {status:"PARTI",reason:"actual_departure"};
   if(departedRaw(raw))return {status:"DÉCOLLÉ",reason:"provider_departure_without_atd"};
   if(boardingRaw(raw))return {status:"EMBARQUEMENT",reason:"provider"};
   if(lateBeyondStd15(x,flightDate))return {status:"RETARDÉ",reason:"std_plus_15"};

@@ -270,10 +270,10 @@ export function pickStatus(map,order){
 // "En vol / atterri / arrivé" read on a web page is only believed once the flight has a departure fact (ATD, takeoff, landing or ATA):
 // TU723 was "EN VOL" while FlightStats said Scheduled, delayed 4h10.
 export function guardAirborneStatus(status,x){
-  if(!/^(EN VOL|ATTERI|ARRIV)/.test(upper(status)))return status;
+  if(!/^(PARTI|EN VOL|ATTERR?I|ARRIV)/.test(upper(status)))return status;
   if(["atd","takeoff","landing","ata"].some(k=>clean(x?.[k])))return status;
   const kept=clean(x?.status);
-  return kept&&!/^(EN VOL|ATTERI|ARRIV)/.test(upper(kept))?kept:(clean(x?.etd||x?.edt)&&clean(x?.etd||x?.edt)!==clean(x?.std)?"RETARDÉ":"PRÉVU");
+  return kept&&!/^(PARTI|EN VOL|ATTERR?I|ARRIV)/.test(upper(kept))?kept:(clean(x?.etd||x?.edt)&&clean(x?.etd||x?.edt)!==clean(x?.std)?"RETARDÉ":"PRÉVU");
 }
 // Two sources must agree (same clock, 2 min tolerance) for a time to be confirmed; a value from a single source is still written but flagged.
 function clockMin(v){const m=clean(v).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}

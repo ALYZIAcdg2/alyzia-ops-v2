@@ -19,5 +19,5 @@ test("vol d'hier non parti : en retard ; vol de demain : non ; STD absente : non
 });
 test("projection de statut : un vol de demain avec ETD supérieur reste PRÉVU",()=>{
   assert.equal(flightOperationalStatus({std:"20:00",etd:"20:40",date:"2999-01-01"}),"PRÉVU");
-  assert.equal(flightOperationalStatus({std:"20:00",atd:"20:30",date:"2999-01-01"}),"EN VOL");
+  assert.equal(flightOperationalStatus({std:"20:00",atd:"20:30",date:"2999-01-01"}),"PARTI");
 });

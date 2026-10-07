@@ -30,7 +30,7 @@ export function classify({row,x},now){
   const today=date===now.date,future=date>now.date,past=date<now.date;
   const nowMin=minute(now.hhmm),stdMin=minute(std),delta=today&&nowMin!==null&&stdMin!==null?stdMin-nowMin:null;
   const cancelled=isCancelled(x),flightStatus=flightOperationalStatus(x);
-  const departed=Boolean(atd||hhmm(x.takeoff))||["EN VOL","ATTERI","ARRIVÉE"].includes(flightStatus);
+  const departed=Boolean(atd||hhmm(x.takeoff))||["PARTI","EN VOL","ATTERI","ATTERRI","ARRIVÉE"].includes(flightStatus);
   let state=missing.length?"EN ATTENTE":"OK";
   const atdConflict=Boolean(x.atdConflict&&!hhmm(x.ata)&&!upper(x.atdSource).includes("MANUAL"));
   if(cancelled){state="OK";missing.length=0}

@@ -35,7 +35,7 @@ export async function sanitizeArrivalClocks(env,{nowMs=Date.now()}={}){
         log.unshift({at,source:"ARRIVAL_FUTURE_FIX",field:c.field,from:c.from,to:""});
         if(!clean(x.eta)){x.eta=c.future;x.etaSource="ARRIVAL_FUTURE_FIX";x.etaUpdatedAt=at}
         delete x[c.field];delete x[c.field+"Source"];delete x[c.field+"UpdatedAt"];delete x[c.field+"Confirmed"];delete x[c.field+"Sources"];
-        if(!clean(x.ata)&&!clean(x.landing)&&/ATTERI|ARRIV/i.test(clean(x.status))&&(clean(x.takeoff)||clean(x.atd))){x.status="EN VOL";x.statusSource="ARRIVAL_FUTURE_FIX";x.statusUpdatedAt=at}
+        if(!clean(x.ata)&&!clean(x.landing)&&/ATTERR?I|ARRIV/i.test(clean(x.status))&&(clean(x.takeoff)||clean(x.atd))){x.status=clean(x.takeoff)?"EN VOL":"PARTI";x.statusSource="ARRIVAL_FUTURE_FIX";x.statusUpdatedAt=at}
         fixed++;continue;
       }
       log.unshift({at,source:"ARRIVAL_TZ_FIX",field:c.field,from:c.from,to:c.to});x[c.field]=c.to;x[c.field+"Source"]=`${clean(x[c.field+"Source"])||"PUBLIC_LIVE"}+DEST_LOCAL`;x[c.field+"UpdatedAt"]=at;fixed++;
