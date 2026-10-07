@@ -144,6 +144,31 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-flight-card .ops-avail.mid strong{color:#0a9a3f!important}#app .ops-flight-card .ops-avail.mid em{background:#12b04f}
 #app .ops-flight-card .ops-avail.high strong{color:#e07400!important}#app .ops-flight-card .ops-avail.high em{background:#f59a0c}
 #app .ops-flight-card .ops-avail.full strong{color:#dc1f3a!important}#app .ops-flight-card .ops-avail.full em{background:#e5243f}
+@media(min-width:701px) and (max-width:1100px){
+#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(0,1fr) auto!important;grid-template-areas:"identity expand" "journey journey" "details details"!important;gap:14px 16px!important}
+#app .ops-times{grid-template-columns:1fr 1fr!important}
+#app .ops-route{grid-template-columns:minmax(120px,auto) minmax(120px,1fr) minmax(120px,auto)!important}
+}
+#app .ops-trip-times{display:none}
+#app .flight-home-row.ops-flight-card .ops-card-actions .home-pin{display:inline-flex!important;visibility:visible!important;opacity:1!important}
+#app .ops-plane-flight{left:clamp(34px,calc(15px + (100% - 30px)*var(--p)),calc(100% - 34px))}
+@media(max-width:900px){
+#app .ops-time-elapsed,#app .ops-time-remaining{display:none!important}
+#app .ops-trip-times{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin:-2px 0 12px;padding:0 2px}
+#app .ops-trip-times span{display:flex;flex-direction:column;line-height:1.15}
+#app .ops-trip-rem{align-items:flex-end;text-align:right}
+#app .ops-trip-times small{font-size:9.5px;font-weight:900;letter-spacing:.5px;color:#7b8ea4;white-space:nowrap}
+#app .ops-trip-times b{font-size:15px;font-weight:900;color:#1d4570;white-space:nowrap}
+#app .ops-route-line{min-width:70px}
+}
+@media(max-width:600px){
+#app .ops-flight-card .ops-load-summary{grid-template-columns:1fr!important;gap:0}
+#app .ops-flight-card .ops-extra .ops-load-info{flex-direction:row!important;justify-content:space-between!important;align-items:center!important;gap:10px!important;padding:7px 4px!important;border-right:0!important;border-bottom:1px solid #e6edf4;text-align:left;font-size:10.5px!important}
+#app .ops-flight-card .ops-extra .ops-load-info:last-child{border-bottom:0}
+#app .ops-flight-card .ops-extra .ops-load-info strong{font-size:15px!important;text-align:right;white-space:normal}
+#app .ops-flight-card .ops-avail strong{margin-left:auto}
+#app .ops-flight-card .ops-avail em{margin-left:6px}
+}
 #app .ops-route-line{position:relative}
 #app .ops-plane-flight{position:absolute;left:calc(15px + (100% - 30px)*var(--p));top:50%;transform:translate(-50%,-30px);font-size:13px;line-height:1;font-weight:900;letter-spacing:.2px;color:#2f6aa8;white-space:nowrap;pointer-events:none;transition:left .8s ease}
 #app .ops-route-line.plane-ok .ops-plane-flight{color:#12a150}#app .ops-route-line.plane-late .ops-plane-flight{color:#d93025}
@@ -157,7 +182,7 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-status-badge.retarde{background:#fff0d0;color:#965600;border-color:#f1d08e}
 #app .ops-status-badge.annule{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}
 #app .ops-status-badge.arrive{background:#d7efec;color:#0a665e;border-color:#a9d9d3}
-@media(min-width:701px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}}
+@media(min-width:1101px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}}
 #app .ops-card-actions .home-pin{width:34px!important;padding:0!important;font-size:18px!important}
 #app .ops-flight-card .ops-load-info,#app .ops-flight-card .ops-load-info strong{font-family:inherit!important}
 #app .ops-flight-card .ops-extra .ops-load-info{font-size:11px!important;font-weight:800!important;color:#7b8ea4!important}
@@ -398,7 +423,7 @@ function renderRow(row){
  let badge='';try{if(typeof prepaBadge==='function')badge=prepaBadge(x,x.activeDate||x.date)}catch{}
  const fill=opsFillTone(load);
  row.innerHTML='<div class="ops-identity"><div class="ops-flight-line"><span class="ops-logo">'+opsAirlineLogo(x,idx)+'</span><span class="ops-flight-number">'+esc(flight)+'</span><span class="ops-status-badge '+st.cls+'">'+esc(st.main)+'</span></div><div><div class="ops-airline-name">'+esc(name)+'</div><div class="ops-aircraft"><strong class="ops-aircraft-type">'+esc(ac)+'</strong><span class="ops-aircraft-location ops-terminal" data-terminal="'+esc((up(term).match(/^T[123]/)||[])[0]||'')+'">TERMINAL <strong>'+esc(term||'—')+'</strong></span><span class="ops-aircraft-location">GATE <strong>'+esc(x.gate||'—')+'</strong></span></div><div class="ops-registration">'+esc(reg)+'</div>'+(opsIsLive(t)?'<div class="ops-live"><i></i>LIVE</div>':'')+'</div></div>'+
- '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-city">'+esc(opsCity(dep))+'</div><div class="ops-airport-meta">'+opsLocal(dep)+opsWeather(dep)+'</div></div><div class="ops-route-line'+(progress===null?' static':'')+opsPlaneTone(t)+'" style="--p:'+(progress===null?.5:progress.toFixed(3))+'" role="img" aria-label="'+(progress===null?'Trajet':'Progression du vol '+Math.round(progress*100)+' %')+'"><span class="ops-route-track"></span><span class="ops-route-fill"></span>'+opsPlane+'<span class="ops-plane-flight">'+esc(flight)+'</span>'+(planeSub?'<span class="ops-time-elapsed"><small>TEMPS ÉCOULÉ</small><b>'+esc(planeSub.replace(/^depuis\s*/i,''))+'</b></span>':'')+(st.remain?'<span class="ops-time-remaining"><small>TEMPS RESTANT</small><b>'+esc(st.remain.replace(/^Arriv[ée]e dans\s*/i,''))+'</b></span>':'')+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-city">'+esc(opsCity(dest))+'</div><div class="ops-airport-meta">'+opsLocal(dest)+opsWeather(dest)+'</div></div></div>'+
+ '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-city">'+esc(opsCity(dep))+'</div><div class="ops-airport-meta">'+opsLocal(dep)+opsWeather(dep)+'</div></div><div class="ops-route-line'+(progress===null?' static':'')+opsPlaneTone(t)+'" style="--p:'+(progress===null?.5:progress.toFixed(3))+'" role="img" aria-label="'+(progress===null?'Trajet':'Progression du vol '+Math.round(progress*100)+' %')+'"><span class="ops-route-track"></span><span class="ops-route-fill"></span>'+opsPlane+'<span class="ops-plane-flight">'+esc(flight)+'</span>'+(planeSub?'<span class="ops-time-elapsed"><small>TEMPS ÉCOULÉ</small><b>'+esc(planeSub.replace(/^depuis\s*/i,''))+'</b></span>':'')+(st.remain?'<span class="ops-time-remaining"><small>TEMPS RESTANT</small><b>'+esc(st.remain.replace(/^Arriv[ée]e dans\s*/i,''))+'</b></span>':'')+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-city">'+esc(opsCity(dest))+'</div><div class="ops-airport-meta">'+opsLocal(dest)+opsWeather(dest)+'</div></div></div>'+((planeSub||st.remain)?'<div class="ops-trip-times">'+(planeSub?'<span class="ops-trip-el"><small>TEMPS ÉCOULÉ</small><b>'+esc(planeSub.replace(/^depuis\s*/i,''))+'</b></span>':'<span></span>')+(st.remain?'<span class="ops-trip-rem"><small>TEMPS RESTANT</small><b>'+esc(st.remain.replace(/^Arriv[ée]e dans\s*/i,''))+'</b></span>':'')+'</div>':'')+
  '<div class="ops-times"><div class="ops-time-group">'+opsTimeCell('STD',t.std)+opsTimeCell('ETD',t.etd,0,t)+opsTimeCell('ATD',t.atd,0,t)+opsTimeCell('TO',t.takeoff,0,t)+'</div><div class="ops-time-group">'+opsTimeCell('STA',t.sta,t.staDay)+opsTimeCell('ETA',t.eta,t.etaDay,t)+opsTimeCell('LDG',t.landing,t.landingDay,t)+opsTimeCell('ATA',t.ata,t.ataDay,t)+'</div></div>'+'</div>'+
  '<div class="ops-card-actions"><div class="ops-actions-row"><button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button><button type="button" class="ops-open-detail">Fiche vol →</button></div>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'</div>'+
  '<div id="ops-extra-'+idx+'" class="ops-extra"><div class="ops-load-summary"><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info ops-avail '+fill.cls+'"'+(fill.pct!==''?' title="Remplissage '+fill.pct+' % (booking / config)"':'')+'>AVAILABLE <strong>'+esc(load.avail)+'</strong>'+(fill.pct!==''?'<em>'+fill.pct+' %</em>':'')+'</span></div>'+(load.nok?'<div class="ops-extra-actions"><span>INOP <strong>'+load.nok+'</strong></span></div>':'')+'</div>';
