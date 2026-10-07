@@ -10,7 +10,7 @@ export function parseGatenavoFlights(html){
     if(seen.has(m[1]))continue;seen.add(m[1]);out.push({id:m[1],status:m[2],raw:m[3],flight:m[4],scheduled:m[5],fetchedAt:m[6]||""})}
   return out;
 }
-export async function probeGatenavo(env){
+export async function probeGatenavo(env,{flight=""}={}){
   const out={ok:true,mode:"GATENAVO_PROBE_NO_WRITE",url:URL_DEP};
   const c=new AbortController(),timer=setTimeout(()=>c.abort(),10000);
   let html="";
@@ -21,6 +21,11 @@ export async function probeGatenavo(env){
   const rows=parseGatenavoFlights(html);out.flights=rows.length;
   if(!rows.length){out.error="NO_ROWS";out.head=html.slice(0,300);return out}
   const byStatus={};for(const r of rows)byStatus[r.status]=(byStatus[r.status]||0)+1;out.byStatus=byStatus;
+  const fetched=rows.map(r=>r.fetchedAt).filter(Boolean).sort();out.fetchedFrom=fetched[0]||"";out.fetchedTo=fetched[fetched.length-1]||"";out.fetchedAgeMin=fetched.length?Math.round((Date.now()-Date.parse(fetched[fetched.length-1]))/60000):null;
+  const want=upper(flight).replace(/\s+/g,"");
+  if(want){out.flight=want;out.gatenavoRow=rows.find(r=>upper(r.flight)===want)||null;
+    if(env?.OPS_DB){const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(today()).all();
+      for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(upper(x.flight||row.flight_number).replace(/\s+/g,"")===want){out.ours={status:x.status,statusSource:x.statusSource,parisAeroportPhase:x.parisAeroportPhase,parisAeroportVia:x.parisAeroportVia,parisAeroportPhaseUpdatedAt:x.parisAeroportPhaseUpdatedAt,parisAeroportStatusCheckedAt:x.parisAeroportStatusCheckedAt,std:x.std,etd:x.etd,etdSource:x.etdSource,atd:x.atd,atdSource:x.atdSource,takeoff:x.takeoff,eta:x.eta,etaSource:x.etaSource};break}}}}
   const times=rows.map(r=>r.scheduled).filter(Boolean).sort();out.scheduledFrom=times[0];out.scheduledTo=times[times.length-1];
   out.boarding=rows.filter(r=>r.status==="boarding"||r.status==="gate_closed").map(r=>({flight:r.flight,status:r.status,raw:r.raw,scheduled:r.scheduled})).slice(0,30);
   if(env?.OPS_DB){const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();const set=new Set(rows.map(r=>upper(r.flight)));let matched=0;
