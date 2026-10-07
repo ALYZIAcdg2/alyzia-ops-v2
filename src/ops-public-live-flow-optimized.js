@@ -1,4 +1,4 @@
-import {guardDepartureClock,guardArrivalClock,isFutureActual,zoneOffsetMinutes} from "./local-time-guard.js";
+import {guardDepartureClock,guardArrivalClock,isFutureActual,arrivedTooEarly,zoneOffsetMinutes} from "./local-time-guard.js";
 import {isWebWordRegistration,isJunkRegistration} from "./registration-guard.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {boardLookup,gateValue} from "./fr24-board.js";
@@ -394,7 +394,8 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   const atd=choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd),takeoff=choose(map,"takeoff",LIVE_PUBLIC_SOURCE_ORDER.takeoff),eta=arrivalLocal(choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta),current,f),landing=arrivalLocal(choose(map,"landing",LIVE_PUBLIC_SOURCE_ORDER.landing),current,f),ata=arrivalLocal(choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata),current,f),reg=choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg),ac=choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft);
   // Un atterrissage / ATA dans le futur n'est pas un fait (TS251 en vol « atterri à 18:45 ») : écarté, et gardé comme ETA s'il n'y en a pas.
   {const zo=AIRPORT_TZ[upper(f.origin)]||"Europe/Paris",zd=AIRPORT_TZ[upper(f.destination)]||"Europe/Paris",fut=h=>Boolean(h?.value)&&isFutureActual(h.value,{date:f.date,std:current.std||f.std,takeoff:clean(takeoff.value)||current.takeoff||atd.value||current.atd,originZone:zo,destZone:zd});
-   for(const h of [landing,ata])if(fut(h)){if(!eta.value&&!clean(current.eta))eta.value=h.value,eta.source=h.source;h.value=""}}
+   const early=h=>Boolean(h?.value)&&arrivedTooEarly(h.value,{date:f.date,std:current.std||f.std,sta:current.sta,takeoff:clean(takeoff.value)||current.takeoff||atd.value||current.atd,originZone:zo,destZone:zd});
+   for(const h of [landing,ata]){if(fut(h)&&!eta.value&&!clean(current.eta))eta.value=h.value,eta.source=h.source;if(fut(h)||early(h))h.value=""}}
   // Une immatriculation / un type venant de FR24 (tableau ou page du vol) n'est jamais remplacé par une page publique lue en texte (PlaneFinder, Skyscanner, FlightStats) : D-AIHV s'était ainsi copié sur plusieurs vols.
   const fr24Own=src=>/FR24/.test(upper(src));if(!fr24Own(reg.source)&&clean(current.reg||current.registration)&&!isJunkRegistration(current.reg||current.registration)&&fr24Own(current.regSource))reg.value="";if(!fr24Own(ac.source)&&clean(current.aircraftActual)&&fr24Own(current.aircraftActualSource))ac.value="";
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;

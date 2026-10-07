@@ -1,6 +1,6 @@
 // Corrige, sur les vols d'hier et d'aujourd'hui déjà enregistrés, les ETA / atterrissages / ATA donnés en heure de l'origine au lieu de l'heure locale de destination
 // (TS251 CDG-YUL : atterrissage 18:45 pour un décollage à 10:36). Même règle que la lecture des pages (guardArrivalClock). Jamais une saisie manuelle.
-import {guardArrivalClock,isFutureActual} from "./local-time-guard.js";
+import {guardArrivalClock,isFutureActual,arrivedTooEarly} from "./local-time-guard.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
@@ -17,6 +17,8 @@ export function fixArrivalClocks(x,date,nowMs=Date.now()){
     if(hasSched){const g=guardArrivalClock(v,{std:x.std,sta:x.sta,date,originZone,destZone});if(g.status==="SHIFTED"&&g.value!==v){out.push({field:f,from:v,to:g.value});v=g.value}}
     // Atterrissage / ATA dans le futur : c'est une estimation, pas un fait ; retiré (et gardé comme ETA s'il n'y en a pas).
     if(f!=="eta"&&isFutureActual(v,{date,std:x.std,takeoff:x.takeoff||x.atd,originZone,destZone,nowMs}))out.push({field:f,from:clean(x[f]),to:"",future:v});
+    // Atterrissage / ATA avant la moitié de la durée de vol programmée : valeur fausse (arrivée prévue lue comme réelle), retirée sans devenir ETA.
+    else if(f!=="eta"&&hasSched&&arrivedTooEarly(v,{date,std:x.std,sta:x.sta,takeoff:x.takeoff||x.atd,originZone,destZone}))out.push({field:f,from:clean(x[f]),to:"",tooEarly:v});
   }
   return out;
 }
@@ -31,9 +33,9 @@ export async function sanitizeArrivalClocks(env,{nowMs=Date.now()}={}){
     const changes=fixArrivalClocks(x,r.flight_date,nowMs);if(!changes.length)continue;
     const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     for(const c of changes){
-      if(c.future!==undefined){   // fait dans le futur : retiré, gardé comme ETA ; le statut revient à « en vol » si le vol a décollé
-        log.unshift({at,source:"ARRIVAL_FUTURE_FIX",field:c.field,from:c.from,to:""});
-        if(!clean(x.eta)){x.eta=c.future;x.etaSource="ARRIVAL_FUTURE_FIX";x.etaUpdatedAt=at}
+      if(c.future!==undefined||c.tooEarly!==undefined){   // fait dans le futur : retiré, gardé comme ETA ; le statut revient à « en vol » si le vol a décollé
+        log.unshift({at,source:c.tooEarly!==undefined?"ARRIVAL_TOO_EARLY_FIX":"ARRIVAL_FUTURE_FIX",field:c.field,from:c.from,to:""});
+        if(c.future!==undefined&&!clean(x.eta)){x.eta=c.future;x.etaSource="ARRIVAL_FUTURE_FIX";x.etaUpdatedAt=at}
         delete x[c.field];delete x[c.field+"Source"];delete x[c.field+"UpdatedAt"];delete x[c.field+"Confirmed"];delete x[c.field+"Sources"];
         if(!clean(x.ata)&&!clean(x.landing)&&/ATTERR?I|ARRIV/i.test(clean(x.status))&&(clean(x.takeoff)||clean(x.atd))){x.status=clean(x.takeoff)?"EN VOL":"PARTI";x.statusSource="ARRIVAL_FUTURE_FIX";x.statusUpdatedAt=at}
         fixed++;continue;
