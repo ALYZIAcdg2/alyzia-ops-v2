@@ -116,7 +116,6 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .flight-home-row.ops-flight-card.ops-flight-card.ops-flight-card{visibility:visible!important}
 #app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) auto!important;grid-template-areas:"identity journey expand" "details details details"!important;padding:14px 18px!important;gap:0 16px!important}
 #app .ops-card-actions{grid-area:expand;align-self:start;display:flex;align-items:center;gap:8px;justify-self:end}
-#app .ops-card-actions .home-pin{width:34px!important;height:34px!important;font-size:19px!important;display:inline-flex!important;align-items:center;justify-content:center;border:1px solid #d3e0ec;border-radius:8px;background:#fff}
 #app .ops-card-actions .home-pin.active{color:#c58900!important}
 #app .ops-card-actions .ops-open-detail{border:1px solid #c2d8ec;border-radius:8px;background:#f5faff;color:#0c559e;padding:0 11px;font-size:12px;font-weight:700;min-height:34px;white-space:nowrap}
 #app .flight-home-row.ops-flight-card.ops-flight-card>.ops-extra{display:block!important;padding-top:8px!important;margin-top:10px!important}
@@ -126,6 +125,17 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-flight-card .ops-extra-actions{margin-top:6px;gap:8px 16px;font-size:12px}
 #app .ops-flight-card .ops-notes{border:1px solid #e8d49a;border-radius:8px;background:#fff8e1;padding:4px 9px;font-size:12px}
 @media(max-width:700px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(0,1fr) auto!important;grid-template-areas:"identity expand" "journey journey" "details details"!important;padding:12px 11px!important}#app .ops-card-actions .ops-open-detail{padding:0 8px;font-size:11px}}
+#app .ops-card-actions{display:flex!important;flex-direction:column;align-items:stretch;gap:8px;justify-self:end;align-self:start;width:max-content;max-width:100%}
+#app .ops-card-actions .ops-actions-row{display:flex;align-items:center;gap:8px}
+#app .ops-card-actions button{box-sizing:border-box!important;height:36px!important;min-height:36px!important;margin:0!important;padding:0 12px!important;line-height:1!important;display:inline-flex!important;align-items:center;justify-content:center;position:static!important;vertical-align:top;border-radius:8px;font-size:12px;font-weight:800;white-space:nowrap}
+#app .ops-card-actions .home-pin{width:36px!important;padding:0!important;font-size:19px!important;border:1px solid #c2d8ec;background:#fff}
+#app .ops-card-actions .ops-open-detail{border:1px solid #c2d8ec;background:#f5faff;color:#0c559e}
+#app .ops-card-actions .ops-notes{width:100%;border:1px solid #f0c75e;background:#fff3cf;color:#7a5200}
+#app .ops-flight-card .ops-avail em{font-style:normal;font-size:12px;font-weight:900;padding:2px 8px;border-radius:999px;background:#64748b;color:#fff}
+#app .ops-flight-card .ops-avail.low strong{color:#1d6fe0!important}#app .ops-flight-card .ops-avail.low em{background:#2f80ed}
+#app .ops-flight-card .ops-avail.mid strong{color:#0a9a3f!important}#app .ops-flight-card .ops-avail.mid em{background:#12b04f}
+#app .ops-flight-card .ops-avail.high strong{color:#e07400!important}#app .ops-flight-card .ops-avail.high em{background:#f59a0c}
+#app .ops-flight-card .ops-avail.full strong{color:#dc1f3a!important}#app .ops-flight-card .ops-avail.full em{background:#e5243f}
 #app .ops-route-line{position:relative}
 #app .ops-plane-flight{position:absolute;left:calc(15px + (100% - 30px)*var(--p));top:50%;transform:translate(-50%,-30px);font-size:13px;line-height:1;font-weight:900;letter-spacing:.2px;color:#2f6aa8;white-space:nowrap;pointer-events:none;transition:left .8s ease}
 #app .ops-route-line.plane-ok .ops-plane-flight{color:#12a150}#app .ops-route-line.plane-late .ops-plane-flight{color:#d93025}
@@ -140,18 +150,10 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-status-badge.annule{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}
 #app .ops-status-badge.arrive{background:#d7efec;color:#0a665e;border-color:#a9d9d3}
 #app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}
-#app .ops-card-actions{display:grid!important;grid-template-columns:34px auto;grid-auto-rows:34px;gap:8px;justify-content:end;align-content:start;justify-self:end;align-self:start}
-#app .ops-card-actions>button{box-sizing:border-box!important;height:34px!important;min-height:34px!important;margin:0!important;padding:0 11px;line-height:1!important;display:inline-flex!important;align-items:center;justify-content:center;position:static!important}
 #app .ops-card-actions .home-pin{width:34px!important;padding:0!important;font-size:18px!important}
-#app .ops-card-actions .ops-notes{grid-column:1 / -1;border:1px solid #e8d49a;border-radius:8px;background:#fff8e1;font-weight:800;font-size:12px;color:#7a5a00;white-space:nowrap}
 #app .ops-flight-card .ops-load-info,#app .ops-flight-card .ops-load-info strong{font-family:inherit!important}
 #app .ops-flight-card .ops-extra .ops-load-info{font-size:11px!important;font-weight:800!important;color:#7b8ea4!important}
 #app .ops-flight-card .ops-extra .ops-load-info strong{font-size:15px!important;font-weight:850!important;color:#1d3552!important}
-#app .ops-flight-card .ops-avail em{font-style:normal;font-size:11px;font-weight:800;padding:1px 6px;border-radius:999px;background:#eef3f9;color:#5b7189}
-#app .ops-flight-card .ops-avail.low strong{color:#4f7aa6!important}
-#app .ops-flight-card .ops-avail.mid strong{color:#12803f!important}#app .ops-flight-card .ops-avail.mid em{background:#dff4e7;color:#12803f}
-#app .ops-flight-card .ops-avail.high strong{color:#c26a00!important}#app .ops-flight-card .ops-avail.high em{background:#ffecd0;color:#a85a00}
-#app .ops-flight-card .ops-avail.full strong{color:#c4283a!important}#app .ops-flight-card .ops-avail.full em{background:#ffe1e5;color:#b3243b}
 
 #app .flight-home-row.ops-flight-card[style*="display: none"],#app .flight-home-row.ops-flight-card.alyzia-final-time-hidden,#app .flight-home-row.ops-flight-card.alyzia-auto-past-hidden{display:none!important}
 #app .home-print-btn{display:none!important}
@@ -390,7 +392,7 @@ function renderRow(row){
  row.innerHTML='<div class="ops-identity"><div class="ops-flight-line"><span class="ops-logo">'+opsAirlineLogo(x,idx)+'</span><span class="ops-flight-number">'+esc(flight)+'</span><span class="ops-status-badge '+st.cls+'">'+esc(st.main)+'</span></div><div><div class="ops-airline-name">'+esc(name)+'</div><div class="ops-aircraft"><strong class="ops-aircraft-type">'+esc(ac)+'</strong><span class="ops-aircraft-location ops-terminal" data-terminal="'+esc((up(term).match(/^T[123]/)||[])[0]||'')+'">TERMINAL <strong>'+esc(term||'—')+'</strong></span><span class="ops-aircraft-location">GATE <strong>'+esc(x.gate||'—')+'</strong></span></div><div class="ops-registration">'+esc(reg)+'</div>'+(opsIsLive(t)?'<div class="ops-live"><i></i>LIVE</div>':'')+'</div></div>'+
  '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-city">'+esc(opsCity(dep))+'</div><div class="ops-airport-meta">'+opsLocal(dep)+opsWeather(dep)+'</div></div><div class="ops-route-line'+(progress===null?' static':'')+opsPlaneTone(t)+'" style="--p:'+(progress===null?.5:progress.toFixed(3))+'" role="img" aria-label="'+(progress===null?'Trajet':'Progression du vol '+Math.round(progress*100)+' %')+'"><span class="ops-route-track"></span><span class="ops-route-fill"></span>'+opsPlane+'<span class="ops-plane-flight">'+esc(flight)+'</span>'+(planeSub?'<span class="ops-time-elapsed"><small>TEMPS ÉCOULÉ</small><b>'+esc(planeSub.replace(/^depuis\s*/i,''))+'</b></span>':'')+(st.remain?'<span class="ops-time-remaining"><small>TEMPS RESTANT</small><b>'+esc(st.remain.replace(/^Arriv[ée]e dans\s*/i,''))+'</b></span>':'')+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-city">'+esc(opsCity(dest))+'</div><div class="ops-airport-meta">'+opsLocal(dest)+opsWeather(dest)+'</div></div></div>'+
  '<div class="ops-times"><div class="ops-time-group">'+opsTimeCell('STD',t.std)+opsTimeCell('ETD',t.etd,0,t)+opsTimeCell('ATD',t.atd,0,t)+opsTimeCell('TO',t.takeoff,0,t)+'</div><div class="ops-time-group">'+opsTimeCell('STA',t.sta,t.staDay)+opsTimeCell('ETA',t.eta,t.etaDay,t)+opsTimeCell('LDG',t.landing,t.landingDay,t)+opsTimeCell('ATA',t.ata,t.ataDay,t)+'</div></div>'+'</div>'+
- '<div class="ops-card-actions"><button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button><button type="button" class="ops-open-detail">Fiche vol →</button>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'</div>'+
+ '<div class="ops-card-actions"><div class="ops-actions-row"><button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button><button type="button" class="ops-open-detail">Fiche vol →</button></div>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'</div>'+
  '<div id="ops-extra-'+idx+'" class="ops-extra"><div class="ops-load-summary"><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info ops-avail '+fill.cls+'"'+(fill.pct!==''?' title="Remplissage '+fill.pct+' % (booking / config)"':'')+'>AVAILABLE <strong>'+esc(load.avail)+'</strong>'+(fill.pct!==''?'<em>'+fill.pct+' %</em>':'')+'</span></div>'+(load.nok?'<div class="ops-extra-actions"><span>INOP <strong>'+load.nok+'</strong></span></div>':'')+'</div>';
  row.querySelector('.home-pin').onclick=e=>{e.stopPropagation();toggleFavoriteFlight(idx)};
  row.querySelector('.ops-open-detail').onclick=e=>{e.stopPropagation();openFlightFromHomeList(idx)};
