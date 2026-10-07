@@ -17,10 +17,12 @@ if(window.__alyziaAdminV3)return;window.__alyziaAdminV3=true;
 let searchValue='',statusFilter='ALL';
 const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
 const norm=v=>String(v||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
-function stateOfRow(tr){return norm(tr?.querySelector('.adn-badge')?.textContent||'')}
+function keyOf(t){t=norm(t);return t.startsWith('OK')?'OK':t.startsWith('EN ATTENTE')||t.startsWith('PARTIEL')?'PARTIEL':t.startsWith('A CONTROLER')?'A CONTROLER':t.startsWith('NON TRAITE')?'NON TRAITE':'ALL'}
+function stateOfRow(tr){return keyOf(tr?.querySelector('.adn-badge')?.textContent||'')}
 function applyFilters(){
  const app=document.getElementById('app');if(!app)return;const q=norm(searchValue);
  app.querySelectorAll('.adn-table tbody tr').forEach(tr=>{const state=stateOfRow(tr);const text=norm(tr.textContent);const statusOk=statusFilter==='ALL'||state===statusFilter;const searchOk=!q||text.includes(q);tr.style.display=statusOk&&searchOk?'':'none'});
+ app.querySelectorAll('.adn-mini span').forEach(s=>{s.dataset.adminStatus=keyOf(s.textContent)});
  app.querySelectorAll('.adn-mini span[data-admin-status]').forEach(s=>s.classList.toggle('adn-status-active',s.dataset.adminStatus===statusFilter));
 }
 function patchFlightBack(){
@@ -45,7 +47,7 @@ function enhance(){
  const section=[...root.querySelectorAll('.adn-section')].find(s=>s.querySelector('.adn-table'));
  if(section&&!section.querySelector('.adn-search-row')){
    const mini=section.querySelector('.adn-mini');
-   if(mini){mini.querySelectorAll('span').forEach(s=>{const t=norm(s.textContent);s.dataset.adminStatus=t.startsWith('OK ')?'OK':t.startsWith('EN ATTENTE ')?'PARTIEL':t.startsWith('A CONTROLER ')?'A CONTROLER':t.startsWith('NON TRAITE ')?'NON TRAITE':'ALL'});const row=document.createElement('div');row.className='adn-search-row';row.innerHTML='<label class="adn-search-box"><span>⌕</span><input id="adminFlightSearch" autocomplete="off" placeholder="RECHERCHER : COMPAGNIE · CODE · VOL · DESTINATION" value="'+esc(searchValue)+'"></label>';mini.after(row);row.querySelector('input')?.addEventListener('input',e=>{searchValue=e.target.value;applyFilters()});mini.querySelectorAll('span').forEach(s=>s.addEventListener('click',()=>{const v=s.dataset.adminStatus||'ALL';statusFilter=statusFilter===v?'ALL':v;applyFilters()}));}
+   if(mini){mini.querySelectorAll('span').forEach(s=>{const t=norm(s.textContent);s.dataset.adminStatus=t.startsWith('OK ')?'OK':t.startsWith('EN ATTENTE ')?'PARTIEL':t.startsWith('A CONTROLER ')?'A CONTROLER':t.startsWith('NON TRAITE ')?'NON TRAITE':'ALL'});const row=document.createElement('div');row.className='adn-search-row';row.innerHTML='<label class="adn-search-box"><span>⌕</span><input id="adminFlightSearch" autocomplete="off" placeholder="RECHERCHER : COMPAGNIE · CODE · VOL · DESTINATION" value="'+esc(searchValue)+'"></label>';mini.after(row);row.querySelector('input')?.addEventListener('input',e=>{searchValue=e.target.value;applyFilters()});}
  }
  const logSection=[...root.querySelectorAll('.adn-section')].find(s=>norm(s.querySelector('h3')?.textContent).startsWith('LOG TRAITEMENT'));
  if(logSection&&!logSection.querySelector('.adn-log-btn')){const h=logSection.querySelector('h3');if(h){const wrap=document.createElement('div');wrap.className='adn-log-head';h.parentNode.insertBefore(wrap,h);wrap.appendChild(h);const b=document.createElement('button');b.className='adn-log-btn';b.type='button';b.textContent='AFFICHER LES VOLS';b.addEventListener('click',openLogModal);wrap.appendChild(b)}}
@@ -55,6 +57,7 @@ window.addEventListener('adn:repaint',()=>setTimeout(enhance,0));
 const original=window.renderAdminDashboard;
 if(typeof original==='function')window.renderAdminDashboard=async function(...args){const r=await original.apply(this,args);enhance();return r};
 document.addEventListener('click',e=>{
+ const chip=e.target?.closest?.('#app .admin-native .adn-mini span');if(chip){const v=keyOf(chip.textContent);statusFilter=statusFilter===v?'ALL':v;applyFilters()}
  const row=e.target?.closest?.('#app .admin-native .adn-table tbody tr');if(row)patchFlightBack();
  const ctl=e.target?.closest?.('#adminPrev,#adminNext,#adminDateBtn,[data-terminal],#adminRefreshBtn');if(ctl)setTimeout(enhance,0);
 },true);

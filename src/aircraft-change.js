@@ -67,7 +67,7 @@ const LONG_TYPE_RULES=[
 // Codes IATA d'équipement considérés comme le MÊME appareil (variantes winglets / sièges). 32N (A320neo) et 32Q (A321neo) restent distincts.
 const STRICT=[["738","73H","73W","73J","7S8"],["320","32A"],["321","32S","32B"],["7M8","38M"],["763","76W"],["32Q","N32"]];
 // Codes sous lesquels le catalogue cabines peut ranger le même appareil (ex. LY enregistre son 777-200 en « 777 » alors que le type réel remonte « 772 »).
-const CONFIG_ALIASES={"772":["777"],"777":["772"],"32Q":["N32"],"N32":["32Q"],"321":["32B","32S"],"32B":["321"],"32S":["321"],"763":["76W"],"76W":["763"],"738":["73H","7S8"],"73H":["738"],"7S8":["738"],"7M8":["38M"],"38M":["7M8"],"320":["32A"],"32A":["320"]};
+const CONFIG_ALIASES={"772":["777"],"777":["772"],"32Q":["N32"],"N32":["32Q"],"321":["32B","32S"],"32B":["321"],"32S":["321"],"763":["76W"],"76W":["763"],"738":["73H","7S8","78D"],"73H":["738"],"7S8":["738"],"7M8":["38M","78D"],"38M":["7M8"],"320":["32A"],"32A":["320"],"7M9":["79D"],"78D":["738","7M8"],"79D":["7M9"]};  // TK range ses 737-800 et 737 MAX 8 sous « 78D », son 737 MAX 9 sous « 79D »
 export function configCodes(code){const c=upper(code);return c?[...new Set([c,...(CONFIG_ALIASES[c]||[]),...STRICT.filter(g=>g.includes(c)).flat()])]:[]}
 
 export function toIata(raw){

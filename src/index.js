@@ -275,7 +275,7 @@ export async function applyCabinConfigForActualAircraft(env,x){
 
 // Version "un seul vol" (POST/PATCH /api/flights, injection LOT3) : interroge
 // cabin_configs directement, cout negligeable pour un vol a la fois.
-async function applyAutoCabinConfig(env,x){
+export async function applyAutoCabinConfig(env,x){
   try{
     if(!x||typeof x!=="object")return x;
     normalizeEntAircraft(x);
