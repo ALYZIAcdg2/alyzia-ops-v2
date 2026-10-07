@@ -6,13 +6,14 @@ const addDays=(d,n)=>{const x=new Date(`${d}T12:00:00Z`);x.setUTCDate(x.getUTCDa
 export async function syncCabinAfterAircraftChange(env,{nowMs=Date.now(),apply,autoApply}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const today=parisDate(nowMs),dates=[addDays(today,-1),today,addDays(today,1)];
-  const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,data_json FROM flights WHERE flight_date IN (?,?,?) AND airline<>'SYS' AND data_json LIKE '%"aircraftChange"%'`).bind(...dates).all();
-  const {results:bare=[]}=await env.OPS_DB.prepare(`SELECT identity,data_json FROM flights WHERE flight_date IN (?,?,?) AND airline<>'SYS' AND coalesce(json_extract(data_json,'$.sariaConfigKey'),'')='' AND coalesce(json_extract(data_json,'$.aircraft'),'')<>''`).bind(...dates).all();
+  const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,airline,flight_number,data_json FROM flights WHERE flight_date IN (?,?,?) AND airline<>'SYS' AND data_json LIKE '%"aircraftChange"%'`).bind(...dates).all();
+  const {results:bare=[]}=await env.OPS_DB.prepare(`SELECT identity,airline,flight_number,data_json FROM flights WHERE flight_date IN (?,?,?) AND airline<>'SYS' AND coalesce(json_extract(data_json,'$.sariaConfigKey'),'')='' AND coalesce(json_extract(data_json,'$.aircraft'),'')<>''`).bind(...dates).all();
   if(!results.length&&!bare.length)return {ok:true,checked:0,updated:0};
   const fn=apply||(await import("./index.js")).applyCabinConfigForActualAircraft;
   let updated=0;
   for(const r of results){
     let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
+    if(!x.airline)x.airline=r.airline;if(!x.flight)x.flight=r.flight_number;
     if(!x.aircraftChange)continue;
     if(await fn(env,x))updated++,await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
   }
@@ -20,6 +21,7 @@ export async function syncCabinAfterAircraftChange(env,{nowMs=Date.now(),apply,a
   const auto=autoApply||(await import("./index.js")).applyAutoCabinConfig;
   for(const r of bare){
     let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
+    if(!x.airline)x.airline=r.airline;if(!x.flight)x.flight=r.flight_number;
     await auto(env,x);
     if(x.sariaConfigKey)updated++,await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
   }
