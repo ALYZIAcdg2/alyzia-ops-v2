@@ -87,7 +87,7 @@ async function dashboard(env){
   // Flux FIDS flightradar.live : lecture globale (une par passage), reportée vol par vol pour le bilan.
   {const fs=await loadFidsState(env);if(fs)for(const x of flights){if(x.date!==now.date||!x.attempts?.length)continue;const a=fidsAttempt(fs,x.flight,x.std);if(a)x.attempts.push({s:"FIDS",st:a.status,h:a.httpStatus,d:"",at:a.checkedAt})}}
   const today=flights.filter(x=>x.date===now.date),future=flights.filter(x=>x.date>now.date),past=flights.filter(x=>x.date<now.date);
-  const summarize=list=>({total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="EN ATTENTE").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
+  const summarize=list=>({byDate:list.reduce((o,x)=>(o[x.date]=(o[x.date]||0)+1,o),{}),total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="EN ATTENTE").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
   let quotas=[];
   try{
     const month=now.date.slice(0,7),{results:q=[]}=await env.OPS_DB.prepare(`SELECT provider,period,calls,last_status,last_at FROM api_provider_usage WHERE period IN (?,?) ORDER BY provider,period`).bind(month,now.date).all();
@@ -106,7 +106,8 @@ const UI=String.raw`<style id="alyzia-admin-native-css">
 </style><script id="alyzia-admin-native-js">(()=>{'use strict';
 const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
 const cls=s=>s==='OK'?'OK':s==='EN ATTENTE'?'PARTIEL':String(s).includes('CONTRÔLER')?'CTRL':'NONE';
-const card=(title,s)=>'<div class="adn-card"><b>'+title+' · '+(s?.total||0)+'</b><div class="adn-mini"><span class="ok">OK '+(s?.ok||0)+'</span><span class="part">EN ATTENTE '+(s?.partial||0)+'</span><span class="check">À CONTRÔLER '+(s?.check||0)+'</span><span class="none">NON TRAITÉ '+(s?.untreated||0)+'</span></div></div>';
+const dd=d=>d.slice(8,10)+'/'+d.slice(5,7);
+const card=(title,s)=>'<div class="adn-card"><b>'+title+' · '+(s?.total||0)+'</b>'+(Object.keys(s?.byDate||{}).length>1?'<div style="font-size:11px;font-weight:800;color:#708299;margin:2px 0 4px">'+Object.entries(s.byDate).sort().map(([d,n])=>dd(d)+' : '+n+' vols').join(' · ')+'</div>':'')+'<div class="adn-mini"><span class="ok">OK '+(s?.ok||0)+'</span><span class="part">EN ATTENTE '+(s?.partial||0)+'</span><span class="check">À CONTRÔLER '+(s?.check||0)+'</span><span class="none">NON TRAITÉ '+(s?.untreated||0)+'</span></div></div>';
 window.adminPushNow=async function(){
   const btn=document.getElementById('adminPushBtn'),msg=document.getElementById('adnPushMsg');
   if(btn){btn.disabled=true;btn.textContent='⚡ EN COURS…'}
