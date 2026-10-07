@@ -159,6 +159,16 @@ export function flightStatsImport(st){if(!st)return;for(const k of Object.keys(F
 // Lectures de la page FlightStats (sans identifiant mémorisé) par passage du cron : au plus FS_PAGE_BUDGET ; l'appel léger par identifiant n'est pas compté. Un vol refusé n'est pas redemandé avant 20 min.
 const FS_PAGE_BUDGET=4,FS_RETRY_MIN=20;let fsPageLeft=FS_PAGE_BUDGET;
 export function flightStatsResetBudget(n=FS_PAGE_BUDGET){fsPageLeft=n}
+// FlightStats / FlightAware n'ont rien à donner avant le départ : pas d'appel pour un vol non parti dont la STD est à plus de 90 min (les heures prévues viennent du tableau FR24, de FR24 par vol et de FIDS).
+export const FS_FA_WINDOW_MIN=90;
+export function farFromDeparture(flightDate,std,{atd="",takeoff=""}={},nowMs=Date.now(),windowMin=FS_FA_WINDOW_MIN){
+  if(clean(atd)||clean(takeoff))return false;
+  const s=mins(std);if(s===null)return false;
+  const p=Object.fromEntries(new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(nowMs)).map(x=>[x.type,x.value]));
+  const today=`${p.year}-${p.month}-${p.day}`,nowMin=Number(p.hour)*60+Number(p.minute),days=Math.round((Date.parse(`${flightDate}T00:00:00Z`)-Date.parse(`${today}T00:00:00Z`))/86400000);
+  if(!Number.isFinite(days))return false;
+  return days*1440+s-nowMin>windowMin;
+}
 export function flightStatsMayTry(base,now=Date.now(),pageLeft=fsPageLeft){
   const hasId=/^\d+$/.test(clean(base?.flightStatsId))&&clean(base?.flightStatsIdDate)===clean(base?.date||base?.activeDate||base?.flightStatsIdDate);
   if(hasId)return true;   // appel léger par identifiant
@@ -293,10 +303,10 @@ export function pickSlots(sorted,size){
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
 function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
-async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
+async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // FlightStats: seulement si un champ gate-time/status manque.
   const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
-  if(anyNeed(needs,["atd","eta","ata","status"])&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),fsPageLeft))){if(!fsIdKnown)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
+  if(!tooEarly&&anyNeed(needs,["atd","eta","ata","status"])&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),fsPageLeft))){if(!fsIdKnown)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
   {const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft,gate:false,etd:false};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
@@ -309,7 +319,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
   const noDeparture=!clean(base.atd)&&!clean(map.FLIGHTSTATS?.atd);
   // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
   const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
-  if(noDeparture||(noArrival&&clean(base.flightAwareHistoryUrl))){
+  if(!tooEarly&&(noDeparture||(noArrival&&clean(base.flightAwareHistoryUrl)))){
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
     if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
