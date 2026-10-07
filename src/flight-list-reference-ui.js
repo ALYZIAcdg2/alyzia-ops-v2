@@ -68,8 +68,9 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-time b.ops-missing{color:#587397!important;font-weight:500!important}
 #app .ops-time b.ops-estimated{color:#d98200!important}
 #app .ops-time b.ops-estimated .ops-day{color:inherit!important}
-#app .ops-time b.ops-ontime,#app .ops-time b.ops-ontime .ops-day{color:#0a8f5a!important}
+#app .ops-time b.ops-ontime,#app .ops-time b.ops-ontime .ops-day{color:#1f6fd1!important}
 #app .ops-time b.ops-late,#app .ops-time b.ops-late .ops-day{color:#d3213f!important}
+#app .ops-time b.ops-early,#app .ops-time b.ops-early .ops-day{color:#0a8f5a!important}
 #app .ops-day{font-size:11px!important;font-weight:500;margin-left:2px;vertical-align:baseline;color:#183a61}
 #app .ops-status-context{display:flex;gap:4px 16px;flex-wrap:wrap;margin-top:9px;color:#4b6787;font-size:13px!important;line-height:1.4}
 #app .flight-home-row.ops-flight-card>.ops-expand{grid-area:expand!important;width:32px!important;height:44px!important;min-height:44px!important;border:0!important;border-radius:7px!important;background:transparent!important;padding:4px!important;color:#123d67!important;cursor:pointer}
@@ -182,9 +183,10 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-status-badge.retarde{background:#fff0d0;color:#965600;border-color:#f1d08e}
 #app .ops-status-badge.annule{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}
 #app .ops-status-badge.arrive{background:#d7efec;color:#0a665e;border-color:#a9d9d3}
-#app .ops-status-badge.embarq-late{background:#fff0d0;color:#965600;border-color:#f1d08e;animation:opsBlink 1.1s ease-in-out infinite}
+#app .ops-status-badge.embarq-late{background:#fff0d0;color:#965600;border-color:#f1d08e}
+#app .ops-status-badge.embarq-blink{animation:opsBlink 1.1s ease-in-out infinite}
 @keyframes opsBlink{0%,100%{opacity:1}50%{opacity:.35}}
-@media(prefers-reduced-motion:reduce){#app .ops-status-badge.embarq-late{animation:none}}
+@media(prefers-reduced-motion:reduce){#app .ops-status-badge.embarq-blink{animation:none}}
 @media(min-width:1101px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}}
 #app .ops-card-actions .home-pin{width:34px!important;padding:0!important;font-size:18px!important}
 #app .ops-flight-card .ops-load-info,#app .ops-flight-card .ops-load-info strong{font-family:inherit!important}
@@ -204,8 +206,9 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .v2x-chip-btn:hover{border-color:#8fb8e6;background:#eef6ff}
 #app .v2x-chip-btn.missing{border-color:#efbd76;background:#fffaf2;color:#a66006}
 #app .v2x-chip-change{border-color:#efc3ca;background:#fff7f8;color:#bd3047}
-#app .v2x-d-t b.ops-ontime{color:#0a8f5a!important}
+#app .v2x-d-t b.ops-ontime{color:#1f6fd1!important}
 #app .v2x-d-t b.ops-late{color:#d3213f!important}
+#app .v2x-d-t b.ops-early{color:#0a8f5a!important}
 #app .v2x-d-t b.ops-estimated{color:#d98200!important}
 @media print{#app .flight-home-row.ops-flight-card{break-inside:avoid!important}#app .ops-expand{visibility:hidden}}
 /* Mobile : trajet CDG ─✈─ DEST sur 3 lignes (codes, villes, heure + météo), typographie homogène, CONFIG / BOOKING / AVAILABLE sur une seule ligne */
@@ -370,12 +373,14 @@ function opsFlightForRow(row){
  return {x:{...local,...remote,config:local.config,booked:local.booked,inopSeats:local.inopSeats},idx};
 }
 function opsClockMin(v){const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null}
-// Green = at or before schedule (STD for ETD/ATD/TO, STA for ETA/ATA/LDG). After schedule: red for actual times, orange for estimates.
+// Écart à l'horaire théorique (STD pour ETD/ATD/TO, STA pour ETA/ATA/LDG) : vert = en avance (5 min ou plus), bleu = à l'heure (jusqu'à +15 min),
+// au-delà de +15 min : orange pour une estimation (ETD/ETA), rouge pour un réel (ATD/TO/LDG/ATA).
 function opsTimeTone(label,value,t){
  const sched={ETD:t.std,ATD:t.std,TO:t.std,ETA:t.sta,ATA:t.sta,LDG:t.sta}[label];if(sched===undefined)return '';
  const a=opsClockMin(sched),b=opsClockMin(value);if(a===null||b===null)return '';
  let d=b-a;if(d<-720)d+=1440;if(d>720)d-=1440;
- return d<=0?'ops-ontime':(label==='ETD'||label==='ETA')?'ops-estimated':'ops-late';
+ if(d<=-5)return 'ops-early';
+ return d<=15?'ops-ontime':(label==='ETD'||label==='ETA')?'ops-estimated':'ops-late';
 }
 function opsTimeCell(label,value,day,t){const cls=!value?'ops-missing':opsTimeTone(label,value,t||{});return '<div class="ops-time"><small>'+label+'</small><b class="'+cls+'">'+esc(value||'—')+(value&&day?'<span class="ops-day">'+(day>0?'+':'')+day+'</span>':'')+'</b></div>'}
 function opsWeather(code){let html='';try{if(typeof wxInner==='function')html=wxInner(up(code))}catch{}return '<div class="wx-line wx-mini" data-wx="'+esc(up(code))+'" aria-label="Météo '+esc(code)+'">'+html+'</div>'}
@@ -412,7 +417,7 @@ function opsListStatus(x,t){
  if(raw&&(manual||raw.includes('ANNUL')))st.main=raw;
  st.cls=statusClass(st.main);if(!/EN VOL|PARTI|ARRIV|ATTERR|RETARD|ANNUL/.test(up(st.main)))st.cls='prevu';
  const mm=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},sd=mm(t.std),ed=mm(t.etd);let dl=sd!==null&&ed!==null?ed-sd:0;if(dl<-720)dl+=1440;if(dl>720)dl-=1440;
- if(/^EMBARQUEMENT/.test(up(st.main))&&dl>15)st.cls='embarq-late';
+ if(/^EMBARQUEMENT/.test(up(st.main)))st.cls=(dl>15?'embarq-late':'prevu')+' embarq-blink';
  st.remain='';
  if(/^(EN VOL|PARTI)$/.test(up(st.main))){
   const actual=t.takeoff||t.atd,minutes=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},std=minutes(t.std),at=minutes(actual);
