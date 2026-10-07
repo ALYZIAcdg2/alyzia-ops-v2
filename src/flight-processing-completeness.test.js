@@ -33,3 +33,8 @@ test('information manquante (porte, immat, type) : EN ATTENTE, y compris pour un
   assert.equal(row({},'2026-10-03').state,'OK');
   assert.equal(row({status:'CANCELLED',gate:'',reg:''}).state,'OK');
 });
+
+test("ADMIN : le statut PRÉVU est affiché « À L'HEURE »",()=>{
+ const r=row({},'2026-10-03');
+ assert.equal(r.flightStatus,"À L'HEURE");
+});
