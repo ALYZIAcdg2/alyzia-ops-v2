@@ -1,5 +1,6 @@
 import {guardDepartureClock,guardArrivalClock,isFutureActual,arrivedTooEarly,zoneOffsetMinutes} from "./local-time-guard.js";
 import {isWebWordRegistration,isJunkRegistration} from "./registration-guard.js";
+import {normRegId,regHeldByNearbyFlight} from "./reg-nearby.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {boardLookup,gateValue} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
@@ -343,17 +344,6 @@ export function pickSlots(sorted,size){
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
 function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
-const normRegId=v=>String(v??"").toUpperCase().replace(/[^A-Z0-9]/g,"");
-export function sameRegNearby(others,{reg,std,windowMin=120}){
-  const r=normRegId(reg),m=v=>{const k=/(\d{1,2}):(\d{2})/.exec(String(v??""));return k?+k[1]*60+ +k[2]:null},s=m(std);if(!r||s===null)return false;
-  return others.some(o=>{const x=o.x||{},t=m(x.std||o.std);return t!==null&&normRegId(x.reg||x.registration||x.aircraftRegistration)===r&&String(x.origin||"CDG").toUpperCase()==="CDG"&&Math.abs(t-s)<windowMin});
-}
-async function regHeldByNearbyFlight(env,identity,date,reg,std){
-  if(!env?.OPS_DB||!normRegId(reg))return false;
-  try{const {results=[]}=await env.OPS_DB.prepare(`SELECT std,data_json FROM flights WHERE flight_date=? AND identity<>? AND airline<>'SYS' AND data_json LIKE ?`).bind(date,identity,`%${String(reg).trim()}%`).all();
-    return sameRegNearby(results.map(r=>{let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}return {std:r.std,x}}),{reg,std})}
-  catch{return false}
-}
 async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
