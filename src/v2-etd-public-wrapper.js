@@ -35,7 +35,7 @@ async function runLive(env,opts){
   // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
   const boardSweep=await sweepBoardToday(env).catch(()=>null);
   // Config cabine automatique alignée sur le type réel quand un appareil a changé (sans action dans la fiche).
-  const cabinSync=await syncCabinAfterAircraftChange(env).catch(()=>null);
+  const cabinSync=await syncCabinAfterAircraftChange(env).catch(e=>({ok:false,error:String(e?.message||e)}));
   const recovery=await recoverValidatedLiveFacts(env);
   const parisAeroport=await runParisAirportStatusFlow(env);
   const regFix=await sanitizeTodayRegistrations(env);
