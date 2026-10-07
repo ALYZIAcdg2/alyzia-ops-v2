@@ -11,7 +11,7 @@ import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-so
 import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
-import {sweepFidsToday} from "./fids-atd-sweep.js";
+import {sweepFidsToday,getFeed,loadFidsState} from "./fids-atd-sweep.js";
 import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
@@ -124,6 +124,15 @@ export default {
     if(url.pathname==="/api/admin/times-compare"&&request.method==="GET"){
       // Lecture seule : ETD / ETA de nos vols du jour comparés au tableau FR24, au flux FIDS et à FR24 par vol (une lecture FR24 par vol).
       try{return json(await runTimesCompare(env,{limit:Number(url.searchParams.get("limit")||12),offset:Number(url.searchParams.get("offset")||0),all:url.searchParams.get("all")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/fids-status"&&request.method==="GET"){
+      // Lecture seule : dernière lecture FIDS enregistrée + lecture directe du flux (fenêtre de départs couverte) + simulation du passage sans écriture.
+      try{
+        const state=await loadFidsState(env),counts={};for(const v of Object.values(state?.flights||{}))counts[v]=(counts[v]||0)+1;
+        const feed=await getFeed(),times=(feed.rows||[]).map(r=>String(r.dep_time||"")).filter(Boolean).sort();
+        const dry=await sweepFidsToday(env,{dryRun:true});
+        return json({ok:true,mode:"FIDS_STATUS_NO_WRITE",nowUtc:new Date().toISOString(),saved:state?{at:state.at,status:state.status,http:state.http,tracked:counts}:null,feed:{status:feed.status,httpStatus:feed.httpStatus||null,rows:feed.rows?.length||0,firstDep:times[0]||null,lastDep:times[times.length-1]||null},dryRun:dry});
+      }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
       // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
