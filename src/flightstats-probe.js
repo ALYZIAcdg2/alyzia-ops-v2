@@ -25,7 +25,7 @@ export async function probeFlightStats({airline="",number="",date="",flightId=""
     try{
       const r=await fetchImpl(url,{redirect:"follow",headers:{accept:kind==="api"?"*/*":"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":UA}});
       const body=await r.text();
-      const row={httpStatus:r.status,bytes:body.length,ms:Date.now()-t0,server:r.headers?.get?.("server")||null,challenge:/just a moment|cf-chl|captcha|access denied|incapsula|akamai/i.test(body.slice(0,6000))};
+      const row={httpStatus:r.status,bytes:body.length,ms:Date.now()-t0,server:r.headers?.get?.("server")||null,challenge:/<title>[^<]*(just a moment|attention required|access denied|blocked|are you a robot)/i.test(body.slice(0,4000))};
       if(r.ok&&kind==="api"){let j=null;try{j=JSON.parse(body)}catch{}const a=j?flightStatsApiTimes(j):null;row.times=a&&Object.keys(a).length?a:null}
       if(r.ok&&kind==="details"){const d=flightStatsDetails(strip(body));row.times=d&&Object.keys(d).length?d:null}
       if(r.ok&&kind==="tracker"){const m=/flight-details[^"'\s<>]*flightId=(\d+)/.exec(body);row.flightIdFound=m?m[1]:null}
