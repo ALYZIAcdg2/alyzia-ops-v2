@@ -14,8 +14,8 @@ export async function probeGatenavo(env,{flight=""}={}){
   const out={ok:true,mode:"GATENAVO_PROBE_NO_WRITE",url:URL_DEP};
   const c=new AbortController(),timer=setTimeout(()=>c.abort(),10000);
   let html="";
-  try{const r=await fetch(URL_DEP,{signal:c.signal,headers:{accept:"text/html","accept-language":"fr-FR,fr;q=0.9,en;q=0.7","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-Probe/1.0)"}});
-    out.httpStatus=r.status;out.contentType=r.headers.get("content-type")||"";html=await r.text();out.length=html.length}
+  try{const r=await fetch(URL_DEP,{signal:c.signal,cache:"no-store",cf:{cacheTtl:0,cacheEverything:false},headers:{accept:"text/html","accept-language":"fr-FR,fr;q=0.9,en;q=0.7","cache-control":"no-cache",pragma:"no-cache","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-Probe/1.0)"}});
+    out.httpStatus=r.status;out.contentType=r.headers.get("content-type")||"";out.cacheHeaders={cacheControl:r.headers.get("cache-control")||"",age:r.headers.get("age")||"",cfCacheStatus:r.headers.get("cf-cache-status")||"",xCache:r.headers.get("x-vercel-cache")||r.headers.get("x-nextjs-cache")||"",date:r.headers.get("date")||""};html=await r.text();out.length=html.length}
   catch(e){out.error=String(e?.name||e?.message||e);return out}finally{clearTimeout(timer)}
   if(/Pardon Our Interruption|Just a moment|cf-chl|Attention Required/i.test(html)){out.error="BOT_PROTECTION";out.head=html.slice(0,200);return out}
   const rows=parseGatenavoFlights(html);out.flights=rows.length;
@@ -37,7 +37,7 @@ export async function probeGatenavo(env,{flight=""}={}){
 // Lecture des vols pour le flux de statut : null si la page est inaccessible, protégée ou sans vol.
 export async function fetchGatenavoRows(){
   const c=new AbortController(),timer=setTimeout(()=>c.abort(),10000);
-  try{const r=await fetch(URL_DEP,{signal:c.signal,headers:{accept:"text/html","accept-language":"fr-FR,fr;q=0.9,en;q=0.7","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-Probe/1.0)"}});
+  try{const r=await fetch(URL_DEP,{signal:c.signal,cache:"no-store",cf:{cacheTtl:0,cacheEverything:false},headers:{accept:"text/html","accept-language":"fr-FR,fr;q=0.9,en;q=0.7","cache-control":"no-cache",pragma:"no-cache","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-Probe/1.0)"}});
     if(!r.ok)return {rows:[],error:"HTTP_"+r.status};const html=await r.text();
     if(/Pardon Our Interruption|Just a moment|cf-chl|Attention Required/i.test(html))return {rows:[],error:"BOT_PROTECTION"};
     const rows=parseGatenavoFlights(html);return {rows,error:rows.length?"":"NO_ROWS"}}
