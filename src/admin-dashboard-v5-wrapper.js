@@ -28,22 +28,24 @@ function futureBaseTime(date,std,now){
   return atLocal(date,'00:05');
 }
 function planFromRow(tr){
+  // Prochain traitement = ce que le cron fait réellement (toutes les 2 min) avec les sources publiques : FIDS (ATD / ETA / ATA / ETD),
+  // tableau FR24 CDG (porte, immatriculation, type, ETD, décollage), FlightStats (STA), FlightAware (dernier recours). Aucune API payante.
   const date=document.getElementById('adminDateInput')?.value||'';if(!date)return null;
   const std=String(tr.cells?.[3]?.textContent||'').trim(),sta=String(tr.cells?.[4]?.textContent||'').trim(),atd=String(tr.cells?.[6]?.textContent||'').trim(),reg=String(tr.cells?.[10]?.textContent||'').trim();
   const state=stateText(tr),miss=missText(tr),today=adminData?.date||new Date().toISOString().slice(0,10),now=new Date();
   if(state==='OK'&&date<=today)return {done:true,label:'TERMINÉ'};
   if(date>today){
-    if(missing(sta)||miss.includes('STA'))return {at:futureBaseTime(date,std,now),provider:'AIRLABS ROUTES → OAG',label:'COMPLÉTER STA'};
-    if(/^\d{2}:\d{2}$/.test(std)){const at=atLocal(date,std);at.setMinutes(at.getMinutes()-180);return {at:ceilFive(at),provider:'AIRLABS',label:'DÉBUT CONTRÔLE LIVE · PUIS SKYLINK / OAG / ADB'}};
-    return {at:atLocal(date,'00:05'),provider:'AIRLABS ROUTES → OAG',label:'CONTRÔLE J0'};
+    if(missing(sta)||miss.includes('STA'))return {at:futureBaseTime(date,std,now),provider:'FLIGHTSTATS',label:'COMPLÉTER STA'};
+    if(/^\d{2}:\d{2}$/.test(std)){const at=atLocal(date,std);at.setMinutes(at.getMinutes()-180);return {at:ceilFive(at),provider:'FIDS · FR24',label:'DÉBUT CONTRÔLE LIVE'}};
+    return {at:atLocal(date,'00:05'),provider:'FIDS · FR24',label:'CONTRÔLE J0'};
   }
-  if(missing(sta)||miss.includes('STA'))return {at:nextFive(now),provider:'AIRLABS ROUTES → OAG',label:'COMPLÉTER STA'};
+  if(missing(sta)||miss.includes('STA'))return {at:nextFive(now),provider:'FLIGHTSTATS',label:'COMPLÉTER STA'};
   if(/^\d{2}:\d{2}$/.test(std)){
     const dep=atLocal(date,std),h180=new Date(dep.getTime()-180*60000),h20=new Date(dep.getTime()-20*60000);
-    if(now<h180)return {at:ceilFive(h180),provider:'AIRLABS',label:'DÉBUT CONTRÔLE LIVE'};
-    if((missing(atd)||miss.includes('ATD'))&&now>=h20)return {at:nextFive(now),provider:'OPENSKY SI COMPATIBLE · AIRLABS / SKYLINK / OAG',label:'CONFIRMER DÉPART'};
+    if(now<h180)return {at:ceilFive(h180),provider:'FIDS · FR24',label:'DÉBUT CONTRÔLE LIVE'};
+    if((missing(atd)||miss.includes('ATD'))&&now>=h20)return {at:nextFive(now),provider:'FIDS · FR24 TABLEAU',label:'CONFIRMER DÉPART'};
   }
-  const provider=(missing(reg)||miss.includes('REG'))?'AIRLABS / SKYLINK / OAG → AERODATABOX':'AIRLABS / SKYLINK / OAG';
+  const provider=(missing(reg)||miss.includes('REG')||miss.includes('GATE'))?'FR24 TABLEAU · FIDS':(miss.includes('ATA')||miss.includes('ETA'))?'FIDS · FLIGHTSTATS':'FIDS · FR24 · FLIGHTSTATS';
   return {at:nextFive(now),provider,label:state.includes('CONTRÔLER')?'RECONTRÔLE PRIORITAIRE':'COMPLÉTER DONNÉES'};
 }
 function patchRows(){

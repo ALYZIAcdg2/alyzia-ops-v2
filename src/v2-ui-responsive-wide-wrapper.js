@@ -1,5 +1,6 @@
 import app from "./v2-ui-legibility-wrapper.js";
 import { REFERENCE_LIST_STYLE } from "./flight-list-reference-ui.js";
+import {lockPaidApis,paidApiStatus} from "./paid-api-lock.js";
 
 const WIDE=String.raw`<style id="alyzia-v2-responsive-wide-css">
 /* Responsive wide pass — mobile/tablet/desktop use available width without squeezing operational times. */
@@ -49,6 +50,10 @@ const WIDE=String.raw`<style id="alyzia-v2-responsive-wide-css">
 function patch(html){let s=String(html||'').replace(/<style id="alyzia-v2-responsive-wide-css">[\s\S]*?<\/style>/g,'');const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+WIDE+REFERENCE_LIST_STYLE+'\n'+s.slice(i):s+WIDE+REFERENCE_LIST_STYLE}
 
 export default {
-  async fetch(request,env,ctx){const r=await app.fetch(request,env,ctx);const type=String(r.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return r;const h=new Headers(r.headers);h.delete('content-length');h.set('cache-control','no-store');return new Response(patch(await r.text()),{status:r.status,statusText:r.statusText,headers:h})},
-  scheduled(controller,env,ctx){if(typeof app.scheduled==='function')return app.scheduled(controller,env,ctx)}
+  async fetch(request,env,ctx){
+    // API payantes écartées : état en lecture seule (secrets définis ? appels du jour ?) puis, pour tout le reste, un environnement sans ces secrets.
+    if(request.method==='GET'&&new URL(request.url).pathname==='/api/admin/paid-apis'){try{return new Response(JSON.stringify(await paidApiStatus(env)),{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}})}catch(e){return new Response(JSON.stringify({ok:false,error:String(e?.message||e)}),{status:500,headers:{'content-type':'application/json'}})}}
+    env=lockPaidApis(env);
+    const r=await app.fetch(request,env,ctx);const type=String(r.headers.get('content-type')||'').toLowerCase();if(!type.includes('text/html'))return r;const h=new Headers(r.headers);h.delete('content-length');h.set('cache-control','no-store');return new Response(patch(await r.text()),{status:r.status,statusText:r.statusText,headers:h})},
+  scheduled(controller,env,ctx){if(typeof app.scheduled==='function')return app.scheduled(controller,lockPaidApis(env),ctx)}
 };

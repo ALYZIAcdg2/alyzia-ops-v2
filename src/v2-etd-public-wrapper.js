@@ -88,23 +88,6 @@ window.adminPushNow=async function(){
  }catch(e){if(msg)msg.textContent='ÉCHEC : '+(e?.message||e)}finally{if(btn){btn.disabled=false;btn.textContent='⚡ PUSH'}}
 };
 })();</script>`;
-
-const READ_ONE_UI=String.raw`<script id="alyzia-read-one-js">(()=>{'use strict';
-// Lecture à la demande d'un seul vol (FlightStats / FlightAware compris), depuis la fiche vol. Mêmes requêtes que le cron, pauses et cooldowns respectés.
-function cur(){try{if(typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)&&typeof selected!=='undefined'&&FLIGHTS[selected])return FLIGHTS[selected]}catch{}try{if(Array.isArray(window.FLIGHTS)&&Number.isInteger(window.selected))return window.FLIGHTS[window.selected]||null}catch{}return null}
-async function run(btn){const x=cur();if(!x)return;const fl=String(x.flight||x.flight_number||x.designator||'').replace(/\s+/g,''),date=String(x.date||x.flightDate||(typeof HOME_DATE!=='undefined'?HOME_DATE:'')||'');if(!fl)return;
- const old=btn.textContent;btn.disabled=true;btn.textContent='Lecture…';let out='';
- try{const r=await fetch('/api/admin/live-one?flight='+encodeURIComponent(fl)+(date?'&date='+encodeURIComponent(date):''),{method:'POST',cache:'no-store'}),j=await r.json();
-  if(j?.error==='TOO_SOON')out='Déjà lu à l’instant · réessaie dans '+j.retryInSeconds+' s';
-  else if(!j?.ok)out='Échec : '+(j?.error||('HTTP '+r.status));
-  else{const a=(j.result?.attempts||[]).map(z=>z.source+' '+(z.httpStatus||z.status)).join(' · ');out='Lu · '+(j.result?.status||'')+(a?' · '+a:'')}
- }catch(e){out='Échec : '+(e?.message||e)}
- btn.disabled=false;btn.title=out;btn.textContent=out.length>34?out.slice(0,33)+'\u2026':out;setTimeout(()=>{btn.textContent=old},9000);
- try{await window.renderAdminDashboard?.(true)}catch{}try{window.refreshFlights?.()}catch{}}
-function ensure(){const bar=document.querySelector('#app .v2x-d-actions');if(!bar||bar.querySelector('.read-one-btn'))return;const b=document.createElement('button');b.type='button';b.className='v2x-act read-one-btn';b.textContent='\u21BB RELIRE LES SOURCES';b.title='Relire ce vol sur toutes les sources (FlightStats / FlightAware compris)';b.onclick=()=>run(b);bar.insertBefore(b,bar.querySelector('.v2x-act.danger')||null)}
-new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
-})();</script>`;
-
 const REG_RESTORE_UI=String.raw`<script id="alyzia-reg-restore-js">(()=>{'use strict';
 // Bouton ADMIN : restaure les immatriculations perdues depuis le journal du tableau FR24 (aperçu, confirmation, application).
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -118,16 +101,22 @@ function ensureModalCss(){if(document.getElementById('alz-modal-css'))return;con
  '.alz-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-radius:12px;background:#f2f6fb;font-weight:800}'+
  '.alz-row b{font-size:15px}.alz-row span{font-size:14px;padding:3px 9px;border-radius:8px;border:1px solid transparent}'+
  '.alz-bad .alz-row span{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}.alz-good .alz-row span{background:#e1f5e9;color:#16794a;border-color:#b6e2c8}.alz-muted .alz-row span{background:#eef3f9;color:#426382;border-color:#d6e1ee}'+
+ '.alz-search{width:100%;margin:0 0 12px;padding:11px 14px;border:1px solid #cfe0f3;border-radius:12px;font-family:inherit;font-weight:700;font-size:14px;color:#0a1f3d;background:#f8fbff}'+
+ '.alz-row.alz-pick{cursor:pointer;border:1px solid transparent}.alz-row.alz-pick:hover,.alz-row.alz-pick:focus-visible{background:#e1eefb;border-color:#9cc4f2;outline:none}'+
  '.alz-act{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}'+
  '.alz-btn{border:1px solid #cfe0f3;background:#eef5fd;color:#1769c9;border-radius:12px;padding:11px 18px;font-size:14px;font-weight:900;letter-spacing:.3px;text-transform:uppercase;cursor:pointer}'+
  '.alz-btn.primary{background:#1769c9;border-color:#1769c9;color:#fff}.alz-btn:focus-visible{outline:3px solid #9cc4f2;outline-offset:2px}';
  document.head.appendChild(st)}
-function appModal({title,sections=[],ok='OK',cancel='Annuler'}){ensureModalCss();return new Promise(res=>{
+function appModal({title,sections=[],ok='OK',cancel='Annuler',pick=false,search=false,hideOk=false}){ensureModalCss();return new Promise(res=>{
  const ov=document.createElement('div');ov.className='alz-ov';ov.setAttribute('role','dialog');ov.setAttribute('aria-modal','true');
- ov.innerHTML='<div class="alz-modal"><h3>'+esc(title)+'</h3><div class="alz-body">'+sections.map(s=>'<div class="alz-sec alz-'+esc(s.tone||'muted')+'"><small>'+esc(s.label)+'</small><div class="alz-rows">'+(s.rows||[]).slice(0,60).map(r=>'<div class="alz-row"><b>'+esc(r[0])+'</b><span>'+esc(r[1])+'</span></div>').join('')+((s.rows||[]).length>60?'<div class="alz-row"><b>…</b><span>+'+((s.rows||[]).length-60)+'</span></div>':'')+'</div></div>').join('')+'</div><div class="alz-act"><button type="button" class="alz-btn" data-k="0">'+esc(cancel)+'</button><button type="button" class="alz-btn primary" data-k="1">'+esc(ok)+'</button></div></div>';
+ const row=(r)=>'<div class="alz-row'+(pick?' alz-pick':'')+'"'+(pick&&r[2]!=null?' data-pick="'+esc(r[2])+'" tabindex="0"':'')+' data-q="'+esc((r[0]+' '+r[1]).toLowerCase())+'"><b>'+esc(r[0])+'</b><span>'+esc(r[1])+'</span></div>';
+ ov.innerHTML='<div class="alz-modal"><h3>'+esc(title)+'</h3>'+(search?'<input type="search" class="alz-search" placeholder="Rechercher un vol, une destination…" autocomplete="off">':'')+'<div class="alz-body">'+sections.map(s=>'<div class="alz-sec alz-'+esc(s.tone||'muted')+'"><small>'+esc(s.label)+'</small><div class="alz-rows">'+(s.rows||[]).slice(0,pick?400:60).map(row).join('')+((!pick&&(s.rows||[]).length>60)?'<div class="alz-row"><b>…</b><span>+'+((s.rows||[]).length-60)+'</span></div>':'')+'</div></div>').join('')+'</div><div class="alz-act"><button type="button" class="alz-btn" data-k="0">'+esc(cancel)+'</button>'+(hideOk?'':'<button type="button" class="alz-btn primary" data-k="1">'+esc(ok)+'</button>')+'</div></div>';
  const done=v=>{document.removeEventListener('keydown',key,true);ov.remove();res(v)},key=e=>{if(e.key==='Escape'){e.stopPropagation();done(false)}};
- ov.addEventListener('click',e=>{if(e.target===ov)done(false);const b=e.target.closest?.('[data-k]');if(b)done(b.dataset.k==='1')});
- document.addEventListener('keydown',key,true);document.body.appendChild(ov);ov.querySelector('[data-k="1"]')?.focus()})}
+ ov.addEventListener('click',e=>{if(e.target===ov)return done(false);const p=e.target.closest?.('[data-pick]');if(p)return done(p.dataset.pick);const b=e.target.closest?.('[data-k]');if(b)done(b.dataset.k==='1')});
+ ov.addEventListener('keydown',e=>{if(e.key==='Enter'){const p=e.target.closest?.('[data-pick]');if(p)done(p.dataset.pick)}});
+ const q=ov.querySelector('.alz-search');if(q)q.addEventListener('input',()=>{const v=q.value.trim().toLowerCase();ov.querySelectorAll('.alz-row[data-q]').forEach(r=>{r.style.display=!v||r.dataset.q.indexOf(v)>=0?'':'none'})});
+ document.addEventListener('keydown',key,true);document.body.appendChild(ov);(q||ov.querySelector('[data-k="1"]')||ov.querySelector('[data-k="0"]'))?.focus()})}
+window.alzModal=appModal;
 function dateOf(){const v=document.getElementById('adminDateInput')?.value;return /^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:'';}
 async function run(btn){const msg=document.getElementById('adnPushMsg'),date=dateOf(),q=date?('?date='+encodeURIComponent(date)):'',old=btn.textContent;
  const say=t=>{if(msg)msg.textContent=t;btn.title=t};
@@ -157,7 +146,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+s.slice(i):s+PUSH_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI}
 
 export default {
   async fetch(request,env,ctx){

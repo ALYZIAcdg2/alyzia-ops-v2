@@ -19,3 +19,15 @@ test("pastilles de sources : une ligne, date du bilan = date du tableau, placée
   assert.match(ADMIN_REORG_UI,/text-overflow:ellipsis/);                 // jamais de retour à la ligne : « … » + détail dans l'infobulle / DÉTAIL
   assert.match(ADMIN_REORG_UI,/adx-health-toggle/);                      // bouton DÉTAIL conservé
 });
+
+test("ADMIN > OUTILS : « RELIRE UN VOL » (choix, aperçu sans écriture, confirmation, application) et plus de bouton dans la fiche vol",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const js=/<script[^>]*>([\s\S]*)<\/script>/.exec(ADMIN_REORG_UI)[1];
+  assert.match(js,/adminReadOneBtn/);assert.match(js,/RELIRE UN VOL/);
+  assert.match(js,/\/api\/admin\/live-one'\+q,\{cache:'no-store'\}/);            // aperçu : GET (lecture seule)
+  assert.match(js,/\/api\/admin\/live-one'\+q,\{method:'POST'/);                  // application : POST
+  assert.match(js,/window\.alzModal/);
+  const etd=readFileSync(new URL("./v2-etd-public-wrapper.js",import.meta.url),"utf8");
+  assert.equal(etd.includes("READ_ONE_UI"),false);assert.equal(etd.includes("read-one-btn"),false);
+  assert.match(etd,/window\.alzModal=appModal/);
+});
