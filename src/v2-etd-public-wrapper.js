@@ -19,6 +19,7 @@ import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {flightStatsStatus} from "./flightstats-status.js";
 import {ingestMvt,sitadocAuthorized} from "./sitadoc-mvt.js";
 import {ingestDepartures} from "./sitadoc-departures.js";
+import {cleanupSitadoc} from "./sitadoc-cleanup.js";
 import {sitadocCompare} from "./sitadoc-compare.js";
 import {probeFlightStats} from "./flightstats-probe.js";
 import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
@@ -142,6 +143,10 @@ export default {
     if(url.pathname==="/api/admin/flightaware-probe"&&request.method==="GET"){
       // Diagnostic à la demande : 2 requêtes FlightAware (page du vol puis historique exact).
       try{return json(await probeFlightAware({designator:url.searchParams.get("designator")||"",date:url.searchParams.get("date")||"",std:url.searchParams.get("std")||"",origin:url.searchParams.get("origin")||"CDG",destination:url.searchParams.get("destination")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/sitadoc-cleanup"&&(request.method==="GET"||request.method==="POST")){
+      // GET : essai à blanc (compte ce qui serait nettoyé). POST ?confirm=1 : applique. Ne touche qu'aux données d'origine Sitadoc.
+      try{return json(await cleanupSitadoc(env,{apply:request.method==="POST"&&url.searchParams.get("confirm")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/v2/sitadoc/departures"&&request.method==="POST"){
       // Tableau « Vols Départ » de Sitadoc, envoyé par le collecteur du navigateur. Jeton obligatoire (secret SITADOC_TOKEN).
