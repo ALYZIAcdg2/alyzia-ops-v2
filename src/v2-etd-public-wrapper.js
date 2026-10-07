@@ -189,7 +189,7 @@ export default {
     }
     if(url.pathname==="/api/admin/gatenavo-probe"&&request.method==="GET"){
       // Lecture seule : accès et couverture de la page départs CDG de Gatenavo (statuts embarquement).
-      try{return json(await probeGatenavo(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json(await probeGatenavo(env,{flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/cabin-config-audit"&&request.method==="GET"){
       // Lecture seule : type d'appareil de chaque vol face au catalogue des plans cabine (seatmap).
