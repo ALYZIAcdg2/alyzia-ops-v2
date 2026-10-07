@@ -17,3 +17,9 @@ test("paramètres manquants refusés sans requête",async()=>{
   const r=await probeFlightStats({airline:"",number:"1",date:"2026-10-07"},{fetchImpl:async()=>{throw new Error("non")}});
   assert.equal(r.ok,false);
 });
+test("sonde : mode en-têtes du cron (fr-FR, sans referer)",async()=>{
+  const seen=[];const fetchImpl=async(u,o)=>{seen.push(o.headers);return {status:200,ok:true,headers:{get:()=>null},text:async()=>"<html></html>"}};
+  const r=await probeFlightStats({airline:"TK",number:"1830",date:"2026-10-07",headersMode:"cron"},{fetchImpl,sleep:async()=>{}});
+  assert.equal(r.headers,"cron");assert.equal(seen[0]["accept-language"],"fr-FR,fr;q=0.9,en;q=0.8");assert.equal(seen[0].referer,undefined);
+  const r2=await probeFlightStats({airline:"TK",number:"1830",date:"2026-10-07"},{fetchImpl,sleep:async()=>{}});assert.equal(r2.headers,"probe");assert.equal(seen[1].referer,"https://www.flightstats.com/v2");
+});
