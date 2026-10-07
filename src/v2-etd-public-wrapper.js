@@ -17,6 +17,7 @@ import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {flightStatsStatus} from "./flightstats-status.js";
+import {missingAtdReport} from "./missing-atd.js";
 import {probeFlightStats} from "./flightstats-probe.js";
 import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
@@ -143,6 +144,10 @@ export default {
     if(url.pathname==="/api/admin/provider-refusals"&&request.method==="GET"){
       // Lecture seule : derniers refus (403 / 429 / erreurs) reçus par le cron de FlightStats et FlightAware : adresse, code, Retry-After et début de la réponse.
       try{const row=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='provider_refusals_v1'`).first();let list=[];try{list=JSON.parse(row?.v||"[]")}catch{}const bySource={};for(const e of list){const k=e.source+" "+e.status;bySource[k]=(bySource[k]||0)+1}return json({ok:true,mode:"PROVIDER_REFUSALS_NO_WRITE",count:list.length,bySource,last:list.slice(-15)})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/missing-atd"&&request.method==="GET"){
+      // Lecture seule : vols du jour partis depuis plus de 20 min sans ATD, avec l'état de FIDS, FlightStats et FlightAware pour chacun.
+      try{return json(await missingAtdReport(env,{date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/flightstats-status"&&request.method==="GET"){
       // Lecture seule : disjoncteurs FlightStats enregistrés + dernières lectures par vol du jour (aucun appel FlightStats).
