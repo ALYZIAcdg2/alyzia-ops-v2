@@ -2,6 +2,8 @@ import app from "./refresh-scroll-stability-wrapper.js";
 import seedRows from "../scripts/cabin_seed.json";
 import seedOverrides from "../scripts/cabin_seed_overrides.json";
 import deleteKeysFile from "../scripts/cabin_seed_delete_keys.json";
+import seedV1Additions from "../scripts/cabin_seed_v1_additions.json";
+import {syncSeedIntoD1} from "./cabin-seed-sync.js";
 
 let bootstrapPromise=null;
 let bootstrapped=false;
@@ -13,6 +15,11 @@ function effectiveSeed(){
   const deleteKeys=new Set([...(Array.isArray(deleteKeysFile)?deleteKeysFile:[]),...(Array.isArray(overrides.deleteKeys)?overrides.deleteKeys:[])].filter(Boolean));
   const byKey=new Map();
   for(const row of (Array.isArray(seedRows)?seedRows:[])){
+    if(!row?.configKey||deleteKeys.has(row.configKey))continue;
+    byKey.set(row.configKey,row);
+  }
+  // Plans de la V1 (archive-seeds) absents du seed V2.
+  for(const row of (Array.isArray(seedV1Additions?.configs)?seedV1Additions.configs:[])){
     if(!row?.configKey||deleteKeys.has(row.configKey))continue;
     byKey.set(row.configKey,row);
   }
@@ -221,6 +228,14 @@ async function bootstrapCabins(baseUrl,env,ctx,{force=false}={}){
   return bootstrapPromise;
 }
 
+// Synchronisation incrémentale du seed vers D1 (logique dans cabin-seed-sync.js).
+let syncChecked=0;
+export async function syncCabinSeed(env,{force=false}={}){
+  if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
+  await ensureCabinTables(env);
+  return syncSeedIntoD1(env,effectiveSeed().configs,writeCabinRow,{force});
+}
+
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
@@ -228,6 +243,11 @@ export default {
     if(url.pathname==="/api/v2/cabin/bootstrap"&&request.method==="POST"){
       try{return json(await bootstrapCabins(request.url,env,ctx,{force:url.searchParams.get("force")==="1"}))}
       catch(e){return json({ok:false,error:"V2_CABIN_BOOTSTRAP_EXCEPTION",detail:String(e?.message||e)},500)}
+    }
+
+    if(url.pathname==="/api/v2/cabin/sync"&&request.method==="POST"){
+      try{return json(await syncCabinSeed(env,{force:url.searchParams.get("force")==="1"}))}
+      catch(e){return json({ok:false,error:"V2_CABIN_SYNC_EXCEPTION",detail:String(e?.message||e)},500)}
     }
 
     if(url.pathname==="/api/cabin/configs"&&request.method==="GET"){
@@ -242,7 +262,9 @@ export default {
 
     return app.fetch(request,env,ctx);
   },
-  scheduled(controller,env,ctx){
+  async scheduled(controller,env,ctx){
+    // Au plus une vérification par heure et par instance : un plan du seed pas encore dans D1 y est ajouté.
+    if(Date.now()-syncChecked>3600000){syncChecked=Date.now();try{await syncCabinSeed(env)}catch(e){console.warn("cabin seed sync",String(e?.message||e))}}
     if(typeof app.scheduled==="function")return app.scheduled(controller,env,ctx);
   }
 };
