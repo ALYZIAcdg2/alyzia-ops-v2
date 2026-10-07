@@ -205,6 +205,34 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .v2x-d-t b.ops-late{color:#d3213f!important}
 #app .v2x-d-t b.ops-estimated{color:#d98200!important}
 @media print{#app .flight-home-row.ops-flight-card{break-inside:avoid!important}#app .ops-expand{visibility:hidden}}
+/* Mobile : trajet CDG ─✈─ DEST sur 3 lignes (codes, villes, heure + météo), typographie homogène, CONFIG / BOOKING / AVAILABLE sur une seule ligne */
+@media(max-width:600px){
+#app .ops-route{display:grid!important;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) auto!important;column-gap:8px!important;row-gap:2px!important;align-items:center!important}
+#app .ops-route>div:not(.ops-route-line){display:contents}
+#app .ops-route>.ops-route-line{grid-column:2 / 4;grid-row:1;min-width:0}
+#app .ops-route>div:first-child>.ops-airport-code{grid-column:1;grid-row:1}
+#app .ops-route>div:last-child>.ops-airport-code{grid-column:4;grid-row:1;justify-content:flex-end}
+#app .ops-route>div:first-child>.ops-airport-city{grid-column:1 / 3;grid-row:2;text-align:left}
+#app .ops-route>div:last-child>.ops-airport-city{grid-column:3 / 5;grid-row:2;text-align:right}
+#app .ops-route>div:first-child>.ops-airport-meta{grid-column:1 / 3;grid-row:3;justify-content:flex-start}
+#app .ops-route>div:last-child>.ops-airport-meta{grid-column:3 / 5;grid-row:3;justify-content:flex-end}
+#app .ops-airport-meta{flex-wrap:nowrap!important;gap:8px!important;min-height:0!important;margin-top:2px!important}
+/* même police pour heure locale, température et numéro de vol */
+#app .ops-local,#app .ops-local b,#app .ops-airport-meta .wx-line b,#app .ops-plane-flight{font-size:13px!important;font-weight:800!important;letter-spacing:.1px}
+#app .ops-local{min-width:0!important;color:#365472!important}#app .ops-local b{color:#365472!important;font-weight:800!important}
+#app .ops-local small,#app .ops-airport-meta .wx-line small{font-size:9.5px!important;font-weight:700!important;color:#7b8ea4!important}
+#app .ops-plane-flight{color:#365472}
+#app .ops-route-line.plane-ok .ops-plane-flight{color:#12a150}#app .ops-route-line.plane-late .ops-plane-flight{color:#d93025}
+#app .ops-airport-meta .wx-line{margin:0!important;gap:4px!important}
+#app .ops-airport-meta .wx-svg{width:18px!important;height:18px!important}
+/* CONFIG · BOOKING · AVAILABLE : une ligne, quelles que soient les classes */
+#app .ops-flight-card .ops-load-summary{display:grid!important;grid-template-columns:minmax(0,1.5fr) minmax(0,1.5fr) minmax(0,.9fr)!important;gap:0!important}
+#app .ops-flight-card .ops-extra .ops-load-info{flex-direction:column!important;align-items:flex-start!important;justify-content:flex-start!important;gap:2px!important;padding:4px 6px!important;border-right:1px solid #e1e9f1!important;border-bottom:0!important;text-align:left;font-size:9.5px!important;letter-spacing:.4px;min-width:0}
+#app .ops-flight-card .ops-extra .ops-load-info:last-child{border-right:0!important}
+#app .ops-flight-card .ops-extra .ops-load-info strong{font-size:clamp(11px,3.5vw,15px)!important;line-height:1.2!important;white-space:nowrap!important;text-align:left!important;overflow:hidden;text-overflow:clip;max-width:100%}
+#app .ops-flight-card .ops-load-summary.ops-long .ops-load-info strong{font-size:clamp(9.5px,2.9vw,12px)!important;letter-spacing:-.2px}
+#app .ops-flight-card .ops-avail strong{margin-left:0!important}#app .ops-flight-card .ops-avail em{margin-left:0!important;font-size:10px}
+}
 </style>`;
 
 // Inserted inside the existing UI controller so it shares its live refresh and escaping helpers.
@@ -426,7 +454,7 @@ function renderRow(row){
  '<div class="ops-journey"><div class="ops-route"><div><div class="ops-airport-code">'+esc(dep)+opsFlag(dep)+'</div><div class="ops-airport-city">'+esc(opsCity(dep))+'</div><div class="ops-airport-meta">'+opsLocal(dep)+opsWeather(dep)+'</div></div><div class="ops-route-line'+(progress===null?' static':'')+opsPlaneTone(t)+'" style="--p:'+(progress===null?.5:progress.toFixed(3))+'" role="img" aria-label="'+(progress===null?'Trajet':'Progression du vol '+Math.round(progress*100)+' %')+'"><span class="ops-route-track"></span><span class="ops-route-fill"></span>'+opsPlane+'<span class="ops-plane-flight">'+esc(flight)+'</span>'+(planeSub?'<span class="ops-time-elapsed"><small>TEMPS ÉCOULÉ</small><b>'+esc(planeSub.replace(/^depuis\s*/i,''))+'</b></span>':'')+(st.remain?'<span class="ops-time-remaining"><small>TEMPS RESTANT</small><b>'+esc(st.remain.replace(/^Arriv[ée]e dans\s*/i,''))+'</b></span>':'')+'</div><div><div class="ops-airport-code">'+esc(dest)+opsFlag(dest)+'</div><div class="ops-airport-city">'+esc(opsCity(dest))+'</div><div class="ops-airport-meta">'+opsLocal(dest)+opsWeather(dest)+'</div></div></div>'+((planeSub||st.remain)?'<div class="ops-trip-times">'+(planeSub?'<span class="ops-trip-el"><small>TEMPS ÉCOULÉ</small><b>'+esc(planeSub.replace(/^depuis\s*/i,''))+'</b></span>':'<span></span>')+(st.remain?'<span class="ops-trip-rem"><small>TEMPS RESTANT</small><b>'+esc(st.remain.replace(/^Arriv[ée]e dans\s*/i,''))+'</b></span>':'')+'</div>':'')+
  '<div class="ops-times"><div class="ops-time-group">'+opsTimeCell('STD',t.std)+opsTimeCell('ETD',t.etd,0,t)+opsTimeCell('ATD',t.atd,0,t)+opsTimeCell('TO',t.takeoff,0,t)+'</div><div class="ops-time-group">'+opsTimeCell('STA',t.sta,t.staDay)+opsTimeCell('ETA',t.eta,t.etaDay,t)+opsTimeCell('LDG',t.landing,t.landingDay,t)+opsTimeCell('ATA',t.ata,t.ataDay,t)+'</div></div>'+'</div>'+
  '<div class="ops-card-actions"><div class="ops-actions-row"><button type="button" class="home-pin '+(isFav?'active':'')+'" aria-label="'+(isFav?'Retirer des favoris':'Ajouter aux favoris')+'" aria-pressed="'+isFav+'">'+(isFav?'★':'☆')+'</button><button type="button" class="ops-open-detail">Fiche vol →</button></div>'+(notes?'<button type="button" class="ops-notes">🔔 '+notes+' note'+(notes>1?'s':'')+'</button>':'')+'</div>'+
- '<div id="ops-extra-'+idx+'" class="ops-extra"><div class="ops-load-summary"><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info ops-avail '+fill.cls+'"'+(fill.pct!==''?' title="Remplissage '+fill.pct+' % (booking / config)"':'')+'>AVAILABLE <strong>'+esc(load.avail)+'</strong>'+(fill.pct!==''?'<em>'+fill.pct+' %</em>':'')+'</span></div>'+(load.nok?'<div class="ops-extra-actions"><span>INOP <strong>'+load.nok+'</strong></span></div>':'')+'</div>';
+ '<div id="ops-extra-'+idx+'" class="ops-extra"><div class="ops-load-summary'+(Math.max(String(load.cfg).length,String(load.book).length)>14?' ops-long':'')+'"><span class="ops-load-info">CONFIG <strong>'+esc(load.cfg)+'</strong></span><span class="ops-load-info">BOOKING <strong>'+esc(load.book)+'</strong></span><span class="ops-load-info ops-avail '+fill.cls+'"'+(fill.pct!==''?' title="Remplissage '+fill.pct+' % (booking / config)"':'')+'>AVAILABLE <strong>'+esc(load.avail)+'</strong>'+(fill.pct!==''?'<em>'+fill.pct+' %</em>':'')+'</span></div>'+(load.nok?'<div class="ops-extra-actions"><span>INOP <strong>'+load.nok+'</strong></span></div>':'')+'</div>';
  row.querySelector('.home-pin').onclick=e=>{e.stopPropagation();toggleFavoriteFlight(idx)};
  row.querySelector('.ops-open-detail').onclick=e=>{e.stopPropagation();openFlightFromHomeList(idx)};
  const noteButton=row.querySelector('.ops-notes');if(noteButton)noteButton.onclick=e=>{e.stopPropagation();if(typeof openHomeNotesFromList==='function')openHomeNotesFromList(idx)};
