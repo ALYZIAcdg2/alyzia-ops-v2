@@ -969,6 +969,88 @@
      "exceptions": "27=ABC||HJK\n28=ABC||HJK\n29=|DFG|\n38=AC|DFG|HK\n39=|DFG|"
     }
    ]
+  },
+  {
+   "configKey": "TK|79B|16C135Y",
+   "airline": "TK",
+   "aircraft": "79B",
+   "configuration": "16C135Y",
+   "label": "TK 79B · 16C135Y",
+   "sourceLabel": "TK1823 79B seat map 07OCT IST-CDG",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 16,
+    "Y": 135
+   },
+   "operationalTotal": 151,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 4,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 9,
+     "row_end": 32,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "TK|79D|16C153Y",
+   "airline": "TK",
+   "aircraft": "79D",
+   "configuration": "16C153Y",
+   "label": "TK 79D · 16C153Y",
+   "sourceLabel": "TK1821 79D seat map 07OCT IST-CDG",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 16,
+    "Y": 153
+   },
+   "operationalTotal": 169,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 4,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 9,
+     "row_end": 35,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "S4|32N|168Y",
+   "airline": "S4",
+   "aircraft": "32N",
+   "configuration": "168Y",
+   "label": "S4 32N · 168Y",
+   "sourceLabel": "S4120 32N seat map 07OCT PDL-CDG",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 168
+   },
+   "operationalTotal": 168,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 29,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
   }
  ]
 }
