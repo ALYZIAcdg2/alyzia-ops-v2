@@ -16,6 +16,8 @@ export function flightOperationalStatus(x){
   if(String(x?.cancelledSource??'').trim()&&/ANNUL|CANCEL/.test(stored))return 'ANNULÉ';
   if((source.startsWith('ALYZIA_STATUS_V1:')||source.includes('MANUAL'))&&stored){
     if(stored.startsWith('ARRIV'))return 'ARRIVÉE';
+    if(stored.startsWith('ATTERRI')||stored.startsWith('ATTERI'))return 'ATTERRI';
+    if(stored.startsWith('PARTI'))return 'PARTI';
     if(stored.startsWith('EN VOL'))return 'EN VOL';
     if(stored.startsWith('EMBARQUEMENT CLOS'))return 'EMBARQUEMENT CLOS';
     if(stored.startsWith('EMBARQUEMENT'))return 'EMBARQUEMENT';
@@ -32,8 +34,9 @@ export function flightOperationalStatus(x){
   if(/ARRIV/.test(raw))return 'ARRIVÉE';
 
   // V1 rule: a real ATD means the flight is shown EN VOL.
-  if(value(['atd','actualDeparture','actual_departure','gateOut','gate_out']))return 'EN VOL';
+  if(value(['landing','landingTime','landing_time']))return 'ATTERRI';
   if(value(['takeoff','takeoffTime','takeoff_time','airborne'])||/EN VOL|IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|TOOK OFF|DEPARTED/.test(raw))return 'EN VOL';
+  if(value(['atd','actualDeparture','actual_departure','gateOut','gate_out']))return 'PARTI';
 
   if(/BOARDING CLOSED|EMBARQUEMENT CLOS/.test(raw))return 'EMBARQUEMENT CLOS';
   if(/BOARDING|EMBARQUEMENT/.test(raw))return 'EMBARQUEMENT';

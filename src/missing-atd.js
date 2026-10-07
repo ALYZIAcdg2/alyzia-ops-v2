@@ -13,7 +13,7 @@ export function missingAtd(rows,{nowMs=Date.now(),fids=null,minLateMin=20}={}){
     const s=mins(x.std);if(s===null||clean(x.atd))continue;
     if(now-s<minLateMin||now-s>720)continue;
     // Parti ? décollage, atterrissage ou ATA connus, ou statut EN VOL / ARRIVÉ. Un vol retardé qui attend encore au sol n'est pas un ATD manquant.
-    const departed=Boolean(clean(x.takeoff)||clean(x.landing)||clean(x.ata))||/^(EN VOL|ARRIV|ATTERR)/i.test(clean(x.status));
+    const departed=Boolean(clean(x.takeoff)||clean(x.landing)||clean(x.ata))||/^(PARTI|EN VOL|ARRIV|ATTERR|ATTERI)/i.test(clean(x.status));
     if(!departed){notDeparted.push(clean(x.flight));continue}
     const key=(clean(x.flight)||"")+"|"+clean(x.std).slice(0,5);
     out.push({flight:clean(x.flight),std:clean(x.std).slice(0,5),etd:clean(x.etd),takeoff:clean(x.takeoff),landing:clean(x.landing),ata:clean(x.ata),status:clean(x.status),

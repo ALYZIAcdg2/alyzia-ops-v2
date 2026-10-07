@@ -182,6 +182,9 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-status-badge.retarde{background:#fff0d0;color:#965600;border-color:#f1d08e}
 #app .ops-status-badge.annule{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}
 #app .ops-status-badge.arrive{background:#d7efec;color:#0a665e;border-color:#a9d9d3}
+#app .ops-status-badge.embarq-late{background:#fff0d0;color:#965600;border-color:#f1d08e;animation:opsBlink 1.1s ease-in-out infinite}
+@keyframes opsBlink{0%,100%{opacity:1}50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){#app .ops-status-badge.embarq-late{animation:none}}
 @media(min-width:1101px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}}
 #app .ops-card-actions .home-pin{width:34px!important;padding:0!important;font-size:18px!important}
 #app .ops-flight-card .ops-load-info,#app .ops-flight-card .ops-load-info strong{font-family:inherit!important}
@@ -399,7 +402,7 @@ function opsArrivalUtc(x,t){
 // Share of the flight already flown (0..1) from takeoff/ATD to ETA/STA; null when it cannot be computed.
 function opsProgress(x,t,st){
  if(t.ata||t.landing||/^(ARRIV|ATTERR)/.test(up(st.main)))return 1;
- const departure=opsDepartureUtc(x,t);if(departure===null)return up(st.main)==='EN VOL'?null:0;
+ const departure=opsDepartureUtc(x,t);if(departure===null)return /^(EN VOL|PARTI)$/.test(up(st.main))?null:0;
  let arrival=opsArrivalUtc(x,t);if(arrival===null)return null;
  if(arrival<=departure)arrival+=86400000;
  return Math.min(1,Math.max(0,(Date.now()-departure)/(arrival-departure)));
@@ -407,9 +410,11 @@ function opsProgress(x,t,st){
 function opsListStatus(x,t){
  const raw=up(x.status),st=opStatus(x),date=opsDate(x),manual=up(x.statusSource||x.status_source).includes('MANUAL');
  if(raw&&(manual||raw.includes('ANNUL')))st.main=raw;
- st.cls=statusClass(st.main);if(!/EN VOL|ARRIV|ATTERR|RETARD|ANNUL/.test(up(st.main)))st.cls='prevu';
+ st.cls=statusClass(st.main);if(!/EN VOL|PARTI|ARRIV|ATTERR|RETARD|ANNUL/.test(up(st.main)))st.cls='prevu';
+ const mm=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},sd=mm(t.std),ed=mm(t.etd);let dl=sd!==null&&ed!==null?ed-sd:0;if(dl<-720)dl+=1440;if(dl>720)dl-=1440;
+ if(/^EMBARQUEMENT/.test(up(st.main))&&dl>15)st.cls='embarq-late';
  st.remain='';
- if(up(st.main)==='EN VOL'){
+ if(/^(EN VOL|PARTI)$/.test(up(st.main))){
   const actual=t.takeoff||t.atd,minutes=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},std=minutes(t.std),at=minutes(actual);
   const day=Number((t.takeoff?x.takeoffDay:x.atdDay)??(std!==null&&at!==null&&std-at>720?1:0))||0;
   const departure=opsLocalUtc(date,actual,x.dep||x.origin||'CDG',day);

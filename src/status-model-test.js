@@ -38,12 +38,13 @@ export function derive(x,date,nowMs=Date.now()){
   if(ata.value)return {status:"ARRIVÉ",reason:"ATA",evidence:ata};
 
   const atd=fact(x,"atd",["actualDeparture","actual_departure","gateOut","gate_out"]);
-  if(atd.value&&etaPassedBy15(x,date,nowMs))return {status:"ARRIVÉ",reason:"ETA_PASSED_15",evidence:{value:x.eta||x.sta||"",source:sourceOf(x,x.eta?"eta":"sta")||"V2_PUBLIC"}};
+  const landing=fact(x,"landing",["landingTime","landing_time"]),takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]);
+  if((atd.value||takeoff.value||landing.value)&&etaPassedBy15(x,date,nowMs))return {status:"ARRIVÉ",reason:"ETA_PASSED_15",evidence:{value:x.eta||x.sta||"",source:sourceOf(x,x.eta?"eta":"sta")||"V2_PUBLIC"}};
 
-  if(atd.value)return {status:"EN VOL",reason:"ATD",evidence:atd,arrivalUtc:arrivalUtc(x,date)};
-
-  const takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]);
+  // Étapes : ATD = PARTI (sorti du poste), TO = EN VOL, LDG = ATTERRI, ATA = ARRIVÉ.
+  if(landing.value)return {status:"ATTERRI",reason:"LANDING",evidence:landing,arrivalUtc:arrivalUtc(x,date)};
   if(takeoff.value)return {status:"EN VOL",reason:"TAKEOFF",evidence:takeoff,arrivalUtc:arrivalUtc(x,date)};
+  if(atd.value)return {status:"PARTI",reason:"ATD",evidence:atd,arrivalUtc:arrivalUtc(x,date)};
 
   if(boarding(x)){
     const p=parisPhase(x);
@@ -59,7 +60,9 @@ export function derive(x,date,nowMs=Date.now()){
 export const STATUS_MODEL_TEST_RULES={
   mode:"V1_LOGIC_V2_PUBLIC_SOURCES",
   ARRIVE:{trigger:"ATA, ou ETA/STA dépassée de 15 min après ATD",sources:["V2 public sources"]},
-  EN_VOL:{trigger:"ATD; TAKEOFF seulement en secours si ATD absent",sources:["FlightStats","FlightAware","FR24","Paris Aéroport","autres fallbacks publics"]},
+  PARTI:{trigger:"ATD (sorti du poste, pas encore décollé)",sources:["FIDS","FlightStats","FlightAware","FR24"]},
+  ATTERRI:{trigger:"LDG renseigné, ATA absent",sources:["FIDS","FR24","fallbacks publics"]},
+  EN_VOL:{trigger:"TO (décollage) renseigné",sources:["FlightStats","FlightAware","FR24","Paris Aéroport","autres fallbacks publics"]},
   EMBARQUEMENT:{trigger:"signal boarding public",sources:["Paris Aéroport","V2 public sources"]},
   RETARDE:{trigger:"vol non parti et heure actuelle >= STD + 15 min",sources:["ALYZIA"]},
   PROGRAMME:{trigger:"aucun événement opérationnel",sources:["ALYZIA"]},

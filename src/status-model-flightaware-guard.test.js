@@ -7,21 +7,21 @@ const date="2026-10-03";
 const mk=(o)=>({origin:"CDG",statusModelEvidence:{flightAwarePhase:"ARRIVED",flightAwarePhases:["ARRIVED","AIRBORNE"]},...o});
 const at=(h,m)=>Date.UTC(2026,9,3,h,m);   // heure UTC
 
-test("AV55 CDG->BOG : ARRIVED vu dans la page mais arrivée attendue à 12:35 locale Bogota -> EN VOL",()=>{
+test("AV55 CDG->BOG : ARRIVED vu dans la page mais arrivée attendue à 12:35 locale Bogota -> PARTI",()=>{
   const x=mk({destination:"BOG",std:"08:55",atd:"08:52",eta:"12:35"});
-  assert.equal(derive(x,date,at(13,13)).status,"EN VOL");
+  assert.equal(derive(x,date,at(13,13)).status,"PARTI");
 });
-test("HF177 CDG->ABJ : arrivée 13:44 locale (= 13:44 UTC) pas atteinte à 13:12 UTC -> EN VOL",()=>{
+test("HF177 CDG->ABJ : arrivée 13:44 locale (= 13:44 UTC) pas atteinte à 13:12 UTC -> PARTI",()=>{
   const x=mk({destination:"ABJ",std:"09:00",atd:"09:32",eta:"13:44"});
-  assert.equal(derive(x,date,at(13,12)).status,"EN VOL");
+  assert.equal(derive(x,date,at(13,12)).status,"PARTI");
 });
-test("SQ335 CDG->SIN : ETA 05:51 le lendemain -> EN VOL",()=>{
+test("SQ335 CDG->SIN : ETA 05:51 le lendemain -> PARTI",()=>{
   const x=mk({destination:"SIN",std:"10:55",atd:"10:57",eta:"05:51"});
-  assert.equal(derive(x,date,at(13,12)).status,"EN VOL");
+  assert.equal(derive(x,date,at(13,12)).status,"PARTI");
 });
-test("vraie arrivée : ETA + 14 min -> EN VOL, ETA + 15 min -> ARRIVÉ (règle V1)",()=>{
+test("vraie arrivée : ETA + 14 min -> PARTI, ETA + 15 min -> ARRIVÉ (règle V1)",()=>{
   const x=mk({destination:"ABJ",std:"09:00",atd:"09:32",eta:"13:44"});
-  assert.equal(derive(x,date,at(13,58)).status,"EN VOL");
+  assert.equal(derive(x,date,at(13,58)).status,"PARTI");
   assert.equal(derive(x,date,at(13,59)).status,"ARRIVÉ");
 });
 test("un ATA réel donne ARRIVÉ quel que soit l'horaire",()=>{
