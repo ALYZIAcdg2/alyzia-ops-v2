@@ -221,6 +221,7 @@ export function fr24HistoryRow(raw,flight){
   if(dest&&!upper(row).includes(`(${dest})`))return null;
   const time=re=>{const m=row.match(re);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
   const std=time(/\bSTD\s*(\d{1,2}):(\d{2})/i),atd=time(/\bATD\s*(\d{1,2}):(\d{2})/i),sta=time(/\bSTA\s*(\d{1,2}):(\d{2})/i),landing=time(/\b(?:Landed|Arrived)\s*(\d{1,2}):(\d{2})/i);
+  // L'immatriculation lue AVANT la date est celle de la ligne précédente (ou d'un élément de la page) : D-AIHV copiée sur des dizaines de vols. Gardée en `historyReg` à titre indicatif, jamais utilisée comme immatriculation du vol.
   const reg=[...before.matchAll(/\b([A-Z0-9]{1,2}-[A-Z0-9]{3,5})\b/g)].map(m=>upper(m[1])).pop()||"";
   if(!atd&&!landing&&!std)return null;
   return normalizeHistoryTimes({std,atd,sta,landing,reg},flight);
@@ -248,7 +249,7 @@ function withHistoryRow(result,bodies,flight){
   if(!row)return result;
   const semantic={...(result.candidates?.semantic||{}),atdClock:row.atd||"",landingClock:row.landing||"",staClock:row.sta||"",historyReg:row.reg||""};
   const statuses=result.candidates?.statuses?.length?result.candidates.statuses:(row.landing?["LANDED"]:row.atd?["DEPARTED"]:[]);
-  return {...result,candidates:{...(result.candidates||{}),semantic:{...semantic,status:semantic.status||(row.landing?"Landed":row.atd?"Departed":null),reg:semantic.reg||row.reg||null},statuses,historyRow:row}};
+  return {...result,candidates:{...(result.candidates||{}),semantic:{...semantic,status:semantic.status||(row.landing?"Landed":row.atd?"Departed":null),reg:semantic.reg||null},statuses,historyRow:row}};
 }
 
 // ---- Occurrence discovery ----
