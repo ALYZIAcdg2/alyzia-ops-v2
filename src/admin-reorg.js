@@ -7,7 +7,8 @@ export const ADMIN_REORG_UI=String.raw`<style id="alyzia-admin-reorg-css">
 #app .adx-tools{position:relative;display:inline-block}
 #app .adx-tools-panel{position:absolute;right:0;top:calc(100% + 8px);z-index:60;min-width:230px;display:none;flex-direction:column;gap:6px;padding:10px;background:#fff;border:1px solid #dfe8f2;border-radius:16px;box-shadow:0 18px 44px rgba(10,31,61,.22)}
 #app .adx-tools.open .adx-tools-panel{display:flex}
-#app .adx-tools-panel>*{width:100%;justify-content:flex-start;text-align:left;margin:0!important;white-space:nowrap}
+#app .adx-tools-panel>button{display:flex!important;align-items:center!important;justify-content:flex-start!important;width:100%!important;margin:0!important;height:auto!important;min-height:0!important;padding:12px 14px!important;border:1px solid #cfe0f3!important;border-radius:12px!important;background:#eef5fd!important;color:#1769c9!important;box-shadow:none!important;font-family:inherit!important;font-size:14px!important;font-weight:900!important;line-height:1.2!important;letter-spacing:.3px!important;text-transform:uppercase!important;text-align:left!important;white-space:nowrap!important}
+#app .adx-tools-panel>button:hover{background:#e1eefb!important}
 #app .adx-tools-panel small{display:block;margin:2px 4px 4px;font-size:10px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:#7890a6}
 #app .adx-health:not(.adx-health-copy){flex-wrap:nowrap;overflow-x:auto;align-items:center;gap:8px;padding-bottom:4px;scrollbar-width:thin}
 #app .adx-health:not(.adx-health-copy) .adx-h{flex:0 0 auto;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
@@ -29,14 +30,17 @@ function toolsMenu(){
  const targets=[...head.querySelectorAll('.adx-srcbtn,.adn-v4-btn.reset,#adminRegRestoreBtn')].concat([...head.querySelectorAll('.adn-v4-btn')].filter(b=>/^LOGS$/i.test((b.textContent||'').trim())));
  if(!menu&&!targets.length)return;
  if(!menu){menu=document.createElement('div');menu.className='adx-tools';
-  const btn=document.createElement('button');btn.type='button';btn.className='adn-v4-btn adx-tools-btn';btn.textContent='OUTILS ▾';btn.setAttribute('aria-haspopup','true');btn.setAttribute('aria-expanded','false');
+  const btn=document.createElement('button');btn.type='button';btn.className='adn-v4-btn adx-tools-btn';btn.textContent='OUTILS ▾';
+  const ref=head.querySelector('#adminRefreshBtn')||head.querySelector('#adminPushBtn');if(ref){const cs=getComputedStyle(ref);for(const k of ['fontSize','fontWeight','fontFamily','letterSpacing','textTransform','padding','borderRadius','backgroundColor','color','border','lineHeight','boxShadow'])btn.style[k]=cs[k]}btn.setAttribute('aria-haspopup','true');btn.setAttribute('aria-expanded','false');
   const panel=document.createElement('div');panel.className='adx-tools-panel';panel.setAttribute('role','menu');panel.innerHTML='<small>Outils d’administration</small>';
   btn.addEventListener('click',e=>{e.stopPropagation();const o=menu.classList.toggle('open');btn.setAttribute('aria-expanded',o?'true':'false')});
   menu.append(btn,panel);actions.appendChild(menu);
  }
  const panel=menu.querySelector('.adx-tools-panel');
  const order=b=>/LOGS/i.test(b.textContent||'')?0:b.classList.contains('adx-srcbtn')?1:b.id==='adminRegRestoreBtn'?2:3;
- for(const b of targets.sort((a,b)=>order(a)-order(b)))if(b.parentElement!==panel)panel.appendChild(b);
+ // Style imposé en ligne (!important) : les anciennes couches stylent ces boutons par identifiant, plus prioritaire qu'une règle de feuille.
+ const UNIFORM={display:'flex','align-items':'center','justify-content':'flex-start',width:'100%',margin:'0',height:'auto','min-height':'0',padding:'12px 14px',border:'1px solid #cfe0f3','border-radius':'12px',background:'#eef5fd',color:'#1769c9','box-shadow':'none','font-family':'inherit','font-size':'14px','font-weight':'900','line-height':'1.2','letter-spacing':'.3px','text-transform':'uppercase','text-align':'left','white-space':'nowrap'};
+ for(const b of targets.sort((a,b)=>order(a)-order(b))){if(b.parentElement!==panel)panel.appendChild(b);if(!b.dataset.adxUniform){for(const k in UNIFORM)b.style.setProperty(k,UNIFORM[k],'important');b.dataset.adxUniform='1'}}
 }
 function chips(){
  document.querySelectorAll('#app .adx-health:not(.adx-health-copy)').forEach(bar=>{
