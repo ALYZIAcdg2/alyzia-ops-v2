@@ -42,7 +42,10 @@ const FALLBACKS={
 let flightAwareCooldownUntil=0;
 const FS_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 const FA_HEADERS={accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareLive/1.0)"};
-async function faGet(url,timeout=8000){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:FA_HEADERS});return {httpStatus:r.status,raw:r.ok?await r.text():""}}catch(e){return {httpStatus:0,raw:"",error:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}finally{clearTimeout(t)}}
+// FlightAware answers 429 to a burst: its requests go one after the other, 1.2 s apart (like FlightStats). The 45 min pause after a 429 is unchanged.
+let flightAwareChain=Promise.resolve();
+function flightAwareSlot(fn,pauseMs=1200){const run=flightAwareChain.then(()=>fn());flightAwareChain=run.catch(()=>{}).then(()=>new Promise(z=>setTimeout(z,pauseMs)));return run}
+async function faGet(url,timeout=8000){try{return await flightAwareSlot(async()=>{const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:FA_HEADERS});return {httpStatus:r.status,raw:r.ok?await r.text():""}}finally{clearTimeout(t)}})}catch(e){return {httpStatus:0,raw:"",error:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}}
 export function flightAwareHistoryUrl(raw,f){
   const src=String(raw||"").replace(/\\\//g,"/").replace(/&amp;/g,"&"),found=[];
   for(const m of src.matchAll(/https?:\/\/(?:www\.)?flightaware\.com\/live\/flight\/[A-Z0-9]+\/history\/(\d{8})\/(\d{4})Z\/([A-Z]{4})\/([A-Z]{4})/g))found.push({url:m[0],day:m[1],hm:m[2],origin:m[3]});
@@ -56,7 +59,7 @@ export function flightAwareHistoryUrl(raw,f){
   }
   return best;
 }
-async function fetchFlightAwareLive(f,knownUrl){
+export async function fetchFlightAwareLive(f,knownUrl){
   if(Date.now()<flightAwareCooldownUntil)return {status:"COOLDOWN"};
   let url=cleanFlightAwareUrl(knownUrl),discovered=false;
   if(!url){
