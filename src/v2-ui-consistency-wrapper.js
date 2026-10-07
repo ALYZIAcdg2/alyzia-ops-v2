@@ -107,7 +107,8 @@ window.v2xBack=v2xBack;
  function ensureDate(){var c=document.querySelector('.topbar .top-right .clock');if(!c)return;var d=document.getElementById('topDate');if(!d){d=document.createElement('span');d.id='topDate';c.insertBefore(d,c.firstChild)}else if(d.parentNode!==c){c.insertBefore(d,c.firstChild)}var t=dateTxt();if(d.textContent!==t)d.textContent=t}
  var MAP={home:'VOLS',prepa:'PRÉPA',tools:'OUTILS',admin:'ADMIN'};
  function syncTabs(){var v='home';try{v=currentView||'home'}catch{}var want=MAP[v]||'VOLS';document.querySelectorAll('.topbar .nav button').forEach(function(b){var label=b.classList.contains('home-nav')?'VOLS':(b.textContent||'').trim().toUpperCase();b.classList.toggle('nav-on',label===want)})}
- function tick(){try{ensureDate();syncTabs()}catch(e){}}
+ function dropOpsLabel(){document.querySelectorAll('.topbar .top-right>span').forEach(function(n){if(/^OPS\s*CDG/i.test((n.textContent||'').trim()))n.remove()})}
+ function tick(){try{ensureDate();syncTabs();dropOpsLabel()}catch(e){}}
  document.addEventListener('click',function(e){if(e.target&&e.target.closest&&e.target.closest('.topbar .nav'))setTimeout(tick,60)},true);
  setInterval(tick,700);tick();
  var n=0,t=setInterval(function(){n++;var b=window.manualCloudRefreshTop;if(typeof b==='function'&&!b.__adm){var w=async function(){var r=await b.apply(this,arguments);try{if(typeof currentView!=='undefined'&&currentView==='admin'&&typeof window.renderAdminDashboard==='function')await window.renderAdminDashboard(true)}catch(e){}return r};w.__adm=1;window.manualCloudRefreshTop=w;clearInterval(t)}else if(n>40)clearInterval(t)},500);
