@@ -70,6 +70,7 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-time b.ops-estimated .ops-day{color:inherit!important}
 #app .ops-time b.ops-ontime,#app .ops-time b.ops-ontime .ops-day{color:#0a8f5a!important}
 #app .ops-time b.ops-late,#app .ops-time b.ops-late .ops-day{color:#d3213f!important}
+#app .ops-time b.ops-early,#app .ops-time b.ops-early .ops-day{color:#1f6fd1!important}
 #app .ops-day{font-size:11px!important;font-weight:500;margin-left:2px;vertical-align:baseline;color:#183a61}
 #app .ops-status-context{display:flex;gap:4px 16px;flex-wrap:wrap;margin-top:9px;color:#4b6787;font-size:13px!important;line-height:1.4}
 #app .flight-home-row.ops-flight-card>.ops-expand{grid-area:expand!important;width:32px!important;height:44px!important;min-height:44px!important;border:0!important;border-radius:7px!important;background:transparent!important;padding:4px!important;color:#123d67!important;cursor:pointer}
@@ -206,6 +207,7 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .v2x-chip-change{border-color:#efc3ca;background:#fff7f8;color:#bd3047}
 #app .v2x-d-t b.ops-ontime{color:#0a8f5a!important}
 #app .v2x-d-t b.ops-late{color:#d3213f!important}
+#app .v2x-d-t b.ops-early{color:#1f6fd1!important}
 #app .v2x-d-t b.ops-estimated{color:#d98200!important}
 @media print{#app .flight-home-row.ops-flight-card{break-inside:avoid!important}#app .ops-expand{visibility:hidden}}
 /* Mobile : trajet CDG ─✈─ DEST sur 3 lignes (codes, villes, heure + météo), typographie homogène, CONFIG / BOOKING / AVAILABLE sur une seule ligne */
@@ -370,12 +372,14 @@ function opsFlightForRow(row){
  return {x:{...local,...remote,config:local.config,booked:local.booked,inopSeats:local.inopSeats},idx};
 }
 function opsClockMin(v){const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null}
-// Green = at or before schedule (STD for ETD/ATD/TO, STA for ETA/ATA/LDG). After schedule: red for actual times, orange for estimates.
+// Écart à l'horaire théorique (STD pour ETD/ATD/TO, STA pour ETA/ATA/LDG) : bleu = en avance (5 min ou plus), vert = à l'heure (jusqu'à +15 min),
+// au-delà de +15 min : orange pour une estimation (ETD/ETA), rouge pour un réel (ATD/TO/LDG/ATA).
 function opsTimeTone(label,value,t){
  const sched={ETD:t.std,ATD:t.std,TO:t.std,ETA:t.sta,ATA:t.sta,LDG:t.sta}[label];if(sched===undefined)return '';
  const a=opsClockMin(sched),b=opsClockMin(value);if(a===null||b===null)return '';
  let d=b-a;if(d<-720)d+=1440;if(d>720)d-=1440;
- return d<=0?'ops-ontime':(label==='ETD'||label==='ETA')?'ops-estimated':'ops-late';
+ if(d<=-5)return 'ops-early';
+ return d<=15?'ops-ontime':(label==='ETD'||label==='ETA')?'ops-estimated':'ops-late';
 }
 function opsTimeCell(label,value,day,t){const cls=!value?'ops-missing':opsTimeTone(label,value,t||{});return '<div class="ops-time"><small>'+label+'</small><b class="'+cls+'">'+esc(value||'—')+(value&&day?'<span class="ops-day">'+(day>0?'+':'')+day+'</span>':'')+'</b></div>'}
 function opsWeather(code){let html='';try{if(typeof wxInner==='function')html=wxInner(up(code))}catch{}return '<div class="wx-line wx-mini" data-wx="'+esc(up(code))+'" aria-label="Météo '+esc(code)+'">'+html+'</div>'}
