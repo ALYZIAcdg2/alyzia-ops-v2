@@ -82,6 +82,22 @@ window.adminPushNow=async function(){
 };
 })();</script>`;
 
+const READ_ONE_UI=String.raw`<script id="alyzia-read-one-js">(()=>{'use strict';
+// Lecture à la demande d'un seul vol (FlightStats / FlightAware compris), depuis la fiche vol. Mêmes requêtes que le cron, pauses et cooldowns respectés.
+function cur(){try{if(typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)&&typeof selected!=='undefined'&&FLIGHTS[selected])return FLIGHTS[selected]}catch{}try{if(Array.isArray(window.FLIGHTS)&&Number.isInteger(window.selected))return window.FLIGHTS[window.selected]||null}catch{}return null}
+async function run(btn){const x=cur();if(!x)return;const fl=String(x.flight||x.flight_number||x.designator||'').replace(/\s+/g,''),date=String(x.date||x.flightDate||(typeof HOME_DATE!=='undefined'?HOME_DATE:'')||'');if(!fl)return;
+ const old=btn.textContent;btn.disabled=true;btn.textContent='Lecture…';let out='';
+ try{const r=await fetch('/api/admin/live-one?flight='+encodeURIComponent(fl)+(date?'&date='+encodeURIComponent(date):''),{method:'POST',cache:'no-store'}),j=await r.json();
+  if(j?.error==='TOO_SOON')out='Déjà lu à l’instant · réessaie dans '+j.retryInSeconds+' s';
+  else if(!j?.ok)out='Échec : '+(j?.error||('HTTP '+r.status));
+  else{const a=(j.result?.attempts||[]).map(z=>z.source+' '+(z.httpStatus||z.status)).join(' · ');out='Lu · '+(j.result?.status||'')+(a?' · '+a:'')}
+ }catch(e){out='Échec : '+(e?.message||e)}
+ btn.disabled=false;btn.textContent=old;let m=btn.parentNode.querySelector('.read-one-msg');if(!m){m=document.createElement('div');m.className='read-one-msg';m.style.cssText='font-size:12px;color:#456;margin-top:4px';btn.after(m)}m.textContent=out;
+ try{await window.renderAdminDashboard?.(true)}catch{}try{window.refreshFlights?.()}catch{}}
+function ensure(){const head=document.querySelector('#app .flight-head');if(!head||head.querySelector('.read-one-btn'))return;const box=document.createElement('div');box.style.cssText='grid-column:1 / -1;padding:6px 12px';const b=document.createElement('button');b.type='button';b.className='read-one-btn';b.textContent='↻ Relire les sources de ce vol';b.style.cssText='border:1px solid #c2d8ec;border-radius:8px;background:#f5faff;color:#0c559e;font-weight:700;padding:6px 12px;cursor:pointer';b.onclick=()=>run(b);box.appendChild(b);head.appendChild(box)}
+new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
+})();</script>`;
+
 function stripStatusConflicts(html){return String(html||'')
  .replace(/<style id="alyzia-status-disabled-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-disabled-js">[\s\S]*?<\/script>/g,'')
@@ -91,7 +107,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+s.slice(i):s+PUSH_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI}
 
 export default {
   async fetch(request,env,ctx){
@@ -111,7 +127,7 @@ export default {
     }
     if(url.pathname==="/api/admin/live-one"){
       // GET: what the live flow would read and write for one flight (nothing is saved). POST: applies it now, like a cron run.
-      try{return json(await runLiveForFlight(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||"",dryRun:request.method!=="POST"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json(await runLiveForFlight(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||"",dryRun:request.method!=="POST",onDemand:request.method==="POST"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/cancelled"&&request.method==="GET"){
       try{return json(await listCancelled(env,{from:url.searchParams.get("from")||"",to:url.searchParams.get("to")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
