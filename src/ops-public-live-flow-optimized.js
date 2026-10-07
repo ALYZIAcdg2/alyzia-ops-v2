@@ -343,6 +343,17 @@ export function pickSlots(sorted,size){
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
 function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
+const normRegId=v=>String(v??"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+export function sameRegNearby(others,{reg,std,windowMin=120}){
+  const r=normRegId(reg),m=v=>{const k=/(\d{1,2}):(\d{2})/.exec(String(v??""));return k?+k[1]*60+ +k[2]:null},s=m(std);if(!r||s===null)return false;
+  return others.some(o=>{const x=o.x||{},t=m(x.std||o.std);return t!==null&&normRegId(x.reg||x.registration||x.aircraftRegistration)===r&&String(x.origin||"CDG").toUpperCase()==="CDG"&&Math.abs(t-s)<windowMin});
+}
+async function regHeldByNearbyFlight(env,identity,date,reg,std){
+  if(!env?.OPS_DB||!normRegId(reg))return false;
+  try{const {results=[]}=await env.OPS_DB.prepare(`SELECT std,data_json FROM flights WHERE flight_date=? AND identity<>? AND airline<>'SYS' AND data_json LIKE ?`).bind(date,identity,`%${String(reg).trim()}%`).all();
+    return sameRegNearby(results.map(r=>{let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}return {std:r.std,x}}),{reg,std})}
+  catch{return false}
+}
 async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
@@ -398,6 +409,12 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
    for(const h of [landing,ata]){if(fut(h)&&!eta.value&&!clean(current.eta))eta.value=h.value,eta.source=h.source;if(fut(h)||early(h))h.value=""}}
   // Une immatriculation / un type venant de FR24 (tableau ou page du vol) n'est jamais remplacé par une page publique lue en texte (PlaneFinder, Skyscanner, FlightStats) : D-AIHV s'était ainsi copié sur plusieurs vols.
   const fr24Own=src=>/FR24/.test(upper(src));if(!fr24Own(reg.source)&&clean(current.reg||current.registration)&&!isJunkRegistration(current.reg||current.registration)&&fr24Own(current.regSource))reg.value="";if(!fr24Own(ac.source)&&clean(current.aircraftActual)&&fr24Own(current.aircraftActualSource))ac.value="";
+  // Immatriculation : le tableau FR24 (CDG, ligne exacte du vol) fait foi face à la page du vol FR24 / aux pages publiques (AH1003 : LZ-FSA remplacée par D-AIHV toutes les heures),
+  // et une immatriculation déjà portée par un autre départ CDG à moins de 2 h est une mauvaise lecture, jamais écrite.
+  if(reg.value&&normRegId(reg.value)!==normRegId(current.reg||current.registration)){
+    const boardOwned=/FR24BOARD/.test(upper(current.regSource||current.registrationSource))&&!isJunkRegistration(current.reg||current.registration)&&clean(current.reg||current.registration);
+    if((boardOwned&&!/FR24BOARD/.test(upper(reg.source)))||await regHeldByNearbyFlight(env,row.identity,f.date,reg.value,current.std||f.std))reg.value="";
+  }
   if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   // Confirmation: stored on each time field (xxxConfirmed + xxxSources); read by the diagnostic and the admin.
   const conf={};for(const [field,hit] of [["atd",atd],["takeoff",takeoff],["eta",eta],["landing",landing],["ata",ataHit]]){if(!clean(current[field])||clean(current[field])!==clean(hit?.value))continue;const c=confirmation(map,field,hit.value);if(current[field+"Confirmed"]!==c.confirmed||clean(current[field+"Sources"])!==c.sources.join(",")){current[field+"Confirmed"]=c.confirmed;current[field+"Sources"]=c.sources.join(",");changed=true}conf[field]=c}
