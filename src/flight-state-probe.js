@@ -10,6 +10,7 @@ export async function readFlightState(env,{date="",flight=""}={}){
   const row=results.find(r=>upper(r.flight_number).replace(/\s+/g,"")===wanted);if(!row)return {ok:false,error:"FLIGHT_NOT_FOUND",date:day,flight:wanted};
   let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}
   const times={};for(const f of FIELDS)times[f]={value:clean(x[f]),source:clean(x[f+"Source"]),updatedAt:clean(x[f+"UpdatedAt"]),day:x[f+"Day"]??null};
-  const log=(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(l=>["takeoff","landing","ata","atd"].includes(l?.field)).slice(0,25);
-  return {ok:true,date:day,flight:wanted,origin:x.origin||x.dep||"",destination:x.destination||x.dest||"",status:x.status,statusSource:x.statusSource,statusReason:x.statusReason,statusArrivalUtc:x.statusArrivalUtc,times,parisAeroportPhase:x.parisAeroportPhase,aircraftActual:x.aircraftActual,log};
+  const log=(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(l=>["takeoff","landing","ata","atd","reg","registration","aircraftChange"].includes(l?.field)).slice(0,40);
+  const reg={value:clean(x.reg||x.registration),source:clean(x.regSource||x.registrationSource),updatedAt:clean(x.regUpdatedAt||x.registrationUpdatedAt)};
+  return {ok:true,date:day,flight:wanted,reg,origin:x.origin||x.dep||"",destination:x.destination||x.dest||"",status:x.status,statusSource:x.statusSource,statusReason:x.statusReason,statusArrivalUtc:x.statusArrivalUtc,times,parisAeroportPhase:x.parisAeroportPhase,aircraftActual:x.aircraftActual,log};
 }
