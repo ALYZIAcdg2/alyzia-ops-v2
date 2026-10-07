@@ -76,6 +76,17 @@ export function etaFromRow(row,x,nowMs){
   if(e>0){if(d>0){const dur=(e-d)/60;if(dur<20||dur>1200)return ""}}
   return v;
 }
+// ETD du flux : dep_estimated (heure locale de CDG) pour un vol pas encore parti. Rejetée si hors du même jour ou incohérente avec l'horaire programmé du flux
+// (de -60 min à +24 h). Sans information de retard (estimation = STD) et sans ETD chez nous, rien n'est écrit. Notre STD n'est jamais modifiée.
+export function etdFromRow(row,x,{std,date}={}){
+  const v=hhmm(row?.dep_estimated);if(!clean(row?.dep_estimated)||!v)return "";
+  if(date&&!clean(row.dep_estimated).startsWith(date))return "";
+  if(clean(x?.atd)||clean(x?.takeoff)||clean(x?.landing)||clean(x?.ata))return "";
+  const e=Number(row.dep_estimated_ts),s=Number(row.dep_time_ts);
+  if(e>0&&s>0){const d=(e-s)/60;if(d<-60||d>1440)return ""}
+  if(v===std&&!clean(x?.etd||x?.edt))return "";
+  return v;
+}
 export function pickFeedRow(index,{designator,std},tolerance=15){
   const rows=index.get(upper(designator))||[],prefer=(a,b)=>(upper(b.flight_iata)===upper(designator))-(upper(a.flight_iata)===upper(designator));
   const exact=rows.filter(r=>hhmm(r.dep_time)===std).sort(prefer)[0];
@@ -90,7 +101,7 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
   const feed=await getFeed({fetchImpl,nowMs});
   if(!feed.rows){const out={ok:true,status:feed.status,updated:0};if(!dryRun)await saveFidsState(env,{status:feed.status,http:feed.httpStatus||0,flights:{}},nowMs);return out}
   const today=parisDate(nowMs),yesterday=parisDate(nowMs-86400000),nowMin=parisMinutes(nowMs),at=new Date(nowMs).toISOString();
-  let matched=0,updated=0,rejected=0,flightsSeen=0,ataUpdated=0,etaUpdated=0;const per={};
+  let matched=0,updated=0,rejected=0,flightsSeen=0,ataUpdated=0,etaUpdated=0,etdUpdated=0;const per={};
   // Aujourd'hui, et hier : un vol d'hier soir retardé après minuit reçoit son ATD aujourd'hui (la date du vol reste celle d'hier, la STD n'est jamais modifiée).
   for(const date of [today,yesterday]){
     const index=indexFeed(feed.rows,date);
@@ -114,6 +125,11 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
         if(eta&&clean(x.eta)!==eta&&!manual(x,"eta")&&(!clean(x.eta)||/FIDS|FLIGHTAWARE/.test(upper(x.etaSource)))){
           const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"eta",from:clean(x.eta),to:eta});
           x.flightInfoLog=log.slice(0,240);x.eta=eta;x.etaSource="PUBLIC_LIVE:FIDS";x.etaUpdatedAt=at;etaUpdated++;changed=true}}
+      // ETD : estimation du flux, prioritaire sur les ETD FR24 (tableau / par vol) ; jamais une saisie manuelle.
+      {const etd=etdFromRow(row,x,{std,date});
+        if(etd&&hhmm(x.etd||x.edt)!==etd&&!manual(x,"etd")){
+          const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"etd",from:clean(x.etd||x.edt),to:etd});
+          x.flightInfoLog=log.slice(0,240);x.etd=etd;x.edt=etd;x.etdSource="PUBLIC_LIVE:FIDS";x.etdUpdatedAt=at;x.etdTimeBasis="CDG_LOCAL";etdUpdated++;changed=true}}
       const atdStep=()=>{
         let atd=act?hhmm(act):"",onTime=false;
         if(!atd&&isToday&&!clean(x.atd)&&!manual(x,"atd")){atd=onTimeAtd(row,{std,takeoff:hhmm(x.takeoff),nowMin,date});onTime=Boolean(atd);if(onTime)per[key]="OK"}
@@ -128,7 +144,7 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
     }
   }
   if(!dryRun)await saveFidsState(env,{status:"OK",http:200,flights:per},nowMs);
-  return {ok:true,status:"OK",date:today,flights:flightsSeen,matched,updated,ataUpdated,etaUpdated,rejected};
+  return {ok:true,status:"OK",date:today,flights:flightsSeen,matched,updated,ataUpdated,etaUpdated,etdUpdated,rejected};
 }
 
 // État de la dernière lecture, gardé dans ops_meta pour le bilan ADMIN (une ligne, réécrite seulement si elle change ou toutes les 10 min).

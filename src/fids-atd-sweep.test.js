@@ -115,3 +115,14 @@ test("ETA FIDS remplace une ETA FlightAware (écart d'1 h), jamais manuelle ni F
   await sweepFidsToday(env,{nowMs:now,fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
   assert.equal(env.updates.length,1);assert.equal(env.updates[0].flight,"AH1535");assert.equal(env.updates[0].eta,"15:11");assert.equal(env.updates[0].etaSource,"PUBLIC_LIVE:FIDS");
 });
+
+import {etdFromRow} from "./fids-atd-sweep.js";
+test("etdFromRow : ETD FIDS d'un vol pas encore parti",()=>{
+  const row={dep_time:"2026-10-07 18:00",dep_estimated:"2026-10-07 18:30",dep_time_ts:1000000,dep_estimated_ts:1000000+1800};
+  assert.equal(etdFromRow(row,{},{std:"18:00",date:"2026-10-07"}),"18:30");
+  assert.equal(etdFromRow(row,{atd:"18:20"},{std:"18:00",date:"2026-10-07"}),"");            // déjà parti
+  assert.equal(etdFromRow({...row,dep_estimated:"2026-10-08 00:30"},{},{std:"18:00",date:"2026-10-07"}),""); // autre jour
+  assert.equal(etdFromRow({...row,dep_estimated_ts:1000000-7200},{},{std:"18:00",date:"2026-10-07"}),"");   // 2 h avant l'horaire programmé
+  assert.equal(etdFromRow({...row,dep_estimated:"2026-10-07 18:00",dep_estimated_ts:1000000},{},{std:"18:00",date:"2026-10-07"}),""); // = STD, pas d'ETD chez nous
+  assert.equal(etdFromRow({...row,dep_estimated:"2026-10-07 18:00",dep_estimated_ts:1000000},{etd:"18:43"},{std:"18:00",date:"2026-10-07"}),"18:00"); // FIDS dit à l'heure : on suit
+});
