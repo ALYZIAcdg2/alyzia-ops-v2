@@ -1,5 +1,6 @@
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {noteActualAircraft} from "./aircraft-change.js";
+import {regHeldByNearbyFlight} from "./reg-nearby.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -34,11 +35,13 @@ async function saveMeta(env,data){try{await env.OPS_DB.prepare(`CREATE TABLE IF 
 async function mapLimit(items,limit,fn){const out=new Array(items.length);let n=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{for(;;){const i=n++;if(i>=items.length)return;out[i]=await fn(items[i])}}));return out}
 
 async function apply(env,row,board){let initial={};try{initial=JSON.parse(row.data_json||"{}")}catch{};const f=flight(row,initial),at=new Date().toISOString();let type="",reg="",frStatus="",fr=null;
-  try{fr=await fetchFr24Public(f);frStatus=fr?.status||"";const c=fr?.candidates||{},s=c.semantic||{};type=upper(s.type||c.aircraft?.[0]);reg=upper(s.reg||c.registrations?.[0])}catch{frStatus="FETCH_ERROR"}
+  try{fr=await fetchFr24Public(f);frStatus=fr?.status||"";const c=fr?.candidates||{},s=c.semantic||{};type=upper(s.type||c.aircraft?.[0]);reg=upper(s.reg)}catch{frStatus="FETCH_ERROR"}
   const gateHit=await gateWithFallbacks(f,board,fr);
   const x=await readCurrent(env,row.identity);if(!x)return {flight:f.designator,status:"FLIGHT_DISAPPEARED"};let changed=false;
   if(gateHit.gate&&!manual(x.gateSource)&&!/FR24BOARD/.test(upper(x.gateSource))&&upper(x.gate)!==gateHit.gate){const from=clean(x.gate);x.gate=gateHit.gate;x.gateSource=gateHit.source;x.gateUpdatedAt=at;(x.flightInfoLog??=[]).unshift({at,source:gateHit.source,field:"gate",from,to:gateHit.gate});changed=true}
   if(type&&!manual(x.aircraftActualSource)){if(noteActualAircraft(x,type,"FR24",at))changed=true}
+  // Le tableau FR24 fait foi ; une immatriculation déjà portée par un autre départ CDG à moins de 2 h est une mauvaise lecture de la page du vol (D-AIHV sur une dizaine de vols).
+  if(reg&&upper(x.reg||x.registration)!==reg&&((/FR24BOARD/.test(upper(x.regSource||x.registrationSource))&&clean(x.reg||x.registration))||await regHeldByNearbyFlight(env,row.identity,f.date,reg,x.std||f.std)))reg="";
   if(reg&&!manual(x.regSource||x.registrationSource)&&upper(x.reg||x.registration)!==reg){const from=clean(x.reg||x.registration);x.reg=reg;x.registration=reg;x.regSource="FR24";x.registrationSource="FR24";x.regUpdatedAt=at;(x.flightInfoLog??=[]).unshift({at,source:"FR24",field:"reg",from,to:reg});changed=true}
   if(changed){x.groundBackfill={checkedAt:at,gateSource:gateHit.source||null,gateAttempts:gateHit.attempts,fr24Status:frStatus,fr24OccurrenceId:clean(f.raw?.fr24OccurrenceId)||null,gate:gateHit.gate||null,type:type||null,reg:reg||null};if(Array.isArray(x.flightInfoLog))x.flightInfoLog=x.flightInfoLog.slice(0,200);await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run()}
   return {flight:f.designator,status:changed?"UPDATED":"UNCHANGED",gate:gateHit.gate||"",gateSource:gateHit.source||"",type:type||"",reg:reg||"",fr24OccurrenceId:clean(f.raw?.fr24OccurrenceId)||"",gateAttempts:gateHit.attempts}}
