@@ -26,7 +26,7 @@ import {runCabinConfigAudit} from "./cabin-config-audit.js";
 import {runFidsPages} from "./fids-pages-test.js";
 import {runTimesCompare} from "./times-compare.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
-import {runParisAirportStatusFlow} from "./paris-airport-status-flow.js";
+import {runParisAirportStatusFlow,probeParisAirport} from "./paris-airport-status-flow.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
 
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
@@ -181,6 +181,10 @@ export default {
     if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
       // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
       try{return json(await runFidsPages({list:url.searchParams.get("list")||"",date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/paris-aeroport-status"&&request.method==="GET"){
+      // Lecture seule : test de la lecture structurée Paris Aéroport (statuts embarquement) face à nos vols du jour.
+      try{return json(await probeParisAirport(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/cabin-config-audit"&&request.method==="GET"){
       // Lecture seule : type d'appareil de chaque vol face au catalogue des plans cabine (seatmap).
