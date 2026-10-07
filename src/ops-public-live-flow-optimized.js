@@ -40,6 +40,10 @@ const FALLBACKS={
 // Used only for a flight without any departure fact after FR24 / FlightStats. The found URL is kept on the flight (flightAwareHistoryUrl): the exact-history
 // recovery then refreshes it directly at each run. A 429 pauses every FlightAware call of this isolate for 45 min.
 let flightAwareCooldownUntil=0;
+// Pause FlightAware (45 min après un 429) : gardée aussi entre deux passages du cron (voir runtime-state.js), sinon chaque passage la perd et refrappe le défi anti-robot.
+export function flightAwareExport(){return {until:flightAwareCooldownUntil}}
+export function flightAwareImport(st){const u=Number(st?.until)||0;if(u>Date.now()&&u>flightAwareCooldownUntil)flightAwareCooldownUntil=u}
+export function flightAwareReset(){flightAwareCooldownUntil=0}
 const FS_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 const FA_HEADERS={accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareLive/1.0)"};
 // FlightAware answers 429 to a burst: its requests go one after the other, 1.2 s apart (like FlightStats). The 45 min pause after a 429 is unchanged.
@@ -64,7 +68,7 @@ export async function saveRefusals(env){
     await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('provider_refusals_v1',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(JSON.stringify(merged)).run();return true;
   }catch{return false}
 }
-async function faGet(url,timeout=8000){try{return await flightAwareSlot(async()=>{const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:FA_HEADERS});if(!r.ok){noteRefusal("FLIGHTAWARE",url,r,await r.text().catch(()=>""));return {httpStatus:r.status,raw:""}}return {httpStatus:r.status,raw:await r.text()}}finally{clearTimeout(t)}})}catch(e){return {httpStatus:0,raw:"",error:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}}
+async function faGet(url,timeout=8000){try{return await flightAwareSlot(async()=>{if(Date.now()<flightAwareCooldownUntil)return {httpStatus:0,raw:"",error:"COOLDOWN"};const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:FA_HEADERS});if(!r.ok){if(r.status===429)flightAwareCooldownUntil=Date.now()+45*60000;noteRefusal("FLIGHTAWARE",url,r,await r.text().catch(()=>""));return {httpStatus:r.status,raw:""}}return {httpStatus:r.status,raw:await r.text()}}finally{clearTimeout(t)}})}catch(e){return {httpStatus:0,raw:"",error:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}}
 export function flightAwareHistoryUrl(raw,f){
   const src=String(raw||"").replace(/\\\//g,"/").replace(/&amp;/g,"&"),found=[];
   for(const m of src.matchAll(/https?:\/\/(?:www\.)?flightaware\.com\/live\/flight\/[A-Z0-9]+\/history\/(\d{8})\/(\d{4})Z\/([A-Z]{4})\/([A-Z]{4})/g))found.push({url:m[0],day:m[1],hm:m[2],origin:m[3]});

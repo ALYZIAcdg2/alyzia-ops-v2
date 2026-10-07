@@ -69,6 +69,8 @@ export async function withIcaoFallback(flight,buildUrl,read){
     const r=await read(candidate);last=r;
     attempts.push({designator:candidate.designator,codeType:candidate.lookupCodeType,numberType:candidate.lookupNumberType,url:r.url||url,status:r.status,checkedAt:r.checkedAt});
     if(r.status==="OK")return {...r,lookupDesignator:candidate.designator,lookupCodeType:candidate.lookupCodeType,lookupNumberType:candidate.lookupNumberType,lookupAttempts:attempts};
+    // 403 / 429 / défi anti-robot : le site refuse notre appel, pas ce numéro de vol. Essayer les autres écritures (0012, 012, code OACI…) multiplierait les requêtes refusées par neuf.
+    if(r.httpStatus===403||r.httpStatus===429||r.status==="BLOCKED")break;
   }
   const fallback=last||{status:"NO_USABLE_DATA"};
   const finalCandidate=variants[Math.max(0,attempts.length-1)]||flight;
