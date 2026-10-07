@@ -30,6 +30,7 @@ import {runParisAirportStatusFlow,probeParisAirport} from "./paris-airport-statu
 import {probeGatenavo} from "./gatenavo-probe.js";
 import {restoreRegs} from "./reg-restore.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
+import {TAB_MEMORY_UI} from "./tab-memory.js";
 import {readFlightState} from "./flight-state-probe.js";
 import {setManualBoarding} from "./manual-boarding.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -171,7 +172,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+BOARDING_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+BOARDING_UI+REG_RESTORE_UI+ADMIN_REORG_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+BOARDING_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+BOARDING_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI}
 
 export default {
   async fetch(request,env,ctx){
