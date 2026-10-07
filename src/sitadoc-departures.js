@@ -3,6 +3,8 @@
 //   CODE / HPD = étape du vol et son heure : HTD (horaire compagnie), HED (estimée d'après MVT « ED »), MER (mise en route moteurs),
 //   HDB (départ bloc), QTN (décollage). Les informations Immat / Type / Parc / Porte / Passagers sont gardées pour comparaison.
 import {put} from "./sitadoc-mvt.js";
+import {sitadocTypes,normGate} from "./sitadoc-compare.js";
+import {sameAircraft} from "./aircraft-change.js";
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const clock=v=>{const m=/^(\d{1,2}):(\d{2})$/.exec(clean(v));return m?`${String(m[1]).padStart(2,"0")}:${m[2]}`:""};
 const designator=(airline,flight)=>{const a=upper(airline),f=upper(flight).replace(/\s+/g,"");const n=(f.startsWith(a)?f.slice(a.length):f.replace(/^[A-Z0-9]{2}/,"")).replace(/\D/g,"");return a+String(Number(n||0))};
@@ -23,8 +25,8 @@ export function applyDeparture(x,row,at=new Date().toISOString()){
   if(JSON.stringify({...x.sitadoc,at:""})!==JSON.stringify({...info,at:""})){x.sitadoc=info;changed=true}
   const norm=v=>upper(v).replace(/[^A-Z0-9]/g,""),diff={};
   if(info.reg&&norm(x.reg||x.registration)&&norm(x.reg||x.registration)!==norm(info.reg))diff.reg={ours:clean(x.reg||x.registration),sitadoc:info.reg};
-  if(info.gate&&clean(x.gate)&&norm(x.gate)!==norm(info.gate))diff.gate={ours:clean(x.gate),sitadoc:info.gate};
-  const ot=upper(x.aircraftActual||x.aircraft),st=info.type.split(/\s+/)[0];if(st&&ot&&ot!==st)diff.type={ours:ot,sitadoc:info.type};
+  if(info.gate&&clean(x.gate)&&normGate(x.gate)!==normGate(info.gate))diff.gate={ours:clean(x.gate),sitadoc:info.gate};
+  const ot=upper(x.aircraftActual||x.aircraft),codes=sitadocTypes(info.type);if(ot&&codes.length&&!codes.some(c=>sameAircraft(ot,c)))diff.type={ours:ot,sitadoc:codes.join(" ")};
   return {changed,...summary,diff};
 }
 
