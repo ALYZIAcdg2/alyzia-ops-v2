@@ -37,13 +37,13 @@ export function flightDateFromDay(day,receivedAt){
 }
 
 const PROVISIONAL=/FIDS|DERIVED|CALC|ONTIME/;
-function put(x,field,value,at,summary){
+export function put(x,field,value,at,summary){
   if(!value||manual(x,field))return false;
   const before=clean(x[field]);if(before===value)return false;
   const src=upper(x[field+"Source"]);
   if(before&&!PROVISIONAL.test(src)&&!/SITADOC/.test(src)){summary.kept.push({field,kept:before,mvt:value});return false}
-  const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"SITADOC_MVT",field,from:before,to:value});x.flightInfoLog=log.slice(0,240);
-  x[field]=value;x[field+"Source"]="SITADOC_MVT";x[field+"UpdatedAt"]=at;summary.set.push(field);return true;
+  const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:summary.source||"SITADOC_MVT",field,from:before,to:value});x.flightInfoLog=log.slice(0,240);
+  x[field]=value;x[field+"Source"]=summary.source||"SITADOC_MVT";x[field+"UpdatedAt"]=at;summary.set.push(field);return true;
 }
 
 // Applique un MVT à un vol CDG au départ. ATD = calage retiré, ATA = calage mis (heure d'arrivée à la porte), en heure locale de chaque aéroport.
