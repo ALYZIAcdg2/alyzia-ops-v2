@@ -19,7 +19,7 @@ async function fetchStructured(env){
   const c=new AbortController(),t=setTimeout(()=>c.abort(),12000);
   try{const fd=new FormData();fd.append('1',JSON.stringify(clean(env?.PARIS_ACTION_ARG)||PARIS_ACTION_ARG));fd.append('0',JSON.stringify(['$@1','dep','$D'+new Date().toISOString(),'CDG-ORY','','','']));
     const r=await fetch(PARIS_PAGE,{method:'POST',body:fd,signal:c.signal,headers:{accept:'text/x-component','next-action':clean(env?.PARIS_ACTION_ID)||PARIS_ACTION_ID,'next-router-state-tree':TREE,origin:'https://www.parisaeroport.fr',referer:PARIS_PAGE,'accept-language':'fr-FR,fr;q=0.9'}});
-    if(!r.ok)return {rows:[],error:'HTTP_'+r.status};const rows=parseParisRows(await r.text());return {rows,error:rows.length?'':'NO_ROWS'}}
+    if(!r.ok)return {rows:[],error:'HTTP_'+r.status};const body=await r.text(),rows=parseParisRows(body);return {rows,error:rows.length?'':'NO_ROWS',debug:rows.length?undefined:{status:r.status,type:r.headers.get('content-type')||'',length:body.length,head:body.slice(0,400),lines:body.split('\n').slice(0,6).map(l=>l.slice(0,60))}}}
   catch(e){return {rows:[],error:String(e?.name||e?.message||e)}}finally{clearTimeout(t)}
 }
 export function structuredIndex(rows,date){const idx=new Map();for(const r of rows){if(upper(r?.departureIataCode)!=='CDG'||clean(r.departureDate)!==date)continue;const arr=upper(r.arrivalIataCode);for(const n of [r.displayFlightNumber,...(r.codeShares||[]).map(c=>c.displayFlightNumber)]){const k=upper(n).replace(/\s+/g,'');if(k&&!idx.has(k+'|'+arr))idx.set(k+'|'+arr,r)}}return idx}
@@ -47,7 +47,7 @@ export async function runParisAirportStatusFlow(env){if(!env?.OPS_DB)return {ok:
   return {ok:true,date,source:'PARIS_AEROPORT',mode:idx?'STRUCTURED':'HTML',structuredError:st.error||'',structuredRows:st.rows.length,boardUrl:board.url,checked:results.length,matched,updated,items}}
 
 // Lecture seule : l'appel structuré répond-il, combien de nos vols du jour sont retrouvés, et quels statuts ressortent.
-export async function probeParisAirport(env){const date=today(),st=await fetchStructured(env),out={ok:true,mode:'PARIS_AEROPORT_PROBE_NO_WRITE',date,structuredRows:st.rows.length,structuredError:st.error||'',actionIdOverride:Boolean(clean(env?.PARIS_ACTION_ID))};if(!st.rows.length)return out;
+export async function probeParisAirport(env){const date=today(),st=await fetchStructured(env),out={ok:true,mode:'PARIS_AEROPORT_PROBE_NO_WRITE',date,structuredRows:st.rows.length,structuredError:st.error||'',structuredDebug:st.debug,actionIdOverride:Boolean(clean(env?.PARIS_ACTION_ID))};if(!st.rows.length)return out;
   const idx=structuredIndex(st.rows,date),byStatus={};for(const r of st.rows)if(upper(r?.departureIataCode)==='CDG'&&clean(r.departureDate)===date)byStatus[clean(r.departureStatus)]=(byStatus[clean(r.departureStatus)]||0)+1;out.cdgByStatus=byStatus;
   if(!env?.OPS_DB)return out;const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();let matched=0;const missing=[],phases=[];
   for(const row of results){let x={};try{x=JSON.parse(row.data_json||'{}')}catch{}const d=upper(x.flight||row.flight_number).replace(/\s+/g,''),r=idx.get(d+'|'+upper(x.destination||x.dest||''));if(!r){if(missing.length<15)missing.push(d);continue}matched++;const h=hitFromRow(r);if(h.phase&&phases.length<30)phases.push({flight:d,site:clean(r.departureStatus),label:h.raw,ours:clean(x.parisAeroportPhase),status:clean(x.status)})}
