@@ -1,6 +1,7 @@
 import app from "./flight-card-v2-wrapper.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
 import {loadFidsState,fidsAttempt} from "./fids-atd-sweep.js";
+import {scrubPaidNames} from "./provider-names.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -59,9 +60,9 @@ export function classify({row,x},now){
   }
   // ATD « parti à l'heure » (flux FIDS) contredit par une autre source : à vérifier tant que le vol n'est pas arrivé.
   if(atdConflict&&!cancelled){state="À CONTRÔLER";missing.push("ATD à vérifier")}
-  const log=(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field).slice(0,80).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:clean(e.source)}));
+  const log=(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field).slice(0,80).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:scrubPaidNames(clean(e.source))}));
   // Affichage : « PRÉVU » devient « À L'HEURE » comme dans la liste et la fiche vol (la valeur interne reste PRÉVU pour les règles).
-  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus:flightStatus==="PRÉVU"?"À L'HEURE":flightStatus,std,sta,etd,atd,eta,ata,gate,reg,aircraft:clean(x.aircraftActual||x.aircraft),log,changes:(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field&&Date.now()-(Date.parse(e.at)||0)<6*3600000).slice(0,8).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:clean(e.source)})),state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at),liveAt:clean(x.publicLiveBackfill?.checkedAt),attempts:(Array.isArray(x.publicLiveBackfill?.attempts)?x.publicLiveBackfill.attempts:[]).map(a=>({s:upper(a.source),st:clean(a.status),h:Number(a.httpStatus||0)||0,d:clean(a.detailsInfo),at:clean(a.checkedAt)}))};
+  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus:flightStatus==="PRÉVU"?"À L'HEURE":flightStatus,std,sta,etd,atd,eta,ata,gate,reg,aircraft:clean(x.aircraftActual||x.aircraft),log,changes:(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field&&Date.now()-(Date.parse(e.at)||0)<6*3600000).slice(0,8).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:scrubPaidNames(clean(e.source))})),state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at),liveAt:clean(x.publicLiveBackfill?.checkedAt),attempts:(Array.isArray(x.publicLiveBackfill?.attempts)?x.publicLiveBackfill.attempts:[]).map(a=>({s:upper(a.source),st:clean(a.status),h:Number(a.httpStatus||0)||0,d:clean(a.detailsInfo),at:clean(a.checkedAt)}))};
 }
 function baseProvider(v){const p=upper(v);if(p.startsWith("AIRLABS"))return "AIRLABS";if(p.startsWith("SKYLINK"))return "SKYLINK";if(p.startsWith("OAG"))return "OAG";if(p.includes("AERODATABOX")||p.startsWith("ADB"))return "AERODATABOX";if(p.startsWith("OPENSKY"))return "OPENSKY";if(p.startsWith("QUARK"))return "QUARK";if(p.startsWith("AVIATIONDATA"))return "AVIATIONDATA";if(p.startsWith("FLIGHTERA"))return "FLIGHTERA";if(p.startsWith("KAYAK"))return "KAYAK";if(p.startsWith("SERPAPI"))return "SERPAPI";if(p.startsWith("FLIGHTRADAR1"))return "FLIGHTRADAR1";if(p.startsWith("FLIGHTRADAR8"))return "FLIGHTRADAR8";if(p.startsWith("FR24DEP"))return "FR24DEP";if(p.startsWith("FR24API"))return "FR24API";if(p.startsWith("CDGBOARD"))return "CDGBOARD";return p}
 function quotaLimit(env,key){
@@ -89,13 +90,8 @@ async function dashboard(env){
   {const fs=await loadFidsState(env);if(fs)for(const x of flights){if(x.date!==now.date||!x.attempts?.length)continue;const a=fidsAttempt(fs,x.flight,x.std);if(a)x.attempts.push({s:"FIDS",st:a.status,h:a.httpStatus,d:"",at:a.checkedAt})}}
   const today=flights.filter(x=>x.date===now.date),future=flights.filter(x=>x.date>now.date),past=flights.filter(x=>x.date<now.date);
   const summarize=list=>({byDate:list.reduce((o,x)=>(o[x.date]=(o[x.date]||0)+1,o),{}),total:list.length,ok:list.filter(x=>x.state==="OK").length,partial:list.filter(x=>x.state==="EN ATTENTE").length,check:list.filter(x=>x.state==="À CONTRÔLER").length,untreated:list.filter(x=>x.state==="NON TRAITÉ").length});
-  let quotas=[];
-  try{
-    const month=now.date.slice(0,7),{results:q=[]}=await env.OPS_DB.prepare(`SELECT provider,period,calls,last_status,last_at FROM api_provider_usage WHERE period IN (?,?) ORDER BY provider,period`).bind(month,now.date).all();
-    const map=new Map();
-    for(const r of q){const k=baseProvider(r.provider);if(!map.has(k))map.set(k,{provider:k,today:0,month:0,lastStatus:null,lastAt:""});const o=map.get(k);if(r.period===now.date)o.today+=Number(r.calls||0);if(r.period===month)o.month+=Number(r.calls||0);if(!o.lastAt||clean(r.last_at)>o.lastAt){o.lastAt=clean(r.last_at);o.lastStatus=r.last_status}}
-    quotas=["AIRLABS","SKYLINK","OAG","AERODATABOX","OPENSKY","QUARK","AVIATIONDATA","FLIGHTERA","KAYAK","SERPAPI","FR24API","CDGBOARD","FLIGHTRADAR1","FLIGHTRADAR8","FR24DEP"].map(k=>{const o=map.get(k)||{provider:k,today:0,month:0,lastStatus:null,lastAt:""},cfg=quotaLimit(env,k),used=cfg.period==="day"?o.today:o.month;return {...o,...cfg,remaining:cfg.limit?Math.max(0,cfg.limit-cfg.reserve-used):null}});
-  }catch{}
+  // API payantes écartées : plus de quotas ni de requête sur leur usage.
+  const quotas=[];
   return {ok:true,generatedAt:new Date().toISOString(),date:now.date,since,until,summary:{today:summarize(today),future:summarize(future),past:summarize(past)},flights,quotas};
 }
 
