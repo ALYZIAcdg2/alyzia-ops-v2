@@ -6,6 +6,6 @@ test("le bouton IMMAT d'administration est injecté et son script est valide",()
   const i=src.indexOf("const REG_RESTORE_UI=String.raw`")+"const REG_RESTORE_UI=String.raw`".length,j=src.indexOf("`;",i);
   const js=/<script[^>]*>([\s\S]*)<\/script>/.exec(src.slice(i,j))[1];
   assert.doesNotThrow(()=>new Function(js));
-  assert.match(js,/\/api\/admin\/reg-restore/);assert.match(js,/method:'POST'/);assert.match(js,/window\.confirm/);
+  assert.match(js,/\/api\/admin\/reg-restore/);assert.match(js,/method:'POST'/);assert.match(js,/appModal/);assert.doesNotMatch(js,/window\.confirm/);
   assert.match(src,/BOARDING_UI\+'\\n'\+REG_RESTORE_UI/);
 });

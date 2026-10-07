@@ -17,3 +17,10 @@ test("le sanitizer retire landing et ata trop tôt sans les transformer en ETA",
   const out=fixArrivalClocks(x,"2026-10-07",Date.UTC(2026,9,7,16,30));
   assert.deepEqual(out.filter(c=>c.tooEarly!==undefined).map(c=>c.field).sort(),["ata","landing"]);
 });
+
+test("vol long-courrier de plus de 12 h : arrivée réelle conservée (SQ335 CDG-SIN, ATA 05:50), arrivée impossible refusée",()=>{
+  const sq={date:"2026-10-07",std:"10:55",sta:"06:05",takeoff:"11:23",originZone:"Europe/Paris",destZone:"Asia/Singapore"};
+  assert.equal(arrivedTooEarly("05:50",sq),false);
+  assert.equal(arrivedTooEarly("05:40",sq),false);
+  assert.equal(arrivedTooEarly("17:00",sq),true);   // 5 h après le décollage pour un vol de 13 h
+});

@@ -120,15 +120,39 @@ new MutationObserver(ensure).observe(document.documentElement,{childList:true,su
 
 const REG_RESTORE_UI=String.raw`<script id="alyzia-reg-restore-js">(()=>{'use strict';
 // Bouton ADMIN : restaure les immatriculations perdues depuis le journal du tableau FR24 (aperçu, confirmation, application).
+const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function ensureModalCss(){if(document.getElementById('alz-modal-css'))return;const st=document.createElement('style');st.id='alz-modal-css';st.textContent=
+ '.alz-ov{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(10,31,61,.5);backdrop-filter:blur(2px)}'+
+ '.alz-modal{width:100%;max-width:520px;max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:20px;box-shadow:0 24px 70px rgba(10,31,61,.35);padding:22px 22px 18px;color:#0a1f3d}'+
+ '.alz-modal h3{margin:0 0 14px;font-size:20px;font-weight:900;letter-spacing:.2px;text-transform:uppercase}'+
+ '.alz-body{overflow:auto;display:grid;gap:14px;padding-right:2px}'+
+ '.alz-sec small{display:block;margin-bottom:6px;font-size:11px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:#5f7897}'+
+ '.alz-rows{display:grid;gap:6px}'+
+ '.alz-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-radius:12px;background:#f2f6fb;font-weight:800}'+
+ '.alz-row b{font-size:15px}.alz-row span{font-size:14px;padding:3px 9px;border-radius:8px;border:1px solid transparent}'+
+ '.alz-bad .alz-row span{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}.alz-good .alz-row span{background:#e1f5e9;color:#16794a;border-color:#b6e2c8}.alz-muted .alz-row span{background:#eef3f9;color:#426382;border-color:#d6e1ee}'+
+ '.alz-act{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}'+
+ '.alz-btn{border:1px solid #cfe0f3;background:#eef5fd;color:#1769c9;border-radius:12px;padding:11px 18px;font-size:14px;font-weight:900;letter-spacing:.3px;text-transform:uppercase;cursor:pointer}'+
+ '.alz-btn.primary{background:#1769c9;border-color:#1769c9;color:#fff}.alz-btn:focus-visible{outline:3px solid #9cc4f2;outline-offset:2px}';
+ document.head.appendChild(st)}
+function appModal({title,sections=[],ok='OK',cancel='Annuler'}){ensureModalCss();return new Promise(res=>{
+ const ov=document.createElement('div');ov.className='alz-ov';ov.setAttribute('role','dialog');ov.setAttribute('aria-modal','true');
+ ov.innerHTML='<div class="alz-modal"><h3>'+esc(title)+'</h3><div class="alz-body">'+sections.map(s=>'<div class="alz-sec alz-'+esc(s.tone||'muted')+'"><small>'+esc(s.label)+'</small><div class="alz-rows">'+(s.rows||[]).slice(0,60).map(r=>'<div class="alz-row"><b>'+esc(r[0])+'</b><span>'+esc(r[1])+'</span></div>').join('')+((s.rows||[]).length>60?'<div class="alz-row"><b>…</b><span>+'+((s.rows||[]).length-60)+'</span></div>':'')+'</div></div>').join('')+'</div><div class="alz-act"><button type="button" class="alz-btn" data-k="0">'+esc(cancel)+'</button><button type="button" class="alz-btn primary" data-k="1">'+esc(ok)+'</button></div></div>';
+ const done=v=>{document.removeEventListener('keydown',key,true);ov.remove();res(v)},key=e=>{if(e.key==='Escape'){e.stopPropagation();done(false)}};
+ ov.addEventListener('click',e=>{if(e.target===ov)done(false);const b=e.target.closest?.('[data-k]');if(b)done(b.dataset.k==='1')});
+ document.addEventListener('keydown',key,true);document.body.appendChild(ov);ov.querySelector('[data-k="1"]')?.focus()})}
 function dateOf(){const v=document.getElementById('adminDateInput')?.value;return /^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:'';}
 async function run(btn){const msg=document.getElementById('adnPushMsg'),date=dateOf(),q=date?('?date='+encodeURIComponent(date)):'',old=btn.textContent;
  const say=t=>{if(msg)msg.textContent=t;btn.title=t};
  btn.disabled=true;btn.textContent='IMMAT…';
  try{const r=await fetch('/api/admin/reg-restore'+q,{cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
   if(!j.toRestore&&!j.toClear){say('Aucune immatriculation à nettoyer ni à restaurer ('+(j.date||date||'aujourd’hui')+')');return}
-  const list=(j.items||[]).slice(0,40).map(i=>i.flight+' → '+i.reg).join('\n')+((j.items||[]).length>40?'\n…':''),skip=(j.skipped||[]).length?('\n\nIgnorées (doublon proche) : '+(j.skipped||[]).map(s=>s.flight).join(', ')):'';
-  const clr=j.toClear?('Nettoyer '+j.toClear+' mauvaise(s) immatriculation(s) : '+(j.clearItems||[]).map(i=>i.flight+' ('+i.reg+')').join(', ')+'\n\n'):'';
-  if(!window.confirm(clr+(j.toRestore?('Restaurer '+j.toRestore+' immatriculation(s) du '+j.date+' depuis le tableau FR24 ?\n\n'+list):'')+skip))return say('Restauration annulée');
+  const ok=await appModal({title:'Immatriculations — '+(j.date||date||''),sections:[
+    j.toClear?{label:'À nettoyer ('+j.toClear+')',tone:'bad',rows:(j.clearItems||[]).map(i=>[i.flight,i.reg])}:null,
+    j.toRestore?{label:'À restaurer depuis le tableau FR24 ('+j.toRestore+')',tone:'good',rows:(j.items||[]).map(i=>[i.flight,i.reg])}:null,
+    (j.skipped||[]).length?{label:'Ignorées : doublon proche ('+(j.skipped||[]).length+')',tone:'muted',rows:(j.skipped||[]).map(s=>[s.flight,s.reg||''])}:null
+  ].filter(Boolean),ok:'Appliquer',cancel:'Annuler'});
+  if(!ok)return say('Restauration annulée');
   const r2=await fetch('/api/admin/reg-restore'+q,{method:'POST',cache:'no-store'}),k=await r2.json();if(!k?.ok)throw new Error(k?.error||('HTTP '+r2.status));
   say('✓ IMMAT nettoyées : '+(k.cleared??0)+' · restaurées : '+(k.restored??0)+' · ignorées : '+((k.skipped||[]).length));
   try{await window.renderAdminDashboard?.(true)}catch{}
