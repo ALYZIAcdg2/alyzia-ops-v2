@@ -1,4 +1,4 @@
-import {sameAircraft,configCodes} from "./aircraft-change.js";
+import {sameAircraft,configCodes,toIata} from "./aircraft-change.js";
 // ALYZIA OPS V50.30 R22.6 — BJ/VF SHA DEDUPE + CANONICAL RELINK · based on R22.5/R3.13
 // Read-only bridge plan for one SQ flight/date. SQ/TK/BJ/VF/TW parsers unchanged.
 // V50.28 RULE: INC/INCARRIAGE = INBOUND PAX; INBOUND SUMMARY = FLIGHT METADATA; route inbound terminates at main origin (CDG).
@@ -271,6 +271,28 @@ export async function applyCabinConfigForActualAircraft(env,x){
     log.unshift({at:new Date().toISOString(),source:"ALYZIA_CABIN_AUTO",field:"sariaConfigKey",from:ch.from,to:match.config_key});x.flightInfoLog=log.slice(0,160);
     return true;
   }catch(e){console.warn("AUTO CABIN ACTUAL",e);return false}
+}
+
+// Plan choisi automatiquement pour un autre type que celui du vol (ex. 319 144Y sur un vol passé en 320) : bascule sur le plan du type actuel.
+// Un plan choisi à la main n'est jamais touché ; les classes réservées sont conservées.
+export async function realignAutoCabinConfig(env,x){
+  try{
+    if(!x?.sariaConfigKey||x.cabinConfigAuto!==true)return false;
+    const type=String(toIata(x.aircraft)||x.aircraft||"").trim().toUpperCase();
+    if(!type)return false;
+    const keyType=String(x.sariaConfigKey).split("|")[1]||"";
+    if(!keyType||configCodes(type).includes(keyType.toUpperCase()))return false;
+    const match=await findAutoCabinConfig(env,x.airline,type,x.flight);
+    if(!match)return false;
+    const oldConfig=(x.config&&typeof x.config==="object")?x.config:{},booked=(x.booked&&typeof x.booked==="object")?x.booked:{};
+    const next={...normalizedAutoCabinClasses(match)};
+    for(const [k,v] of Object.entries(oldConfig)){if(!(k in next)&&Number(booked[k]||0)>0)next[k]=v}
+    const from=x.sariaConfigKey;
+    x.sariaConfigKey=match.config_key;x.sariaCabinConfig=String(match.configuration||"").trim().toUpperCase();x.config=next;
+    const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
+    log.unshift({at:new Date().toISOString(),source:"ALYZIA_CABIN_AUTO",field:"sariaConfigKey",from,to:match.config_key});x.flightInfoLog=log.slice(0,160);
+    return true;
+  }catch(e){console.warn("REALIGN CABIN",e);return false}
 }
 
 // Version "un seul vol" (POST/PATCH /api/flights, injection LOT3) : interroge
