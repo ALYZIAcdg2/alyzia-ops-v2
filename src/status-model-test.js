@@ -1,4 +1,5 @@
 import {AIRPORT_TZ,tzOffsetMinutes} from "./airport-tz.js";
+import {lateBeyondStd15} from "./late-std15.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -49,7 +50,8 @@ export function derive(x,date,nowMs=Date.now()){
     return {status:p==="EMBARQUEMENT CLOS"?"EMBARQUEMENT CLOS":"EMBARQUEMENT",reason:"BOARDING",evidence:{value:p||"BOARDING",source:p?"PARIS_AEROPORT":"V2_PUBLIC"}};
   }
 
-  if(delayed(x))return {status:"RETARDÉ",reason:etdDelayed(x)?"ETD_DELAY":"DELAY",evidence:{value:x.etd||parisPhase(x)||"DELAY",source:sourceOf(x,"etd")||"V2_PUBLIC"}};
+  // RETARDÉ seulement une fois la STD dépassée de 15 min sans départ ; avant, un ETD ou un signal de retard ne change pas l'affichage « à l'heure ».
+  if(lateBeyondStd15(x,date,nowMs))return {status:"RETARDÉ",reason:"STD_PLUS_15",evidence:{value:x.std||"",source:"ALYZIA"}};
 
   return {status:"PROGRAMMÉ",reason:"DEFAULT",evidence:{value:"",source:"ALYZIA"}};
 }
@@ -59,7 +61,7 @@ export const STATUS_MODEL_TEST_RULES={
   ARRIVE:{trigger:"ATA, ou ETA/STA dépassée de 15 min après ATD",sources:["V2 public sources"]},
   EN_VOL:{trigger:"ATD; TAKEOFF seulement en secours si ATD absent",sources:["FlightStats","FlightAware","FR24","Paris Aéroport","autres fallbacks publics"]},
   EMBARQUEMENT:{trigger:"signal boarding public",sources:["Paris Aéroport","V2 public sources"]},
-  RETARDE:{trigger:"retard public ou ETD >= STD + 5 min",sources:["Paris Aéroport","V2 public sources"]},
+  RETARDE:{trigger:"vol non parti et heure actuelle >= STD + 15 min",sources:["ALYZIA"]},
   PROGRAMME:{trigger:"aucun événement opérationnel",sources:["ALYZIA"]},
   APIs:false
 };

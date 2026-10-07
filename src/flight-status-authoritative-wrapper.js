@@ -18,6 +18,7 @@ const UI=String.raw`<style id="alyzia-flight-status-authoritative-css">
 }
 </style><script id="alyzia-flight-status-authoritative-js">(()=>{
   'use strict';
+const late15=x=>{const m=/(\d{1,2}):(\d{2})/.exec(String(x&&x.std||''));if(!m)return false;const p={};new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).forEach(z=>{p[z.type]=z.value});const today=p.year+'-'+p.month+'-'+p.day,d=String(x.flight_date||x.flightDate||x.date||today).slice(0,10);return d<today||(d===today&&Number(p.hour)*60+Number(p.minute)>=Number(m[1])*60+Number(m[2])+15)};
   if(window.__alyziaFlightStatusAuthoritative)return;
   window.__alyziaFlightStatusAuthoritative=true;
 
@@ -120,7 +121,7 @@ const UI=String.raw`<style id="alyzia-flight-status-authoritative-css">
       return 'EN VOL';
     }
     if(/BOARD|EMBAR/.test(raw))return 'EMBARQUEMENT';
-    if(/DELAY|RETARD/.test(raw))return 'RETARDÉ';
+    if(late15(x))return 'RETARDÉ';
     if(/DEPART|DÉCOLL|DECOLL|AIRBORNE|IN FLIGHT|EN ROUTE/.test(raw))return 'DÉCOLLÉ';
     const etd=txt(x.etd||x.edt||x.estimatedDeparture||x.estimated_departure),etdDelay=etd?minuteDelta(txt(x.std),etd):null;
     if(etdDelay!=null&&etdDelay>=OPS_TOL)return 'PRÉVU';

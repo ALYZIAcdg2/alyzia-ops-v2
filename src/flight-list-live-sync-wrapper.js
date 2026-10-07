@@ -2,6 +2,7 @@ import app from "./v2-disable-provider-observability-wrapper.js";
 
 const UI=String.raw`<script id="alyzia-flight-list-live-sync-js">(()=>{
 'use strict';
+const late15=x=>{const m=/(\d{1,2}):(\d{2})/.exec(String(x&&x.std||''));if(!m)return false;const p={};new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).forEach(z=>{p[z.type]=z.value});const today=p.year+'-'+p.month+'-'+p.day,d=String(x.flight_date||x.flightDate||x.date||today).slice(0,10);return d<today||(d===today&&Number(p.hour)*60+Number(p.minute)>=Number(m[1])*60+Number(m[2])+15)};
 if(window.__alyziaFlightListLiveSync)return;window.__alyziaFlightListLiveSync=true;
 const txt=v=>String(v??'').trim(),up=v=>txt(v).toUpperCase();
 const flights=()=>{try{return Array.isArray(FLIGHTS)?FLIGHTS:(Array.isArray(window.FLIGHTS)?window.FLIGHTS:[])}catch{return Array.isArray(window.FLIGHTS)?window.FLIGHTS:[]}};
@@ -17,7 +18,7 @@ const statusOf=x=>{
  if(first(x,['takeoff','takeoffTime','takeoff_time','airborne'])||/EN VOL|IN AIR|AIRBORNE|IN FLIGHT|EN ROUTE|TOOK OFF/.test(raw))return 'EN VOL';
  if(first(x,['atd','actualDeparture','actual_departure','gateOut','gate_out'])||/DEPARTED|PARTI|GATE OUT/.test(raw))return 'PARTI';
  if(/BOARD|EMBAR/.test(raw))return 'EMBARQUEMENT';
- if(/DELAY|RETARD/.test(raw))return 'RETARDÉ';
+ if(late15(x))return 'RETARDÉ';
  return '';
 };
 const cls=label=>{const s=up(label);if(s.startsWith('ARRIVÉ'))return'arrive';if(s.startsWith('EN VOL'))return'envol';if(s==='PARTI')return'decolle';if(s.includes('ATTERI'))return'decolle';if(s.includes('ANNUL'))return'annule';if(s.includes('RETARD'))return'retarde';if(s.includes('EMBAR'))return'embarquement';return'programme'};

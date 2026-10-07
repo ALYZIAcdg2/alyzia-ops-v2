@@ -1,5 +1,6 @@
 import app from "./registration-enrichment-wrapper.js";
 import {shiftToParis} from "./airport-tz.js";
+import {lateBeyondStd15} from "./late-std15.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -54,9 +55,7 @@ function normalizedStatus(x,now,flightDate){
   if(clean(x.atd))return {status:"EN VOL",reason:"actual_departure"};
   if(departedRaw(raw))return {status:"DÉCOLLÉ",reason:"provider_departure_without_atd"};
   if(boardingRaw(raw))return {status:"EMBARQUEMENT",reason:"provider"};
-  if(delayedRaw(raw))return {status:"RETARDÉ",reason:"provider"};
-  if(flightDate===now.date&&s!=null&&e!=null&&e-s>=5)return {status:"RETARDÉ",reason:"etd_after_std"};
-  if(flightDate===now.date&&s!=null&&now.minutes>s+15)return {status:"À CONFIRMER",reason:"past_std_without_actual"};
+  if(lateBeyondStd15(x,flightDate))return {status:"RETARDÉ",reason:"std_plus_15"};
   return {status:"PROGRAMMÉ",reason:"scheduled"};
 }
 async function normalizeRecent(env){
