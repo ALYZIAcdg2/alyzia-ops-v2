@@ -68,13 +68,12 @@ export function ataFromRow(row,x,nowMs){
   if(l!=null&&m!=null){let g=m-l;if(g<-720)g+=1440;if(g>720)g-=1440;if(g<3||g>45)return ""}
   return v;
 }
-// ETA du flux : arr_estimated (heure locale de la destination) pour un vol parti et pas encore posé. Rejetée si elle est très en retard sur l'heure actuelle ou incohérente avec le départ.
+// ETA du flux : arr_estimated (heure locale de la destination) dès qu'elle est mentionnée, vol parti ou non, en retard ou non, tant que le vol n'est pas posé. Rejetée seulement si elle est incohérente avec le départ.
 export function etaFromRow(row,x,nowMs){
   const v=hhmm(row?.arr_estimated);if(!clean(row?.arr_estimated)||!v)return "";
   if(clean(x?.ata)||clean(x?.landing))return "";
-  if(!(clean(x?.atd)||clean(x?.takeoff)||clean(row?.dep_actual)))return "";
   const e=Number(row.arr_estimated_ts),d=Number(row.dep_actual_ts)||Number(row.dep_estimated_ts)||Number(row.dep_time_ts);
-  if(e>0){if(e*1000<nowMs-30*60000)return "";if(d>0){const dur=(e-d)/60;if(dur<20||dur>1200)return ""}}
+  if(e>0){if(d>0){const dur=(e-d)/60;if(dur<20||dur>1200)return ""}}
   return v;
 }
 export function pickFeedRow(index,{designator,std},tolerance=15){

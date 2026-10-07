@@ -98,12 +98,12 @@ test("balayage : ATA du flux écrit, provisoire, sans écraser FlightStats ni un
 });
 
 import {etaFromRow} from "./fids-atd-sweep.js";
-test("ETA du flux : vol parti pas posé accepté ; posé, manuel-like ou périmé refusé",()=>{
+test("ETA du flux : tout vol pas posé accepté (parti ou non) ; posé ou incohérent refusé",()=>{
   const now=Date.parse("2026-10-07T11:00:00Z")/1000*1000,dep=now/1000-3600;
   const row={arr_estimated:"2026-10-07 13:30",arr_estimated_ts:now/1000+1800,dep_actual:"2026-10-07 12:11",dep_actual_ts:dep};
   assert.equal(etaFromRow(row,{atd:"12:11"},now),"13:30");
   assert.equal(etaFromRow(row,{atd:"12:11",ata:"13:25"},now),"");
-  assert.equal(etaFromRow({...row,dep_actual:"",dep_actual_ts:0},{},now),"");
-  assert.equal(etaFromRow({...row,arr_estimated_ts:now/1000-3600},{atd:"12:11"},now),"");
+  assert.equal(etaFromRow({...row,dep_actual:"",dep_actual_ts:0,dep_time_ts:now/1000+600},{},now),"13:30");
+  assert.equal(etaFromRow({...row,arr_estimated_ts:dep+60},{atd:"12:11"},now),"");
   assert.equal(etaFromRow({...row,arr_estimated:""},{atd:"12:11"},now),"");
 });
