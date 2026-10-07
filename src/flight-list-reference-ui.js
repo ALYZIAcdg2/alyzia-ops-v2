@@ -125,6 +125,14 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-flight-card .ops-extra-actions{margin-top:6px;gap:8px 16px;font-size:12px}
 #app .ops-flight-card .ops-notes{border:1px solid #e8d49a;border-radius:8px;background:#fff8e1;padding:4px 9px;font-size:12px}
 @media(max-width:700px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(0,1fr) auto!important;grid-template-areas:"identity expand" "journey journey" "details details"!important;padding:12px 11px!important}#app .ops-card-actions .ops-open-detail{padding:0 8px;font-size:11px}}
+#app .ops-flight-card .ops-extra .ops-load-info strong{overflow-wrap:normal!important;word-break:normal!important}
+@media(max-width:700px){
+#app .ops-flight-card .ops-load-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+#app .ops-flight-card .ops-extra .ops-load-info{flex-direction:column!important;align-items:center!important;justify-content:flex-start!important;gap:2px!important;padding:2px 4px!important;font-size:9.5px!important;letter-spacing:.2px;text-align:center}
+#app .ops-flight-card .ops-extra .ops-load-info strong{font-size:14px!important;line-height:1.25!important;white-space:normal;max-width:100%}
+#app .ops-flight-card .ops-avail strong{white-space:nowrap}
+#app .ops-flight-card .ops-avail em{font-size:10px;padding:1px 6px;line-height:1.3}
+}
 #app .ops-card-actions{display:flex!important;flex-direction:column;align-items:stretch;gap:8px;justify-self:end;align-self:start;width:max-content;max-width:100%}
 #app .ops-card-actions .ops-actions-row{display:flex;align-items:center;gap:8px}
 #app .ops-card-actions button{box-sizing:border-box!important;height:36px!important;min-height:36px!important;margin:0!important;padding:0 12px!important;line-height:1!important;display:inline-flex!important;align-items:center;justify-content:center;position:static!important;vertical-align:top;border-radius:8px;font-size:12px;font-weight:800;white-space:nowrap}
@@ -149,7 +157,7 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-status-badge.retarde{background:#fff0d0;color:#965600;border-color:#f1d08e}
 #app .ops-status-badge.annule{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}
 #app .ops-status-badge.arrive{background:#d7efec;color:#0a665e;border-color:#a9d9d3}
-#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}
+@media(min-width:701px){#app .flight-home-row.ops-flight-card.ops-flight-card{grid-template-columns:minmax(320px,1.3fr) minmax(440px,2.4fr) 150px!important}}
 #app .ops-card-actions .home-pin{width:34px!important;padding:0!important;font-size:18px!important}
 #app .ops-flight-card .ops-load-info,#app .ops-flight-card .ops-load-info strong{font-family:inherit!important}
 #app .ops-flight-card .ops-extra .ops-load-info{font-size:11px!important;font-weight:800!important;color:#7b8ea4!important}
@@ -377,7 +385,7 @@ function opsLoad(x){
  return {cfg:cfgKnown?ks.map(k=>k+(cfgOf(k)??0)).join(' · '):'—',book:fmt(x.booked),avail:number(x.available)??(cfgKnown?capacity-booked-nok:'—'),nok,capacity:cfgKnown?capacity:0,booked};
 }
 // Tendance de remplissage (booking / config) : couleur du chiffre AVAILABLE. Plein ou ≥95 % rouge, ≥80 % orange, ≥50 % vert, sinon bleu-gris (peu rempli).
-function opsFillTone(load){const av=Number(load.avail);if(!(load.capacity>0)||!Number.isFinite(av))return {cls:'',pct:''};const r=Math.max(0,Math.min(1.5,load.booked/load.capacity));return {cls:(av<=0||r>=.95)?'full':r>=.8?'high':r>=.5?'mid':'low',pct:Math.round(r*100)}}
+function opsFillTone(load){const av=Number(load.avail);if(!(load.capacity>0)||!Number.isFinite(av)||!(load.booked>0))return {cls:'',pct:''};const r=Math.max(0,Math.min(1.5,load.booked/load.capacity));return {cls:(av<=0||r>=.95)?'full':r>=.8?'high':r>=.5?'mid':'low',pct:Math.round(r*100)}}
 function renderRow(row){
  opsEnsureCatalog();
  const resolved=opsFlightForRow(row);if(!resolved){row.classList.add('ops-skip');return}row.classList.remove('ops-skip');const {x,idx}=resolved,flight=keyFlight(x),t=opsTimes(x),st=opsListStatus(x,t),term=terminalOf(x)||((typeof AIRLINE_TERMINAL!=='undefined'&&AIRLINE_TERMINAL[up(x.airline)])||''),load=opsLoad(x),progress=opsProgress(x,t,st),planeSub=/^depuis/i.test(st.sub||'')?st.sub:'',dep=x.dep||x.origin||'CDG',dest=x.dest||x.destination||'—',ac=opsType(x)||'—',reg=val(x,'reg','registration','aircraftRegistration')||'—';
