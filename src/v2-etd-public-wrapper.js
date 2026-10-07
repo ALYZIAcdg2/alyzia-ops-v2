@@ -92,9 +92,9 @@ async function run(btn){const x=cur();if(!x)return;const fl=String(x.flight||x.f
   else if(!j?.ok)out='Échec : '+(j?.error||('HTTP '+r.status));
   else{const a=(j.result?.attempts||[]).map(z=>z.source+' '+(z.httpStatus||z.status)).join(' · ');out='Lu · '+(j.result?.status||'')+(a?' · '+a:'')}
  }catch(e){out='Échec : '+(e?.message||e)}
- btn.disabled=false;btn.textContent=old;let m=btn.parentNode.querySelector('.read-one-msg');if(!m){m=document.createElement('div');m.className='read-one-msg';m.style.cssText='font-size:12px;color:#456;margin-top:4px';btn.after(m)}m.textContent=out;
+ btn.disabled=false;btn.title=out;btn.textContent=out.length>34?out.slice(0,33)+'\u2026':out;setTimeout(()=>{btn.textContent=old},9000);
  try{await window.renderAdminDashboard?.(true)}catch{}try{window.refreshFlights?.()}catch{}}
-function ensure(){const head=document.querySelector('#app .flight-head');if(!head||head.querySelector('.read-one-btn'))return;const box=document.createElement('div');box.style.cssText='grid-column:1 / -1;padding:6px 12px';const b=document.createElement('button');b.type='button';b.className='read-one-btn';b.textContent='↻ Relire les sources de ce vol';b.style.cssText='border:1px solid #c2d8ec;border-radius:8px;background:#f5faff;color:#0c559e;font-weight:700;padding:6px 12px;cursor:pointer';b.onclick=()=>run(b);box.appendChild(b);head.appendChild(box)}
+function ensure(){const bar=document.querySelector('#app .v2x-d-actions');if(!bar||bar.querySelector('.read-one-btn'))return;const b=document.createElement('button');b.type='button';b.className='v2x-act read-one-btn';b.textContent='\u21BB RELIRE LES SOURCES';b.title='Relire ce vol sur toutes les sources (FlightStats / FlightAware compris)';b.onclick=()=>run(b);bar.insertBefore(b,bar.querySelector('.v2x-act.danger')||null)}
 new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
 })();</script>`;
 
