@@ -30,6 +30,7 @@ import {runParisAirportStatusFlow,probeParisAirport} from "./paris-airport-statu
 import {probeGatenavo} from "./gatenavo-probe.js";
 import {restoreRegs} from "./reg-restore.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
+import {FICHE_CONFIG_UI} from "./fiche-config-actions.js";
 import {readFlightState} from "./flight-state-probe.js";
 import {setManualBoarding} from "./manual-boarding.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -103,22 +104,6 @@ function ensure(){const bar=document.querySelector('#app .v2x-d-actions');if(!ba
 new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
 })();</script>`;
 
-const BOARDING_UI=String.raw`<script id="alyzia-boarding-js">(()=>{'use strict';
-// Embarquement manuel depuis la fiche vol : prioritaire sur les sources automatiques, levé par l'ATD.
-function cur(){try{if(typeof FLIGHTS!=='undefined'&&Array.isArray(FLIGHTS)&&typeof selected!=='undefined'&&FLIGHTS[selected])return FLIGHTS[selected]}catch{}try{if(Array.isArray(window.FLIGHTS)&&Number.isInteger(window.selected))return window.FLIGHTS[window.selected]||null}catch{}return null}
-async function run(btn,phase,label){const x=cur();if(!x)return;const fl=String(x.flight||x.flight_number||x.designator||'').replace(/\s+/g,''),date=String(x.date||x.flightDate||(typeof HOME_DATE!=='undefined'?HOME_DATE:'')||'');if(!fl)return;
- const old=btn.textContent;btn.disabled=true;btn.textContent='…';let out='';
- try{const r=await fetch('/api/admin/boarding?flight='+encodeURIComponent(fl)+'&phase='+encodeURIComponent(phase)+(date?'&date='+encodeURIComponent(date):''),{method:'POST',cache:'no-store'}),j=await r.json();
-  out=j?.ok?'OK · '+(j.status||''):j?.error==='ALREADY_DEPARTED'?'Vol déjà parti':'Échec : '+(j?.error||('HTTP '+r.status))}
- catch(e){out='Échec : '+(e?.message||e)}
- btn.disabled=false;btn.textContent=out.length>26?out.slice(0,25)+'…':out;setTimeout(()=>{btn.textContent=old},5000);
- try{await window.renderAdminDashboard?.(true)}catch{}try{window.refreshFlights?.()}catch{}}
-function ensure(){const bar=document.querySelector('#app .v2x-d-actions');if(!bar||bar.querySelector('.boarding-btn'))return;const at=bar.querySelector('.v2x-act.danger')||null;
- for(const [phase,label,title] of [['EMBARQUEMENT','✈ EMBARQUEMENT','Embarquement en cours (saisie manuelle)'],['EMBARQUEMENT CLOS','✈ EMBARQ. CLOS','Embarquement clos (saisie manuelle)'],['CLEAR','✕ EFFACER EMBARQ.','Retirer la saisie manuelle d’embarquement']]){
-  const b=document.createElement('button');b.type='button';b.className='v2x-act boarding-btn';b.textContent=label;b.title=title;b.onclick=()=>run(b,phase,label);bar.insertBefore(b,at)}}
-new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
-})();</script>`;
-
 const REG_RESTORE_UI=String.raw`<script id="alyzia-reg-restore-js">(()=>{'use strict';
 // Bouton ADMIN : restaure les immatriculations perdues depuis le journal du tableau FR24 (aperçu, confirmation, application).
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -171,7 +156,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+BOARDING_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+BOARDING_UI+REG_RESTORE_UI+ADMIN_REORG_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI}
 
 export default {
   async fetch(request,env,ctx){
