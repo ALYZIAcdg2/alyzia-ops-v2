@@ -15,7 +15,9 @@ export function probeUrls({airline,number,date,flightId}){
   return urls;
 }
 
-export async function probeFlightStats({airline="",number="",date="",flightId=""},{fetchImpl=fetch,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
+// headersMode "cron" : exactement les en-têtes du cron pour les pages (accept-language fr-FR, sans referer), pour voir si c'est ce qui change la réponse.
+const CRON_HEADERS={accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":UA};
+export async function probeFlightStats({airline="",number="",date="",flightId="",headersMode=""},{fetchImpl=fetch,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
   airline=String(airline).toUpperCase().trim();number=String(number).replace(/\D/g,"");
   if(!airline||!number||!/^\d{4}-\d{2}-\d{2}$/.test(date))return {ok:false,error:"airline, number, date (AAAA-MM-JJ) requis ; flightId facultatif"};
   const urls=probeUrls({airline,number,date,flightId}),out={};let first=true;
@@ -23,7 +25,7 @@ export async function probeFlightStats({airline="",number="",date="",flightId=""
     if(!first)await sleep(1500);first=false;
     const t0=Date.now();
     try{
-      const r=await fetchImpl(url,{redirect:"follow",headers:{accept:kind==="api"?"*/*":"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":UA}});
+      const hdr=headersMode==="cron"&&kind!=="api"?CRON_HEADERS:{accept:kind==="api"?"*/*":"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":UA};const r=await fetchImpl(url,{redirect:"follow",headers:hdr});
       const body=await r.text();
       const row={httpStatus:r.status,bytes:body.length,ms:Date.now()-t0,server:r.headers?.get?.("server")||null,challenge:/<title>[^<]*(just a moment|attention required|access denied|blocked|are you a robot)/i.test(body.slice(0,4000))};
       if(r.ok&&kind==="api"){let j=null;try{j=JSON.parse(body)}catch{}const a=j?flightStatsApiTimes(j):null;row.times=a&&Object.keys(a).length?a:null}
@@ -32,5 +34,5 @@ export async function probeFlightStats({airline="",number="",date="",flightId=""
       out[kind]=row;
     }catch(e){out[kind]={error:String(e?.message||e)}}
   }
-  return {ok:true,mode:"FLIGHTSTATS_PROBE_NO_WRITE",airline,number,date,flightId:flightId||null,results:out};
+  return {ok:true,mode:"FLIGHTSTATS_PROBE_NO_WRITE",headers:headersMode==="cron"?"cron":"probe",airline,number,date,flightId:flightId||null,results:out};
 }
