@@ -125,14 +125,15 @@ async function run(btn){const msg=document.getElementById('adnPushMsg'),date=dat
  const say=t=>{if(msg)msg.textContent=t;btn.title=t};
  btn.disabled=true;btn.textContent='IMMAT…';
  try{const r=await fetch('/api/admin/reg-restore'+q,{cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
-  if(!j.toRestore){say('Aucune immatriculation à restaurer ('+(j.date||date||'aujourd’hui')+')');return}
+  if(!j.toRestore&&!j.toClear){say('Aucune immatriculation à nettoyer ni à restaurer ('+(j.date||date||'aujourd’hui')+')');return}
   const list=(j.items||[]).slice(0,40).map(i=>i.flight+' → '+i.reg).join('\n')+((j.items||[]).length>40?'\n…':''),skip=(j.skipped||[]).length?('\n\nIgnorées (doublon proche) : '+(j.skipped||[]).map(s=>s.flight).join(', ')):'';
-  if(!window.confirm('Restaurer '+j.toRestore+' immatriculation(s) du '+j.date+' depuis le tableau FR24 ?\n\n'+list+skip))return say('Restauration annulée');
+  const clr=j.toClear?('Nettoyer '+j.toClear+' mauvaise(s) immatriculation(s) : '+(j.clearItems||[]).map(i=>i.flight+' ('+i.reg+')').join(', ')+'\n\n'):'';
+  if(!window.confirm(clr+(j.toRestore?('Restaurer '+j.toRestore+' immatriculation(s) du '+j.date+' depuis le tableau FR24 ?\n\n'+list):'')+skip))return say('Restauration annulée');
   const r2=await fetch('/api/admin/reg-restore'+q,{method:'POST',cache:'no-store'}),k=await r2.json();if(!k?.ok)throw new Error(k?.error||('HTTP '+r2.status));
-  say('✓ IMMAT restaurées : '+(k.restored??0)+' · ignorées : '+((k.skipped||[]).length));
+  say('✓ IMMAT nettoyées : '+(k.cleared??0)+' · restaurées : '+(k.restored??0)+' · ignorées : '+((k.skipped||[]).length));
   try{await window.renderAdminDashboard?.(true)}catch{}
  }catch(e){say('ÉCHEC : '+(e?.message||e))}finally{btn.disabled=false;btn.textContent=old}}
-function ensure(){const push=document.getElementById('adminPushBtn');if(!push||document.getElementById('adminRegRestoreBtn'))return;const b=document.createElement('button');b.type='button';b.id='adminRegRestoreBtn';b.className=push.className;b.textContent='↺ IMMAT';b.title='Restaurer les immatriculations perdues (tableau FR24)';b.onclick=()=>run(b);push.insertAdjacentElement('afterend',b)}
+function ensure(){const push=document.getElementById('adminPushBtn');if(!push||document.getElementById('adminRegRestoreBtn'))return;const b=document.createElement('button');b.type='button';b.id='adminRegRestoreBtn';b.className=push.className;b.textContent='↺ IMMAT';b.title='Nettoyer les mauvaises immatriculations (D-AIHV) et restaurer celles perdues (tableau FR24)';b.onclick=()=>run(b);push.insertAdjacentElement('afterend',b)}
 new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
 })();</script>`;
 
