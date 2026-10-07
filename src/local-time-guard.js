@@ -49,3 +49,16 @@ export function isFutureActual(value,{date,std,takeoff,originZone="Europe/Paris"
   let arr=dayUtc+(v-od)*60000;while(arr<depEpoch)arr+=86400000;
   return arr>nowMs+graceMin*60000;
 }
+
+// Atterrissage / ATA impossible : le temps de vol écoulé (décollage ou ATD -> arrivée annoncée, chacun dans son fuseau) est inférieur à la moitié de la durée
+// programmée (STD -> STA). IZ742 CDG-TLV : FlightStats a donné 18:30 (l'arrivée PRÉVUE en UTC, soit 21:30 à Tel Aviv) comme atterrissage 42 min après le décollage.
+export function arrivedTooEarly(value,{date,std,sta,takeoff,originZone="Europe/Paris",destZone="Europe/Paris"}={}){
+  const v=clockMinutes(value),d=clockMinutes(takeoff),s=clockMinutes(std),a=clockMinutes(sta);
+  const m=clean(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(v===null||d===null||s===null||a===null||!m)return false;
+  const dayUtc=Date.UTC(+m[1],+m[2]-1,+m[3]),oo=zoneOffsetMinutes(date,originZone),od=zoneOffsetMinutes(date,destZone);
+  let block=(a-od)-(s-oo);while(block<=0)block+=1440;
+  if(block<90)return false;
+  let flown=(v-od)-(d-oo);while(flown<=-720)flown+=1440;while(flown>720)flown-=1440;
+  return flown<block*0.5;
+}
