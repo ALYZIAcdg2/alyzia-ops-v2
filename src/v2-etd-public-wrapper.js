@@ -19,6 +19,7 @@ import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {flightStatsStatus} from "./flightstats-status.js";
 import {ingestMvt,sitadocAuthorized} from "./sitadoc-mvt.js";
 import {ingestDepartures} from "./sitadoc-departures.js";
+import {sitadocCompare} from "./sitadoc-compare.js";
 import {probeFlightStats} from "./flightstats-probe.js";
 import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
@@ -151,6 +152,10 @@ export default {
       // Messages MVT reçus dans Sitadoc (intranet CDG), envoyés par le collecteur du navigateur. Jeton obligatoire (secret SITADOC_TOKEN).
       if(!sitadocAuthorized(request,env))return json({ok:false,error:"UNAUTHORIZED"},401);
       try{const body=await request.json().catch(()=>null);return json(await ingestMvt(env,body?.messages,{dryRun:url.searchParams.get("dryRun")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/sitadoc-compare"&&request.method==="GET"){
+      // Lecture seule : données Sitadoc enregistrées pour les vols du jour comparées à nos valeurs (immat, porte, type, ATD, décollage, ETD).
+      try{return json(await sitadocCompare(env,{date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/flightstats-status"&&request.method==="GET"){
       // Lecture seule : disjoncteurs FlightStats enregistrés + dernières lectures par vol du jour (aucun appel FlightStats).
