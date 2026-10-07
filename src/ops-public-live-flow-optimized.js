@@ -343,13 +343,15 @@ export function pickSlots(sorted,size){
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
 function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
-async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
-  // FlightStats: seulement si un champ gate-time/status manque.
-  const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
-  if(!tooEarly&&anyNeed(needs,["atd","eta","ata","status"])&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),fsPageLeft))){if(!fsIdKnown)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
+async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
   {const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft,gate:false,etd:false};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
+  // FlightStats / FlightAware : dernier secours. Appelés pour un vol dont la STD est passée sans ATD après FIDS et FR24, pour lire une arrivée d'un vol parti (id FS connu / page FA connue), ou à la demande.
+  const atdMissing=(!clean(base.atd)||suspectAtd(base))&&!clean(map.FR24BOARD?.atd),lastResort=forced||(pastStd&&atdMissing);
+  // FlightStats: seulement si un champ gate-time/status manque.
+  const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
+  if(!tooEarly&&anyNeed(needs,["atd","eta","ata","status"])&&(lastResort||(fsIdKnown&&!clean(base.ata)&&(clean(base.atd)||clean(base.takeoff))))&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),onDemand?1:fsPageLeft))){if(!fsIdKnown&&!onDemand)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
@@ -359,7 +361,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
   const noDeparture=!clean(base.atd)&&!clean(map.FLIGHTSTATS?.atd);
   // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
   const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
-  if(!tooEarly&&(noDeparture||(noArrival&&clean(base.flightAwareHistoryUrl)))){
+  if(!tooEarly&&((lastResort&&noDeparture)||(noArrival&&clean(base.flightAwareHistoryUrl)))){
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
     if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
@@ -412,9 +414,10 @@ async function applyOne(env,row,{dryRun=false,recheck=false}={}){let fr24Id="";l
 export async function runPublicLiveFlow(env,{limit=12,concurrency=3,recheck=false}={}){flightStatsResetBudget();if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};const date=parisDate(),startedAt=new Date().toISOString(),nowMin=parisMinutes(),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date BETWEEN ? AND ? AND airline<>'SYS' ORDER BY flight_date,std,flight_number`).bind(addDaysIso(date,-1),date).all();const scored=results.map(r=>{let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}return {r,x,p:priority(r,x,minutesOnFlightDay(r.flight_date,date,nowMin))}}).filter(z=>needsLiveRead(z.r.flight_date,date,z.x)).sort((a,b)=>a.p[0]-b.p[0]||a.p[1]-b.p[1]),size=Math.max(1,Math.min(36,Number(limit)||12)),rest=recheck?results.map(r=>{let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}return {r,x}}).filter(z=>clean(z.x.dailyCheckDate)!==date):[],picked=(recheck?rest.slice(0,size):pickSlots(scored,size)).map(z=>z.r),out=await mapLimit(picked,Math.max(1,Math.min(5,Number(concurrency)||3)),r=>applyOne(env,r,{recheck})),summary={ok:true,mode:recheck?"DAILY_RECHECK":"PUBLIC_LIVE_OPTIMIZED",remaining:recheck?Math.max(0,rest.length-picked.length):undefined,date,startedAt,finishedAt:new Date().toISOString(),checked:picked.length,updated:out.filter(x=>x.status==="UPDATED").length,sourceOrder:LIVE_PUBLIC_SOURCE_ORDER,disabledAutomatic:["FlightView","Wego","Ixigo","Kayak","Flightera","FlightAware generic"],statusCounts:{}};for(const r of out)summary.statusCounts[r.status]=(summary.statusCounts[r.status]||0)+1;if(!recheck)await saveMeta(env,summary);await saveRefusals(env);return {...summary,results:out}}
 export async function publicLiveStatus(env){let last=null;try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_public_live_last'`).first();if(r?.v)last=JSON.parse(r.v)}catch{}return {ok:true,cadenceMinutes:2,sources:LIVE_PUBLIC_SOURCE_ORDER,disabledAutomatic:["FlightView","Wego","Ixigo","Kayak","Flightera","FlightAware generic"],lastRun:last}}
 
+const ON_DEMAND_LAST=new Map(),ON_DEMAND_MIN_MS=120000;
 // One flight, on demand: what the live flow would read and write for it, and where it stands in the ranking of the run.
 // dryRun=true (GET) writes nothing; dryRun=false (POST) applies it like a cron run would.
-export async function runLiveForFlight(env,{date="",flight="",dryRun=true,limit=18}={}){
+export async function runLiveForFlight(env,{date="",flight="",dryRun=true,limit=18,onDemand=false}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const day=clean(date)||parisDate(),wanted=upper(flight).replace(/\s+/g,"");if(!wanted)return {ok:false,error:"flight required"};
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS' ORDER BY std,flight_number`).bind(day).all();
@@ -422,6 +425,7 @@ export async function runLiveForFlight(env,{date="",flight="",dryRun=true,limit=
   const target=results.find(r=>upper(r.flight_number).replace(/\s+/g,"")===wanted);if(!target)return {ok:false,error:"FLIGHT_NOT_FOUND",date:day,flight:wanted};
   const picked=pickSlots(scored,Math.max(1,Math.min(36,Number(limit)||18))).map(z=>z.r.identity),rank=scored.findIndex(z=>z.r.identity===target.identity),entry=scored[rank];
   let x={};try{x=JSON.parse(target.data_json||"{}")}catch{}
-  const result=await applyOne(env,target,{dryRun});
+  if(onDemand&&!dryRun){const last=ON_DEMAND_LAST.get(target.identity)||0,wait=ON_DEMAND_MIN_MS-(Date.now()-last);if(wait>0)return {ok:false,error:"TOO_SOON",retryInSeconds:Math.ceil(wait/1000),flight:wanted,date:day};ON_DEMAND_LAST.set(target.identity,Date.now())}
+  const result=await applyOne(env,target,{dryRun,onDemand});
   return {ok:true,date:day,flight:wanted,nowParisMinutes:nowMin,candidates:scored.length,rank:rank<0?null:rank+1,tier:entry?entry.p[0]:null,inNextRun:picked.includes(target.identity),stored:{std:x.std||null,atd:x.atd||null,takeoff:x.takeoff||null,landing:x.landing||null,ata:x.ata||null,status:x.status||null,reg:x.reg||null,lastCheck:x.publicLiveBackfill?.checkedAt||null,lastAttempts:x.publicLiveBackfill?.attempts||null},result};
 }
