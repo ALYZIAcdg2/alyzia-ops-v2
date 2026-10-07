@@ -181,17 +181,31 @@ export function flightStatsSlot(source,fn,pauseMs=1500){
   flightStatsChain=run.catch(()=>{}).then(()=>new Promise(z=>setTimeout(z,pauseMs)));
   return run;
 }
-// The FlightStats id of a flight does not change during the day: once known, only the light JSON API is called (no tracker page, no WAF challenge).
-async function flightStatsFromCachedId(f){
-  const id=clean(f.raw?.flightStatsId);if(!/^\d+$/.test(id)||clean(f.raw?.flightStatsIdDate)!==f.date||flightStatsPaused(Date.now(),"api"))return null;
-  const ymd=f.date.slice(0,4)+"/"+Number(f.date.slice(5,7))+"/"+Number(f.date.slice(8,10)),url=`https://www.flightstats.com/v2/api/extendedDetails/${encodeURIComponent(f.airline)}/${encodeURIComponent(f.number)}/${ymd}/${id}`,c=new AbortController(),t=setTimeout(()=>c.abort(),10000),checkedAt=new Date().toISOString();
-  try{
-    const r=await flightStatsSlot("FLIGHTSTATS",()=>fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"*/*","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":FS_UA}}));
-    flightStatsNoteResult(r.status,Date.now(),"api");
-    if(!r.ok)return null;
-    const a=flightStatsApiTimes(await r.json().catch(()=>null));if(!a||!Object.keys(a).length)return null;
-    return {source:"FLIGHTSTATS",url,httpStatus:r.status,status:"OK",checkedAt,semantic:a,lookupDesignator:f.designator,lookupCodeType:"IATA",detailsInfo:"API OK (id mémorisé)",flightId:id};
-  }catch{return null}finally{clearTimeout(t)}
+// The FlightStats id of a flight does not change during the day: once known, the tracker page (WAF) is not read again.
+// 1) light JSON API (extendedDetails) ; if it answers 405 (endpoint no longer served for GET) it is left alone for 6 h ;
+// 2) the "flight-details?flightId=" page of the exact flight (same Gate / Runway times blocks as the tracker page, one request).
+let flightStatsApiOffUntil=0;
+export async function flightStatsFromCachedId(f){
+  const id=clean(f.raw?.flightStatsId);if(!/^\d+$/.test(id)||clean(f.raw?.flightStatsIdDate)!==f.date)return null;
+  const ymd=f.date.slice(0,4)+"/"+Number(f.date.slice(5,7))+"/"+Number(f.date.slice(8,10)),checkedAt=()=>new Date().toISOString();
+  const apiOn=Date.now()>=flightStatsApiOffUntil&&!flightStatsPaused(Date.now(),"api"),pageOn=!flightStatsPaused(Date.now(),"page");
+  if(apiOn){
+    const url=`https://www.flightstats.com/v2/api/extendedDetails/${encodeURIComponent(f.airline)}/${encodeURIComponent(f.number)}/${ymd}/${id}`,c=new AbortController(),t=setTimeout(()=>c.abort(),10000);
+    try{
+      const r=await flightStatsSlot("FLIGHTSTATS",()=>fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"*/*","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":FS_UA}}));
+      if(r.status===405)flightStatsApiOffUntil=Date.now()+6*3600000;else flightStatsNoteResult(r.status,Date.now(),"api");
+      if(r.ok){const a=flightStatsApiTimes(await r.json().catch(()=>null));if(a&&Object.keys(a).length)return {source:"FLIGHTSTATS",url,httpStatus:r.status,status:"OK",checkedAt:checkedAt(),semantic:a,lookupDesignator:f.designator,lookupCodeType:"IATA",detailsInfo:"API OK (id mémorisé)",flightId:id}}
+    }catch{}finally{clearTimeout(t)}
+  }
+  if(pageOn){
+    const url=`https://www.flightstats.com/v2/flight-details/${encodeURIComponent(f.airline)}/${encodeURIComponent(f.number)}?year=${f.date.slice(0,4)}&month=${Number(f.date.slice(5,7))}&date=${Number(f.date.slice(8,10))}&flightId=${id}`,c=new AbortController(),t=setTimeout(()=>c.abort(),10000);
+    try{
+      const r=await flightStatsSlot("FLIGHTSTATS",()=>fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"en-US,en;q=0.9",referer:"https://www.flightstats.com/v2","user-agent":FS_UA}}));
+      flightStatsNoteResult(r.status,Date.now(),"page");
+      if(r.ok){const d=flightStatsDetails(textOnly(await r.text()));if(d){const semantic={};for(const k of ["atd","takeoff","eta","ata","landing"])if(d[k])semantic[k]=d[k];return {source:"FLIGHTSTATS",url,httpStatus:r.status,status:"OK",checkedAt:checkedAt(),semantic,lookupDesignator:f.designator,lookupCodeType:"IATA",detailsInfo:"PAGE OK (id mémorisé)",flightId:id}}}
+    }catch{}finally{clearTimeout(t)}
+  }
+  return null;
 }
 async function fetchHtmlSource(source,f){if(source==="FLIGHTSTATS"){const cached=await flightStatsFromCachedId(f);if(cached)return cached;if(flightStatsPaused())return {source,status:"COOLDOWN",httpStatus:0,checkedAt:new Date().toISOString(),semantic:{},detailsInfo:"En pause 90 s après deux refus"}}const build=FALLBACKS[source];if(!build)return {source,status:"NO_SOURCE",semantic:{}};return withIcaoFallback(f,build,async candidate=>{const url=build(candidate),c=new AbortController(),t=setTimeout(()=>c.abort(),source==="FLIGHTSTATS"?10000:6500),checkedAt=new Date().toISOString();try{const init={redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":source==="FLIGHTSTATS"?FS_UA:"Mozilla/5.0 (compatible; AlyziaOpsV2-LiveOptimized/1.0)"}};let r=await flightStatsSlot(source,()=>fetch(url,init));if(source==="FLIGHTSTATS")flightStatsNoteResult(r.status);
   // FlightStats answers 403 / 429 to a burst of parallel requests (AI142: IATA lookup refused in the cron, fine alone): one retry after a short pause.
