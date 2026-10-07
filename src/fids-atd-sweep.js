@@ -1,8 +1,8 @@
-// Source « FIDS flightradar.live » : flux JSON public des départs de CDG, lu en un seul appel (cache 8 min, pause 10 min si refus).
+// Source « FIDS flightradar.live » : flux JSON public des départs de CDG, lu en un seul appel (cache 100 s : un appel par passage du cron de 2 min, pause 10 min si refus).
 // Son dep_actual est l'heure réelle de départ (12 à 30 min avant le décollage FR24 : c'est l'heure de porte, pas le décollage).
 // Utilisé UNIQUEMENT pour l'ATD manquant ; FlightStats / FlightAware, quand ils répondent, le remplacent. Jamais une saisie manuelle.
 const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
-const FEED="https://fids.flightradar.live/api/schedules/departures/CDG",TTL_MS=8*60000,PAUSE_MS=10*60000;
+const FEED="https://fids.flightradar.live/api/schedules/departures/CDG",TTL_MS=100000,PAUSE_MS=10*60000;
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})\s*$/);return m?String(m[1]).padStart(2,"0")+":"+m[2]:""};
 const mins=h=>{const m=/^(\d{2}):(\d{2})$/.exec(h||"");return m?+m[1]*60+ +m[2]:null};
