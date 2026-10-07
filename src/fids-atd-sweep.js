@@ -109,9 +109,9 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
         if(ata&&clean(x.ata)!==ata&&!manual(x,"ata")&&(!clean(x.ata)||/FIDS/.test(upper(x.ataSource)))){
           const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"ata",from:clean(x.ata),to:ata});
           x.flightInfoLog=log.slice(0,240);x.ata=ata;x.ataSource="PUBLIC_LIVE:FIDS";x.ataUpdatedAt=at;ataUpdated++;changed=true}}
-      // ETA : estimation du flux, provisoire ; ne remplace ni une saisie manuelle ni une ETA d'une autre source.
+      // ETA : estimation du flux, provisoire ; ne remplace ni une saisie manuelle ni une ETA FlightStats / FR24 ; elle remplace une ETA FlightAware (écart d'1 h constaté vers ALG / CMN).
       {const eta=etaFromRow(row,x,nowMs);
-        if(eta&&clean(x.eta)!==eta&&!manual(x,"eta")&&(!clean(x.eta)||/FIDS/.test(upper(x.etaSource)))){
+        if(eta&&clean(x.eta)!==eta&&!manual(x,"eta")&&(!clean(x.eta)||/FIDS|FLIGHTAWARE/.test(upper(x.etaSource)))){
           const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"eta",from:clean(x.eta),to:eta});
           x.flightInfoLog=log.slice(0,240);x.eta=eta;x.etaSource="PUBLIC_LIVE:FIDS";x.etaUpdatedAt=at;etaUpdated++;changed=true}}
       const atdStep=()=>{

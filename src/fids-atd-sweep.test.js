@@ -107,3 +107,11 @@ test("ETA du flux : tout vol pas posé accepté (parti ou non) ; posé ou incoh�
   assert.equal(etaFromRow({...row,arr_estimated_ts:dep+60},{atd:"12:11"},now),"");
   assert.equal(etaFromRow({...row,arr_estimated:""},{atd:"12:11"},now),"");
 });
+test("ETA FIDS remplace une ETA FlightAware (écart d'1 h), jamais manuelle ni FlightStats",async()=>{
+  const mk=(n,d)=>({identity:n,flight_number:n.slice(2),airline:n.slice(0,2),std:"12:50",data_json:JSON.stringify({airline:n.slice(0,2),flight:n,std:"12:50",origin:"CDG",atd:"14:00",atdSource:"PUBLIC_LIVE:FIDS",...d})});
+  const env=fakeDb([mk("AH1535",{eta:"14:05",etaSource:"PUBLIC_LIVE:FLIGHTAWAREEXACT"}),mk("TK1824",{eta:"14:05",etaSource:"PUBLIC_LIVE:FLIGHTSTATS"}),mk("LY222",{eta:"14:05",etaSource:"MANUAL"})]);
+  const now=Date.parse("2026-10-07T11:55:00Z");
+  const rows=["AH1535","TK1824","LY222"].map(f=>({flight_iata:f,dep_time:"2026-10-07 12:50",dep_actual:"2026-10-07 14:00",dep_actual_ts:now/1000-600,arr_estimated:"2026-10-07 15:11",arr_estimated_ts:now/1000+5000}));
+  await sweepFidsToday(env,{nowMs:now,fetchImpl:async()=>new Response(JSON.stringify(rows),{status:200})});
+  assert.equal(env.updates.length,1);assert.equal(env.updates[0].flight,"AH1535");assert.equal(env.updates[0].eta,"15:11");assert.equal(env.updates[0].etaSource,"PUBLIC_LIVE:FIDS");
+});
