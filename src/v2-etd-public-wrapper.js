@@ -28,6 +28,7 @@ import {runTimesCompare} from "./times-compare.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow,probeParisAirport} from "./paris-airport-status-flow.js";
 import {probeGatenavo} from "./gatenavo-probe.js";
+import {readFlightState} from "./flight-state-probe.js";
 import {setManualBoarding} from "./manual-boarding.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
 
@@ -146,6 +147,10 @@ export default {
     if(url.pathname==="/api/admin/boarding"&&request.method==="POST"){
       // Embarquement saisi à la main depuis la fiche vol : phase=EMBARQUEMENT | EMBARQUEMENT CLOS | CLEAR.
       try{return json(await setManualBoarding(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||"",phase:url.searchParams.get("phase")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/flight-state"&&request.method==="GET"){
+      // Lecture seule : heures d'un vol avec leur source et le journal des écritures (décollage, atterrissage, ATA, ATD).
+      try{return json(await readFlightState(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/live-one"){
       // GET: what the live flow would read and write for one flight (nothing is saved). POST: applies it now, like a cron run.
