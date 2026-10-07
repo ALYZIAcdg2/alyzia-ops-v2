@@ -17,6 +17,7 @@ import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {flightStatsStatus} from "./flightstats-status.js";
+import {ingestMvt,sitadocAuthorized} from "./sitadoc-mvt.js";
 import {probeFlightStats} from "./flightstats-probe.js";
 import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
@@ -139,6 +140,11 @@ export default {
     if(url.pathname==="/api/admin/flightaware-probe"&&request.method==="GET"){
       // Diagnostic à la demande : 2 requêtes FlightAware (page du vol puis historique exact).
       try{return json(await probeFlightAware({designator:url.searchParams.get("designator")||"",date:url.searchParams.get("date")||"",std:url.searchParams.get("std")||"",origin:url.searchParams.get("origin")||"CDG",destination:url.searchParams.get("destination")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/v2/sitadoc/mvt"&&request.method==="POST"){
+      // Messages MVT reçus dans Sitadoc (intranet CDG), envoyés par le collecteur du navigateur. Jeton obligatoire (secret SITADOC_TOKEN).
+      if(!sitadocAuthorized(request,env))return json({ok:false,error:"UNAUTHORIZED"},401);
+      try{const body=await request.json().catch(()=>null);return json(await ingestMvt(env,body?.messages,{dryRun:url.searchParams.get("dryRun")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/flightstats-status"&&request.method==="GET"){
       // Lecture seule : disjoncteurs FlightStats enregistrés + dernières lectures par vol du jour (aucun appel FlightStats).
