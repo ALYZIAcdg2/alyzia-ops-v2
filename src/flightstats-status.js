@@ -5,7 +5,7 @@ const mins=v=>{const m=/^(\d{1,2}):(\d{2})/.exec(String(v||""));return m?Number(
 const hm=ms=>new Intl.DateTimeFormat("fr-FR",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit"}).format(new Date(ms));
 
 export function summarizeFlightStats(rows,{nowMs=Date.now(),date}={}){
-  const out={flights:0,idKnown:0,readThisHour:0,neverRead:0,lastStatus:{},refusedFlag:0,atdFromFS:0,ataFromFS:0,etaFromFS:0,inWindowNotRead:[],lastAt:null};
+  const out={samples:[],byLookup:{},flights:0,idKnown:0,readThisHour:0,neverRead:0,lastStatus:{},refusedFlag:0,atdFromFS:0,ataFromFS:0,etaFromFS:0,inWindowNotRead:[],lastAt:null};
   const nowMin=parisMin(nowMs);let last=0;
   for(const x of rows){
     out.flights++;
@@ -17,6 +17,8 @@ export function summarizeFlightStats(rows,{nowMs=Date.now(),date}={}){
     const att=(x.publicLiveBackfill?.attempts||[]).filter(a=>a.source==="FLIGHTSTATS"),a=att[att.length-1];
     if(!a){out.neverRead++;const s=mins(x.std);if(s!==null&&s-nowMin<=90&&s-nowMin>=-240&&!x.atd&&out.inWindowNotRead.length<15)out.inWindowNotRead.push(x.flight+" "+x.std);continue}
     const k=a.status+(a.httpStatus?" "+a.httpStatus:"");out.lastStatus[k]=(out.lastStatus[k]||0)+1;
+    const lk=(a.lookupCodeType||"?")+" "+k;out.byLookup[lk]=(out.byLookup[lk]||0)+1;
+    if(out.samples.length<10&&a.status!=="COOLDOWN")out.samples.push({flight:x.flight||"?",status:a.status,http:a.httpStatus||0,lookup:(a.lookupCodeType||"")+" "+(a.lookupDesignator||""),info:a.detailsInfo||"",url:String(a.url||"").replace(/^https?:\/\/www\.flightstats\.com/,"").slice(0,120),at:a.checkedAt});
     const t=Date.parse(a.checkedAt||"");if(Number.isFinite(t)){if(t>last)last=t;if(nowMs-t<=3600000)out.readThisHour++}
   }
   out.lastAt=last?new Date(last).toISOString():null;out.lastAtParis=last?hm(last):null;

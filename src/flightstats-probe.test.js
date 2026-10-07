@@ -23,3 +23,8 @@ test("sonde : mode en-têtes du cron (fr-FR, sans referer)",async()=>{
   assert.equal(r.headers,"cron");assert.equal(seen[0]["accept-language"],"fr-FR,fr;q=0.9,en;q=0.8");assert.equal(seen[0].referer,undefined);
   const r2=await probeFlightStats({airline:"TK",number:"1830",date:"2026-10-07"},{fetchImpl,sleep:async()=>{}});assert.equal(r2.headers,"probe");assert.equal(seen[1].referer,"https://www.flightstats.com/v2");
 });
+test("sonde : debug=1 renvoie des extraits autour des blocs d'heures",async()=>{
+  const fetchImpl=async()=>({status:200,ok:true,headers:{get:()=>null},text:async()=>"<p>Flight Gate Times Scheduled 07:20 Actual 07:11</p><p>Flight Runway Times Scheduled 07:30 Actual 07:25</p>"});
+  const r=await probeFlightStats({airline:"TK",number:"1830",date:"2026-10-07",flightId:"1",debug:true},{fetchImpl,sleep:async()=>{}});
+  assert.equal(r.results.details.snippets.length,2);assert.match(r.results.details.snippets[0],/Flight Gate Times/);
+});

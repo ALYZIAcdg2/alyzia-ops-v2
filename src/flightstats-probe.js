@@ -17,7 +17,7 @@ export function probeUrls({airline,number,date,flightId}){
 
 // headersMode "cron" : exactement les en-têtes du cron pour les pages (accept-language fr-FR, sans referer), pour voir si c'est ce qui change la réponse.
 const CRON_HEADERS={accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":UA};
-export async function probeFlightStats({airline="",number="",date="",flightId="",headersMode=""},{fetchImpl=fetch,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
+export async function probeFlightStats({airline="",number="",date="",flightId="",headersMode="",debug=false},{fetchImpl=fetch,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
   airline=String(airline).toUpperCase().trim();number=String(number).replace(/\D/g,"");
   if(!airline||!number||!/^\d{4}-\d{2}-\d{2}$/.test(date))return {ok:false,error:"airline, number, date (AAAA-MM-JJ) requis ; flightId facultatif"};
   const urls=probeUrls({airline,number,date,flightId}),out={};let first=true;
@@ -29,7 +29,7 @@ export async function probeFlightStats({airline="",number="",date="",flightId=""
       const body=await r.text();
       const row={httpStatus:r.status,bytes:body.length,ms:Date.now()-t0,server:r.headers?.get?.("server")||null,challenge:/<title>[^<]*(just a moment|attention required|access denied|blocked|are you a robot)/i.test(body.slice(0,4000))};
       if(r.ok&&kind==="api"){let j=null;try{j=JSON.parse(body)}catch{}const a=j?flightStatsApiTimes(j):null;row.times=a&&Object.keys(a).length?a:null}
-      if(r.ok&&kind==="details"){const d=flightStatsDetails(strip(body));row.times=d&&Object.keys(d).length?d:null}
+      if(r.ok&&kind==="details"){const text=strip(body),d=flightStatsDetails(text);row.times=d&&Object.keys(d).length?d:null;if(debug){row.snippets=[];for(const m of text.matchAll(/Flight (?:Gate|Runway) Times/g)){if(row.snippets.length<6)row.snippets.push(text.slice(Math.max(0,m.index-40),m.index+360))}}}
       if(r.ok&&kind==="tracker"){const m=/flight-details[^"'\s<>]*flightId=(\d+)/.exec(body);row.flightIdFound=m?m[1]:null}
       out[kind]=row;
     }catch(e){out[kind]={error:String(e?.message||e)}}
