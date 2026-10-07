@@ -15,11 +15,14 @@ const PARIS_ACTION_ID='7f2b5707695319793ef531cc73cda81f07a468044d';
 const PARIS_ACTION_ARG='waErdTysKIkpSE7aKcP8+I7cEBLJaP63u+ScRCAxE9E2JC2UAseQ5LM3YMgI+1pKG0nP1eGKiEFB1d7xTx9nl44u9iw0SzrWKsyD3w+/5Pp95Icd88EgjQSNDr0jxRxOmCOWacNI8w9NQXsXQoslAy3A486OBzXCMs+efnF+RR0tJj3wNLkaeJsqFe+TCyaWG4xYoAGQCw==';
 const TREE='%5B%22%22%2C%7B%22children%22%3A%5B%5B%22lang%22%2C%22fr%22%2C%22d%22%5D%2C%7B%22children%22%3A%5B%5B%22segments%22%2C%22passagers%2Fvols%2Ftous-les-vols-depart%22%2C%22oc%22%5D%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D';
 export function parseParisRows(body){const line=String(body||'').split('\n').find(l=>l.startsWith('1:['));if(!line)return [];try{const rows=JSON.parse(line.slice(2));return Array.isArray(rows)?rows:[]}catch{return []}}
+// Désactivé par défaut : Paris Aéroport répond « Pardon Our Interruption » (protection anti-robot) aux appels hors navigateur.
+// Pas de contournement ; réactivable avec PARIS_STRUCTURED=1 si le site lève un jour la protection.
 async function fetchStructured(env){
+  if(clean(env?.PARIS_STRUCTURED)!=='1')return {rows:[],error:'DISABLED_BOT_PROTECTION'};
   const c=new AbortController(),t=setTimeout(()=>c.abort(),12000);
   try{const fd=new FormData();fd.append('1',JSON.stringify(clean(env?.PARIS_ACTION_ARG)||PARIS_ACTION_ARG));fd.append('0',JSON.stringify(['$@1','dep','$D'+new Date().toISOString(),'CDG-ORY','','','']));
     const r=await fetch(PARIS_PAGE,{method:'POST',body:fd,signal:c.signal,headers:{accept:'text/x-component','next-action':clean(env?.PARIS_ACTION_ID)||PARIS_ACTION_ID,'next-router-state-tree':TREE,origin:'https://www.parisaeroport.fr',referer:PARIS_PAGE,'accept-language':'fr-FR,fr;q=0.9'}});
-    if(!r.ok)return {rows:[],error:'HTTP_'+r.status};const body=await r.text(),rows=parseParisRows(body);return {rows,error:rows.length?'':'NO_ROWS',debug:rows.length?undefined:{status:r.status,type:r.headers.get('content-type')||'',length:body.length,head:body.slice(0,400),lines:body.split('\n').slice(0,6).map(l=>l.slice(0,60))}}}
+    if(!r.ok)return {rows:[],error:'HTTP_'+r.status};const body=await r.text(),rows=parseParisRows(body);return {rows,error:rows.length?'':(/Pardon Our Interruption/i.test(body)?'BOT_PROTECTION':'NO_ROWS'),debug:rows.length?undefined:{status:r.status,type:r.headers.get('content-type')||'',length:body.length,head:body.slice(0,400),lines:body.split('\n').slice(0,6).map(l=>l.slice(0,60))}}}
   catch(e){return {rows:[],error:String(e?.name||e?.message||e)}}finally{clearTimeout(t)}
 }
 export function structuredIndex(rows,date){const idx=new Map();for(const r of rows){if(upper(r?.departureIataCode)!=='CDG'||clean(r.departureDate)!==date)continue;const arr=upper(r.arrivalIataCode);for(const n of [r.displayFlightNumber,...(r.codeShares||[]).map(c=>c.displayFlightNumber)]){const k=upper(n).replace(/\s+/g,'');if(k&&!idx.has(k+'|'+arr))idx.set(k+'|'+arr,r)}}return idx}
