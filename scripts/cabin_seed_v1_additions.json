@@ -1,0 +1,974 @@
+{
+ "_comment": "Plans cabine de la V1 (archive-seeds) absents du seed V2 ; ajoutés à D1 une seule fois par le passage de synchronisation (v2-cabin-bootstrap-wrapper).",
+ "deleteKeys": [
+  "NH|789|48C21E160Y"
+ ],
+ "configs": [
+  {
+   "configKey": "A9|73W|12C121Y",
+   "airline": "A9",
+   "aircraft": "73W",
+   "configuration": "12C121Y",
+   "label": "A9 73W · 12C121Y",
+   "sourceLabel": "A9 73W 12C121Y seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 12,
+    "Y": 121
+   },
+   "operationalTotal": 133,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 3,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 4,
+     "row_end": 25,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP\n25=AC|"
+    }
+   ]
+  },
+  {
+   "configKey": "A9|73W|12C129Y",
+   "airline": "A9",
+   "aircraft": "73W",
+   "configuration": "12C129Y",
+   "label": "A9 73W · 12C129Y",
+   "sourceLabel": "A9 73W 12C129Y seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 12,
+    "Y": 129
+   },
+   "operationalTotal": 141,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 3,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 4,
+     "row_end": 26,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP\n26=ABC|"
+    }
+   ]
+  },
+  {
+   "configKey": "SK|738|189M",
+   "airline": "SK",
+   "aircraft": "738",
+   "configuration": "189M",
+   "label": "SK 738 · 189M",
+   "sourceLabel": "SK 738 seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "M": 189
+   },
+   "operationalTotal": 189,
+   "zones": [
+    {
+     "class": "M",
+     "row_start": 1,
+     "row_end": 33,
+     "pattern": "ABC|DEF",
+     "exceptions": "33=ABC|"
+    }
+   ]
+  },
+  {
+   "configKey": "SK|CR9|88M",
+   "airline": "SK",
+   "aircraft": "CR9",
+   "configuration": "88M",
+   "label": "SK CR9 · 88M",
+   "sourceLabel": "SAS seat map SK567 ARN-CDG 25SEP2026",
+   "quality": "official",
+   "operationalClasses": {
+    "M": 88
+   },
+   "operationalTotal": 88,
+   "zones": [
+    {
+     "class": "M",
+     "row_start": 1,
+     "row_end": 12,
+     "pattern": "AC|DF",
+     "exceptions": "1=AC|"
+    },
+    {
+     "class": "M",
+     "row_start": 14,
+     "row_end": 23,
+     "pattern": "AC|DF",
+     "exceptions": "19=AB|DF\n23=AC|"
+    }
+   ]
+  },
+  {
+   "configKey": "SK|CR9|90M",
+   "airline": "SK",
+   "aircraft": "CR9",
+   "configuration": "90M",
+   "label": "SK CR9 · 90M",
+   "sourceLabel": "SAS seat map SK565 CPH-CDG 25SEP2026",
+   "quality": "official",
+   "operationalClasses": {
+    "M": 90
+   },
+   "operationalTotal": 90,
+   "zones": [
+    {
+     "class": "M",
+     "row_start": 1,
+     "row_end": 12,
+     "pattern": "AC|DF",
+     "exceptions": "1=AC|"
+    },
+    {
+     "class": "M",
+     "row_start": 14,
+     "row_end": 24,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "AH|7M8|186Y",
+   "airline": "AH",
+   "aircraft": "7M8",
+   "configuration": "186Y",
+   "label": "AH 7M8 · 186Y",
+   "sourceLabel": "AH 7M8 seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 186
+   },
+   "operationalTotal": 186,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 32,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "AH|737|19C96Y",
+   "airline": "AH",
+   "aircraft": "737",
+   "configuration": "19C96Y",
+   "label": "AH 737 · 19C96Y",
+   "sourceLabel": "AH 737 19C96Y seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 19,
+    "Y": 96
+   },
+   "operationalTotal": 115,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 5,
+     "pattern": "AC|DF",
+     "exceptions": "5=C|DF"
+    },
+    {
+     "class": "Y",
+     "row_start": 6,
+     "row_end": 22,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "CTM|332|16F262Y",
+   "airline": "CTM",
+   "aircraft": "332",
+   "configuration": "16F262Y",
+   "label": "CTM 332 · 16F262Y",
+   "sourceLabel": "CTM21 29SEP CDG-MAD Generic Report (SEAT MAP CTM21 CABIN F)",
+   "quality": "exact",
+   "operationalClasses": {
+    "F": 16,
+    "Y": 262
+   },
+   "operationalTotal": 278,
+   "zones": [
+    {
+     "class": "F",
+     "row_start": 1,
+     "row_end": 4,
+     "pattern": "A|DE|K",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 5,
+     "row_end": 40,
+     "pattern": "AC|DEFG|JK",
+     "exceptions": "13=SKIP\n24=AC||JK\n25=|DEFG|\n35=AC|DEF|JK\n36=AC|DEF|JK\n37=AC|DEF|JK\n38=AC|DEF|JK\n39=AC|DEF|JK\n40=|DEF|"
+    }
+   ]
+  },
+  {
+   "configKey": "CTM|332|280Y",
+   "airline": "CTM",
+   "aircraft": "332",
+   "configuration": "280Y",
+   "label": "CTM 332 · 280Y",
+   "sourceLabel": "CTM21 25SEP CDG-XXX Generic Report (SEAT MAP CTM21 CABIN Y)",
+   "quality": "exact",
+   "operationalClasses": {
+    "Y": 280
+   },
+   "operationalTotal": 280,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 38,
+     "pattern": "AC|DEFG|JK",
+     "exceptions": "13=SKIP\n26=AC||JK\n27=AC||JK\n35=AC|DEF|JK\n36=AC|DEF|JK\n37=AC|DEF|JK\n38=|DEF|"
+    }
+   ]
+  },
+  {
+   "configKey": "DE|32B|8C203M",
+   "airline": "DE",
+   "aircraft": "32B",
+   "configuration": "8C203M",
+   "label": "DE 32B · 8C203M",
+   "sourceLabel": "DE4214 22SEP CDG-FRA Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 8,
+    "M": 203
+   },
+   "operationalTotal": 211,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 2,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 3,
+     "row_end": 39,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP\n17=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "DE|32Q|16Y209M",
+   "airline": "DE",
+   "aircraft": "32Q",
+   "configuration": "16Y209M",
+   "label": "DE 32Q · 16Y209M",
+   "sourceLabel": "DE1594 22SEP FRA-RHO Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "Y": 16,
+    "M": 209
+   },
+   "operationalTotal": 225,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 4,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 5,
+     "row_end": 39,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "DE|320|8C168M",
+   "airline": "DE",
+   "aircraft": "320",
+   "configuration": "8C168M",
+   "label": "DE 320 · 8C168M",
+   "sourceLabel": "DE4264 23SEP CDG-FRA Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 8,
+    "M": 168
+   },
+   "operationalTotal": 176,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 2,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 3,
+     "row_end": 30,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "DE|32N|4C174M",
+   "airline": "DE",
+   "aircraft": "32N",
+   "configuration": "4C174M",
+   "label": "DE 32N · 4C174M",
+   "sourceLabel": "DE4187 22SEP FRA-FCO Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 4,
+    "M": 174
+   },
+   "operationalTotal": 178,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 1,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 2,
+     "row_end": 30,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "SK|73H|22C156M",
+   "airline": "SK",
+   "aircraft": "73H",
+   "configuration": "22C156M",
+   "label": "SK 73H · 22C156M",
+   "sourceLabel": "SK560 27SEP CDG-CPH Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 22,
+    "M": 156
+   },
+   "operationalTotal": 178,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 6,
+     "pattern": "AC|DF",
+     "exceptions": "1=AC|"
+    },
+    {
+     "class": "M",
+     "row_start": 7,
+     "row_end": 32,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "SK|E95|18C104M",
+   "airline": "SK",
+   "aircraft": "E95",
+   "configuration": "18C104M",
+   "label": "SK E95 · 18C104M",
+   "sourceLabel": "SK564 24SEP CDG-CPH Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 18,
+    "M": 104
+   },
+   "operationalTotal": 122,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 5,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 6,
+     "row_end": 32,
+     "pattern": "AC|DF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "SK|319|8C138M",
+   "airline": "SK",
+   "aircraft": "319",
+   "configuration": "8C138M",
+   "label": "SK 319 · 8C138M",
+   "sourceLabel": "SK568 22SEP CDG-CPH Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 8,
+    "M": 138
+   },
+   "operationalTotal": 146,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 2,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 3,
+     "row_end": 26,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "SK|320|16C156M",
+   "airline": "SK",
+   "aircraft": "320",
+   "configuration": "16C156M",
+   "label": "SK 320 · 16C156M",
+   "sourceLabel": "SK560 22SEP CDG-CPH Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 16,
+    "M": 156
+   },
+   "operationalTotal": 172,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 4,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 5,
+     "row_end": 30,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    }
+   ]
+  },
+  {
+   "configKey": "SK|32N|12C162M",
+   "airline": "SK",
+   "aircraft": "32N",
+   "configuration": "12C162M",
+   "label": "SK 32N · 12C162M",
+   "sourceLabel": "SK574 22SEP CDG-ARN Generic Report — reference cabin; capacity remains manually adjustable",
+   "quality": "exact",
+   "operationalClasses": {
+    "C": 12,
+    "M": 162
+   },
+   "operationalTotal": 174,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 3,
+     "pattern": "ABC|DEF",
+     "exceptions": ""
+    },
+    {
+     "class": "M",
+     "row_start": 4,
+     "row_end": 31,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "EY|388|2R9F70J415Y",
+   "airline": "EY",
+   "aircraft": "388",
+   "configuration": "2R9F70J415Y",
+   "label": "EY 388 · 2R9F70J415Y",
+   "sourceLabel": "EY019 25SEP AUH-LHR (SEAT MAP EY019, transcription texte) — plan à vérifier vs PDF d'origine : rangs dessinés R2 F8 J68 Y450 vs capacité 2R 9F 70J 415Y",
+   "quality": "summary",
+   "operationalClasses": {
+    "R": 2,
+    "F": 9,
+    "J": 70,
+    "Y": 415
+   },
+   "operationalTotal": 496,
+   "zones": [
+    {
+     "class": "R",
+     "deck": "UPPER",
+     "row_start": 1,
+     "row_end": 1,
+     "pattern": "A|CH|K",
+     "exceptions": "1=A||K"
+    },
+    {
+     "class": "F",
+     "deck": "UPPER",
+     "row_start": 2,
+     "row_end": 5,
+     "pattern": "A|CH|K",
+     "exceptions": "2=|CH|\n3=A||K\n4=|CH|\n5=A||K"
+    },
+    {
+     "class": "J",
+     "deck": "UPPER",
+     "row_start": 8,
+     "row_end": 26,
+     "pattern": "A|DG|K",
+     "exceptions": "8=A||K\n9=C|EF|H\n10=A|DG|K\n11=C|EF|H\n12=A|DG|K\n13=SKIP\n14=C|EF|H\n15=A|DG|K\n16=C|EF|H\n17=A|DG|K\n18=C|EF|H\n19=A|DG|K\n20=C|EF|H\n21=A|DG|K\n22=C|EF|H\n23=A|DG|K\n24=C|EF|H\n25=A|DG|K\n26=C||H"
+    },
+    {
+     "class": "Y",
+     "deck": "MAIN",
+     "row_start": 40,
+     "row_end": 88,
+     "pattern": "ABC|DEFG|HJK",
+     "exceptions": "40=|DEFG|\n53=ABC||HJK\n54=|DEFG|\n67=ABC||HJK\n68=|DEFG|\n80=ABC||HJK\n81=|DEFG|\n87=AC|DEFG|HK\n88=AC|DEFG|HK"
+    }
+   ]
+  },
+  {
+   "configKey": "IZ|332|20J17W219Y",
+   "airline": "IZ",
+   "aircraft": "332",
+   "configuration": "20J17W219Y",
+   "label": "IZ 332 · 20J17W219Y",
+   "sourceLabel": "IZ A330-200 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "J": 20,
+    "W": 17,
+    "Y": 219
+   },
+   "operationalTotal": 256,
+   "zones": [
+    {
+     "class": "J",
+     "row_start": 1,
+     "row_end": 5,
+     "pattern": "A|DG|K",
+     "exceptions": ""
+    },
+    {
+     "class": "W",
+     "row_start": 8,
+     "row_end": 10,
+     "pattern": "AC|DEG|HK",
+     "exceptions": "10=|DEG|"
+    },
+    {
+     "class": "Y",
+     "row_start": 11,
+     "row_end": 43,
+     "pattern": "AC|DEFG|HK",
+     "exceptions": "13=SKIP\n25=SKIP\n26=SKIP\n27=SKIP\n28=AC||HK\n29=|DEFG|\n42=|DEFG|\n43=|DEFG|"
+    }
+   ]
+  },
+  {
+   "configKey": "IZ|332|18J32W218Y",
+   "airline": "IZ",
+   "aircraft": "332",
+   "configuration": "18J32W218Y",
+   "label": "IZ 332 · 18J32W218Y",
+   "sourceLabel": "IZ A330-200 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "J": 18,
+    "W": 32,
+    "Y": 218
+   },
+   "operationalTotal": 268,
+   "zones": [
+    {
+     "class": "J",
+     "row_start": 1,
+     "row_end": 3,
+     "pattern": "AC|DG|HK",
+     "exceptions": ""
+    },
+    {
+     "class": "W",
+     "row_start": 6,
+     "row_end": 9,
+     "pattern": "AC|DEFG|HK",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 10,
+     "row_end": 43,
+     "pattern": "AC|DEFG|HK",
+     "exceptions": "13=SKIP\n25=SKIP\n26=SKIP\n27=SKIP\n28=AC||HK\n29=|DEFG|\n42=|DEFG|\n43=|DEFG|"
+    }
+   ]
+  },
+  {
+   "configKey": "IZ|E95|122Y",
+   "airline": "IZ",
+   "aircraft": "E95",
+   "configuration": "122Y",
+   "label": "IZ E95 · 122Y",
+   "sourceLabel": "IZ E195 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 122
+   },
+   "operationalTotal": 122,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 32,
+     "pattern": "AC|DF",
+     "exceptions": "1=AC|\n13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "IZ|320|180Y",
+   "airline": "IZ",
+   "aircraft": "320",
+   "configuration": "180Y",
+   "label": "IZ 320 · 180Y",
+   "sourceLabel": "IZ A320 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 180
+   },
+   "operationalTotal": 180,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 31,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "JU|320|180Y",
+   "airline": "JU",
+   "aircraft": "320",
+   "configuration": "180Y",
+   "label": "JU 320 · 180Y",
+   "sourceLabel": "JU A320 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 180
+   },
+   "operationalTotal": 180,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 31,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "JU|319|144Y",
+   "airline": "JU",
+   "aircraft": "319",
+   "configuration": "144Y",
+   "label": "JU 319 · 144Y",
+   "sourceLabel": "JU A319 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 144
+   },
+   "operationalTotal": 144,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 25,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "JU|223|149Y",
+   "airline": "JU",
+   "aircraft": "223",
+   "configuration": "149Y",
+   "label": "JU 223 · 149Y",
+   "sourceLabel": "JU A220-300 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 149
+   },
+   "operationalTotal": 149,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 31,
+     "pattern": "AC|DEF",
+     "exceptions": "1=AC|\n13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "LA|789|30J273Y",
+   "airline": "LA",
+   "aircraft": "789",
+   "configuration": "30J273Y",
+   "label": "LA 789 · 30J273Y",
+   "sourceLabel": "LA 789 seatmap 30J273Y",
+   "quality": "good",
+   "operationalClasses": {
+    "J": 30,
+    "Y": 273
+   },
+   "operationalTotal": 303,
+   "zones": [
+    {
+     "class": "J",
+     "row_start": 1,
+     "row_end": 8,
+     "pattern": "A|DH|L",
+     "exceptions": "1=A||L\n2=C|EF|J\n4=C|EF|J\n6=C|EF|J\n8=C|EF|J"
+    },
+    {
+     "class": "Y",
+     "row_start": 12,
+     "row_end": 43,
+     "pattern": "ACD|EFH|JKL",
+     "exceptions": "27=ACD||JKL\n28=ACD||JKL\n29=|EFH|\n42=AD|EFH|JL\n43=|EFH|"
+    }
+   ]
+  },
+  {
+   "configKey": "LA|789|30J277Y",
+   "airline": "LA",
+   "aircraft": "789",
+   "configuration": "30J277Y",
+   "label": "LA 789 · 30J277Y",
+   "sourceLabel": "LA 789 seatmap 30J277Y",
+   "quality": "good",
+   "operationalClasses": {
+    "J": 30,
+    "Y": 277
+   },
+   "operationalTotal": 307,
+   "zones": [
+    {
+     "class": "J",
+     "row_start": 1,
+     "row_end": 5,
+     "pattern": "AC|DH|JL",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 12,
+     "row_end": 44,
+     "pattern": "ACD|EFH|JKL",
+     "exceptions": "27=ACD||JKL\n28=ACD||JKL\n29=|EFH|\n43=AD|EFH|JL\n44=|EFH|"
+    }
+   ]
+  },
+  {
+   "configKey": "LY|738|16C150Y",
+   "airline": "LY",
+   "aircraft": "738",
+   "configuration": "16C150Y",
+   "label": "LY 738 · 16C150Y",
+   "sourceLabel": "LY 738 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 16,
+    "Y": 150
+   },
+   "operationalTotal": 166,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 4,
+     "pattern": "AC|DF",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 10,
+     "row_end": 34,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "LS|32Q|232Y",
+   "airline": "LS",
+   "aircraft": "32Q",
+   "configuration": "232Y",
+   "label": "LS 32Q · 232Y",
+   "sourceLabel": "LS 32Q seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 232
+   },
+   "operationalTotal": 232,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 40,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "LS|738|189Y",
+   "airline": "LS",
+   "aircraft": "738",
+   "configuration": "189Y",
+   "label": "LS 738 · 189Y",
+   "sourceLabel": "LS 738 seatmap",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 189
+   },
+   "operationalTotal": 189,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 33,
+     "pattern": "ABC|DEF",
+     "exceptions": "33=ABC|"
+    }
+   ]
+  },
+  {
+   "configKey": "SM|32N|180Y",
+   "airline": "SM",
+   "aircraft": "32N",
+   "configuration": "180Y",
+   "label": "SM 32N · 180Y",
+   "sourceLabel": "SM 32N 180Y seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 180
+   },
+   "operationalTotal": 180,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 31,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "SM|32N|186Y",
+   "airline": "SM",
+   "aircraft": "32N",
+   "configuration": "186Y",
+   "label": "SM 32N · 186Y",
+   "sourceLabel": "SM 32N 186Y seat map 25SEP",
+   "quality": "good",
+   "operationalClasses": {
+    "Y": 186
+   },
+   "operationalTotal": 186,
+   "zones": [
+    {
+     "class": "Y",
+     "row_start": 1,
+     "row_end": 32,
+     "pattern": "ABC|DEF",
+     "exceptions": "13=SKIP"
+    }
+   ]
+  },
+  {
+   "configKey": "NH|789|48C21E146Y",
+   "airline": "NH",
+   "aircraft": "789",
+   "configuration": "48C21E146Y",
+   "label": "NH 789 · 48C21E146Y",
+   "sourceLabel": "NH 789 seat map 25SEP - capacite operationnelle corrigee utilisateur",
+   "quality": "good",
+   "operationalClasses": {
+    "C": 48,
+    "E": 21,
+    "Y": 146
+   },
+   "operationalTotal": 215,
+   "zones": [
+    {
+     "class": "C",
+     "row_start": 1,
+     "row_end": 13,
+     "pattern": "A|DG|K",
+     "exceptions": "1=A||K\n2=C|EF|H\n4=C|EF|H\n6=C|EF|H\n8=C|EF|H\n10=C|EF|H\n12=C|EF|H\n13=A||K"
+    },
+    {
+     "class": "E",
+     "row_start": 15,
+     "row_end": 17,
+     "pattern": "AC|DFG|HK",
+     "exceptions": ""
+    },
+    {
+     "class": "Y",
+     "row_start": 20,
+     "row_end": 39,
+     "pattern": "ABC|DFG|HJK",
+     "exceptions": "27=ABC||HJK\n28=ABC||HJK\n29=|DFG|\n38=AC|DFG|HK\n39=|DFG|"
+    }
+   ]
+  }
+ ]
+}

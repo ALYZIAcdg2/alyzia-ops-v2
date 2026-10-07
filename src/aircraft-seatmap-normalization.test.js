@@ -33,3 +33,8 @@ test("browser conversion source matches the server conversion",async()=>{
   for(const v of ["A332","B789","Airbus A350-900","Boeing 777-300ER","A21N","738","73H","","N32","Airbus A220-300","unknown"])assert.equal(client.toIata(v),toIata(v),v);
   for(const v of ["738","772","32Q","359","","321"])assert.deepEqual(client.configCodes(v),configCodes(v),v);
 });
+import {configCodes as __configCodes} from "./aircraft-change.js";
+test("TK : 738 et 7M8 retrouvent le plan 78D, 7M9 le plan 79D",()=>{
+  assert.ok(__configCodes("738").includes("78D"));assert.ok(__configCodes("7M8").includes("78D"));assert.ok(__configCodes("7M9").includes("79D"));
+  assert.ok(__configCodes("78D").includes("7M8"));
+});

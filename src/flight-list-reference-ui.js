@@ -56,7 +56,7 @@ body:has(#app .home-page){background:#edf4fa!important}
 #app .ops-route-fill{width:calc(15px + (100% - 30px)*var(--p));background:#2f86e6;transition:width .8s ease}
 #app .ops-route-line.static .ops-route-fill{display:none}
 #app .ops-plane-note{position:absolute;top:32px;left:clamp(72px,calc(15px + (100% - 30px)*var(--p)),calc(100% - 72px));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;font-size:12px;line-height:1.3;font-weight:700;color:#3d5f86;white-space:nowrap;pointer-events:none}
-#app .ops-airport-meta{flex-wrap:wrap;row-gap:2px}#app .ops-local{display:inline-flex;align-items:baseline;gap:3px;margin-left:0;font-size:10px;font-weight:800;color:#5b6f86;letter-spacing:.1px;vertical-align:middle}#app .ops-local b{font-weight:900;font-variant-numeric:tabular-nums}#app .ops-local small{font-size:8.5px;font-weight:800;color:#8093a8}
+#app .ops-airport-meta{flex-wrap:wrap;row-gap:2px}#app .ops-airport-meta{flex-wrap:nowrap}#app .ops-local{display:inline-flex;flex:0 0 auto;min-width:58px;white-space:nowrap;align-items:baseline;gap:3px;margin-left:0;font-size:10px;font-weight:800;color:#5b6f86;letter-spacing:.1px;vertical-align:middle}#app .ops-local b{font-weight:900;font-variant-numeric:tabular-nums}#app .ops-local small{font-size:8.5px;font-weight:800;color:#8093a8}
 #app .ops-live{display:inline-flex;align-items:center;gap:5px;margin-top:5px;padding:2px 9px 2px 7px;border-radius:999px;background:#e5f7ec;color:#0a7a3d;font-size:9.5px;font-weight:950;letter-spacing:.5px}#app .ops-live i{width:7px;height:7px;border-radius:50%;background:#12b04f;box-shadow:0 0 0 0 rgba(18,176,79,.6);animation:opsLivePulse 1.3s infinite}@keyframes opsLivePulse{0%{box-shadow:0 0 0 0 rgba(18,176,79,.55);opacity:1}70%{box-shadow:0 0 0 7px rgba(18,176,79,0);opacity:.45}100%{box-shadow:0 0 0 0 rgba(18,176,79,0);opacity:1}}
 #app .ops-route-line.plane-ok .ops-plane-icon{color:#12a150}#app .ops-route-line.plane-late .ops-plane-icon{color:#d93025}
 #app .ops-plane-icon{position:absolute;left:calc(15px + (100% - 30px)*var(--p));top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;fill:currentColor;background:#fff;border-radius:50%;transition:left .8s ease}
@@ -235,7 +235,7 @@ function opsSyncConfigToType(x){
 }
 function opsLocal(code){let t='',g='';try{t=typeof liveFor==='function'?liveFor(up(code)):'';g=typeof gmtLabel==='function'?gmtLabel(up(code)):''}catch{}return t?'<span class="ops-local" title="Heure locale '+esc(code)+'"><b data-v2x-clock="'+esc(up(code))+'">'+esc(t)+'</b>'+(g?'<small>'+esc(g)+'</small>':'')+'</span>':''}
 // LIVE : ATD inscrit, ou ATD manquant et décollage inscrit ; tant que le vol n'a ni atterri ni son ATA.
-function opsIsLive(t){return Boolean(t.atd||t.takeoff)&&!(t.ata||t.landing)}
+function opsIsLive(t){return Boolean(t.atd||t.takeoff||t.landing)&&!t.ata}
 // Avion vert si l'ETA est avant ou égale à la STA, rouge si elle est après.
 function opsPlaneTone(t){const m=v=>{const q=clock(v);if(!q)return null;const [h,n]=q.split(':').map(Number);return h*60+n},s=m(t.sta),e=m(t.eta);if(s==null||e==null)return '';let d=(e+(Number(t.etaDay)||0)*1440)-(s+(Number(t.staDay)||0)*1440);if(d>720)d-=1440;if(d<-720)d+=1440;return d>0?' plane-late':' plane-ok'}
 const opsPlane='<svg class="ops-plane-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 12-7-4V3a2 2 0 0 0-4 0v5l-7 4v2l7-2v5l-2 2v2l4-1 4 1v-2l-2-2v-5l7 2z" transform="rotate(90 12 12)"/></svg>';
