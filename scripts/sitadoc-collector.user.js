@@ -13,6 +13,7 @@
 // l'immatriculation, le type, le parc, la porte et le nombre de passagers de nos vols : aucun message n'est lu ni transmis.
 (function(){
   "use strict";
+  try{console.log("[Alyzia] collecteur Sitadoc v1.1 chargé sur",location.pathname)}catch(e){}
   var WORKER="https://alyzia-ops-v2.alyzia-cdg2.workers.dev/api/v2/sitadoc/departures";
   var TOKEN="COLLER_ICI_LE_JETON";
   var EVERY_MS=120000;
