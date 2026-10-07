@@ -6,8 +6,8 @@ const URL_DEP="https://gatenavo.com/en/airports/paris-cdg/departures";
 const today=()=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 export function parseGatenavoFlights(html){
   const t=String(html||"").replace(/\\"/g,'"'),out=[],seen=new Set();
-  for(const m of t.matchAll(/\{"id":"(cdg-d-[^"]+)"[^{}]*?"status":"([a-z_]+)"[^{}]*?"rawStatus":"([^"]*)"[^{}]*?"flightNumber":"([A-Z0-9]+)"[^{}]*?"scheduledTime":"([^"]*)"/g)){
-    if(seen.has(m[1]))continue;seen.add(m[1]);out.push({id:m[1],status:m[2],raw:m[3],flight:m[4],scheduled:m[5]})}
+  for(const m of t.matchAll(/\{"id":"(cdg-d-[^"]+)"[^{}]*?"status":"([a-z_]+)"[^{}]*?"rawStatus":"([^"]*)"[^{}]*?"flightNumber":"([A-Z0-9]+)"[^{}]*?"scheduledTime":"([^"]*)"(?:[^{}]*?"sourceFetchedAt":"([^"]*)")?/g)){
+    if(seen.has(m[1]))continue;seen.add(m[1]);out.push({id:m[1],status:m[2],raw:m[3],flight:m[4],scheduled:m[5],fetchedAt:m[6]||""})}
   return out;
 }
 export async function probeGatenavo(env){
@@ -28,3 +28,15 @@ export async function probeGatenavo(env){
     out.ourFlights=results.length;out.matchedOurs=matched}
   return out;
 }
+
+// Lecture des vols pour le flux de statut : null si la page est inaccessible, protégée ou sans vol.
+export async function fetchGatenavoRows(){
+  const c=new AbortController(),timer=setTimeout(()=>c.abort(),10000);
+  try{const r=await fetch(URL_DEP,{signal:c.signal,headers:{accept:"text/html","accept-language":"fr-FR,fr;q=0.9,en;q=0.7","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-Probe/1.0)"}});
+    if(!r.ok)return {rows:[],error:"HTTP_"+r.status};const html=await r.text();
+    if(/Pardon Our Interruption|Just a moment|cf-chl|Attention Required/i.test(html))return {rows:[],error:"BOT_PROTECTION"};
+    const rows=parseGatenavoFlights(html);return {rows,error:rows.length?"":"NO_ROWS"}}
+  catch(e){return {rows:[],error:String(e?.name||e?.message||e)}}finally{clearTimeout(timer)}
+}
+// Statut Paris Aéroport relayé par Gatenavo -> phase. Les autres statuts (programmé, retardé, décollé…) ne produisent aucune phase.
+export function gatenavoPhase(status){return status==="boarding"?"EMBARQUEMENT":status==="gate_closed"?"EMBARQUEMENT CLOS":status==="cancelled"?"ANNULÉ":""}
