@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alyzia · collecteur Sitadoc « Vols Départ »
 // @namespace    alyzia-ops
-// @version      1.0
+// @version      1.1
 // @description  Lit le tableau « Vols Départ » de Sitadoc CDG toutes les 2 minutes et envoie les heures (ATD, décollage, ETD) à Alyzia Ops.
 // @match        http://sitadoc-cdg/sitadoc/intranet/voltvm.php*
 // @grant        GM_xmlhttpRequest
@@ -38,12 +38,29 @@
     return out;
   }
 
+  // Pastille en bas à droite de la page : dit en clair ce que fait le script (utile quand la console n'est pas ouverte).
+  function badge(text,ok){
+    try{
+      var b=document.getElementById("alyzia-collector");
+      if(!b){b=document.createElement("div");b.id="alyzia-collector";b.style.cssText="position:fixed;right:8px;bottom:8px;z-index:99999;padding:5px 9px;font:bold 11px Arial,sans-serif;border-radius:6px;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4)";document.body.appendChild(b)}
+      b.style.background=ok===true?"#12803f":ok===false?"#c4283a":"#5b6f86";
+      var d=new Date(),h=("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);b.textContent="Alyzia · "+text+" · "+h;
+    }catch(e){}
+  }
+
   function send(){
-    var rows=collect(document);if(!rows.length)return;
+    var rows=[];try{rows=collect(document)}catch(e){badge("lecture du tableau impossible",false);console.warn("[Alyzia] lecture du tableau impossible",e);return}
+    console.log("[Alyzia] collecteur démarré :",rows.length,"vols lus dans le tableau");
+    if(!rows.length){badge("aucun vol lu dans le tableau",false);return}
+    if(!TOKEN||TOKEN==="COLLER_ICI_LE_JETON"){badge("jeton vide : à renseigner dans le script",false);console.warn("[Alyzia] jeton vide");return}
+    badge(rows.length+" vols lus, envoi…");
     GM_xmlhttpRequest({method:"POST",url:WORKER,headers:{"content-type":"application/json","x-sitadoc-token":TOKEN},data:JSON.stringify({rows:rows}),timeout:30000,
       onload:function(r){var j={};try{j=JSON.parse(r.responseText)}catch(e){}
-        console.log("[Alyzia] envoi",rows.length,"lignes ->",r.status,j.updated!=null?(j.updated+" vols mis à jour, "+j.unmatched+" non trouvés"):r.responseText.slice(0,120))},
-      onerror:function(){console.warn("[Alyzia] envoi impossible")},ontimeout:function(){console.warn("[Alyzia] délai dépassé")}});
+        var ok=r.status===200&&j.ok;
+        var msg=r.status===401?"refusé (401) : jeton différent du secret Cloudflare":ok?(j.updated+" mis à jour, "+j.unmatched+" non trouvés / "+rows.length):("réponse "+r.status);
+        console.log("[Alyzia] envoi",rows.length,"lignes ->",r.status,ok?(j.updated+" vols mis à jour, "+j.unmatched+" non trouvés"):r.responseText.slice(0,120));badge(msg,ok)},
+      onerror:function(){badge("envoi impossible (connexion refusée)",false);console.warn("[Alyzia] envoi impossible")},
+      ontimeout:function(){badge("délai dépassé",false);console.warn("[Alyzia] délai dépassé")}});
   }
 
   if(typeof document!=="undefined"&&typeof GM_xmlhttpRequest!=="undefined"){
