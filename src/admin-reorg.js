@@ -10,14 +10,16 @@ export const ADMIN_REORG_UI=String.raw`<style id="alyzia-admin-reorg-css">
 #app .adx-tools-panel>button{display:flex!important;align-items:center!important;justify-content:flex-start!important;width:100%!important;margin:0!important;height:auto!important;min-height:0!important;padding:12px 14px!important;border:1px solid #cfe0f3!important;border-radius:12px!important;background:#eef5fd!important;color:#1769c9!important;box-shadow:none!important;font-family:inherit!important;font-size:14px!important;font-weight:900!important;line-height:1.2!important;letter-spacing:.3px!important;text-transform:uppercase!important;text-align:left!important;white-space:nowrap!important}
 #app .adx-tools-panel>button:hover{background:#e1eefb!important}
 #app .adx-tools-panel small{display:block;margin:2px 4px 4px;font-size:10px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:#7890a6}
-#app .adx-health:not(.adx-health-copy){flex-wrap:nowrap;overflow-x:auto;align-items:center;gap:8px;padding-bottom:4px;scrollbar-width:thin}
-#app .adx-health:not(.adx-health-copy) .adx-h{flex:0 0 auto;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
-#app .adx-health:not(.adx-health-copy) .adx-h::before{content:"";width:9px;height:9px;border-radius:50%;background:#9db0c4;flex:0 0 auto}
+#app .adx-health:not(.adx-health-copy){display:flex;flex-wrap:nowrap;overflow:hidden;align-items:center;gap:6px;margin:10px 0 12px;min-width:0}
+#app .adx-health:not(.adx-health-copy) .adx-h{position:relative;display:block;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 8px 5px 21px;font-size:10.5px!important;letter-spacing:0}
+#app .adx-health:not(.adx-health-copy) .adx-h::before{content:"";position:absolute;left:8px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;background:#9db0c4}
+#app .adx-health:not(.adx-health-copy) .adx-h.adx-date{flex:0 0 auto;padding-left:10px;background:#eef5fd;border-color:#cfe0f3}
+#app .adx-health:not(.adx-health-copy) .adx-h.adx-date::before{display:none}
 #app .adx-health .adx-h.adx-ok::before{background:#16a36a}#app .adx-health .adx-h.adx-warn::before{background:#e08a00}#app .adx-health .adx-h.adx-bad::before{background:#d3213f}
 #app .adx-health:not(.adx-health-copy):not(.adx-open) .adx-h small{display:none}
 #app .adx-health:not(.adx-health-copy).adx-open{flex-wrap:wrap;overflow:visible}
-#app .adx-health:not(.adx-health-copy).adx-open .adx-h{white-space:normal}
-#app .adx-health-toggle{flex:0 0 auto;border:1px solid #cfe0f3;background:#eef5fd;color:#1769c9;border-radius:10px;padding:6px 10px;font-size:11px;font-weight:900;letter-spacing:.3px;cursor:pointer;text-transform:uppercase}
+#app .adx-health:not(.adx-health-copy).adx-open .adx-h{white-space:normal;overflow:visible;text-overflow:clip;flex:0 1 auto}
+#app .adx-health-toggle{flex:0 0 auto;margin-left:auto;border:1px solid #cfe0f3;background:#eef5fd;color:#1769c9;border-radius:10px;padding:6px 10px;font-size:11px;font-weight:900;letter-spacing:.3px;cursor:pointer;text-transform:uppercase}
 #app .adx-tools-panel{max-width:calc(100vw - 24px)}
 @media(max-width:700px){#app .adn-v4-actions{justify-content:flex-start}}
 </style><script id="alyzia-admin-reorg-js">(()=>{'use strict';

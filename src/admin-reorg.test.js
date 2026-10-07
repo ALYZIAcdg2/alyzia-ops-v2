@@ -13,3 +13,9 @@ test("boutons du menu OUTILS : style uniforme imposé en ligne, bouton OUTILS au
   assert.match(ADMIN_REORG_UI,/getComputedStyle\(ref\)/);
   assert.doesNotMatch(ADMIN_REORG_UI,/font:900 14px\/1\.2 inherit/);   // raccourci invalide ignoré par le navigateur
 });
+
+test("pastilles de sources : une ligne, date du bilan = date du tableau, placées sous les cartes KPI",()=>{
+  assert.match(ADMIN_REORG_UI,/flex-wrap:nowrap;overflow:hidden/);       // une seule ligne
+  assert.match(ADMIN_REORG_UI,/text-overflow:ellipsis/);                 // jamais de retour à la ligne : « … » + détail dans l'infobulle / DÉTAIL
+  assert.match(ADMIN_REORG_UI,/adx-health-toggle/);                      // bouton DÉTAIL conservé
+});
