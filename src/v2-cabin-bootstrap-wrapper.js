@@ -3,6 +3,7 @@ import seedRows from "../scripts/cabin_seed.json";
 import seedOverrides from "../scripts/cabin_seed_overrides.json";
 import deleteKeysFile from "../scripts/cabin_seed_delete_keys.json";
 import seedV1Additions from "../scripts/cabin_seed_v1_additions.json";
+import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {syncSeedIntoD1} from "./cabin-seed-sync.js";
 
 let bootstrapPromise=null;
@@ -243,6 +244,11 @@ export default {
     if(url.pathname==="/api/v2/cabin/bootstrap"&&request.method==="POST"){
       try{return json(await bootstrapCabins(request.url,env,ctx,{force:url.searchParams.get("force")==="1"}))}
       catch(e){return json({ok:false,error:"V2_CABIN_BOOTSTRAP_EXCEPTION",detail:String(e?.message||e)},500)}
+    }
+
+    if(url.pathname==="/api/v2/cabin/auto-assign"&&request.method==="POST"){
+      try{return json(await syncCabinAfterAircraftChange(env))}
+      catch(e){return json({ok:false,error:"V2_CABIN_AUTO_EXCEPTION",detail:String(e?.message||e)},500)}
     }
 
     if(url.pathname==="/api/v2/cabin/sync"&&request.method==="POST"){
