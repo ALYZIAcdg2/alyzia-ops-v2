@@ -59,6 +59,7 @@ export function arrivedTooEarly(value,{date,std,sta,takeoff,originZone="Europe/P
   const dayUtc=Date.UTC(+m[1],+m[2]-1,+m[3]),oo=zoneOffsetMinutes(date,originZone),od=zoneOffsetMinutes(date,destZone);
   let block=(a-od)-(s-oo);while(block<=0)block+=1440;
   if(block<90)return false;
-  let flown=(v-od)-(d-oo);while(flown<=-720)flown+=1440;while(flown>720)flown-=1440;
+  // Temps de vol replié dans [-3 h ; 21 h[ : un vol de plus de 12 h (CDG-SIN 13 h) ne doit pas être ramené à une valeur négative.
+  let flown=(v-od)-(d-oo);while(flown<-180)flown+=1440;while(flown>=1260)flown-=1440;
   return flown<block*0.5;
 }
