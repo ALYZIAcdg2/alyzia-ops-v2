@@ -8,15 +8,18 @@ const mins=v=>{const m=/^(\d{1,2}):(\d{2})/.exec(clean(v));return m?Number(m[1])
 export function lastAttempt(x,source){const a=(x.publicLiveBackfill?.attempts||[]).filter(t=>t.source===source);const t=a[0]||a[a.length-1];return t?(t.status+(t.httpStatus?" "+t.httpStatus:"")):"jamais lu"}
 
 export function missingAtd(rows,{nowMs=Date.now(),fids=null,minLateMin=20}={}){
-  const now=parisMin(nowMs),out=[];
+  const now=parisMin(nowMs),out=[],notDeparted=[];
   for(const x of rows){
     const s=mins(x.std);if(s===null||clean(x.atd))continue;
     if(now-s<minLateMin||now-s>720)continue;
+    // Parti ? décollage, atterrissage ou ATA connus, ou statut EN VOL / ARRIVÉ. Un vol retardé qui attend encore au sol n'est pas un ATD manquant.
+    const departed=Boolean(clean(x.takeoff)||clean(x.landing)||clean(x.ata))||/^(EN VOL|ARRIV|ATTERR)/i.test(clean(x.status));
+    if(!departed){notDeparted.push(clean(x.flight));continue}
     const key=(clean(x.flight)||"")+"|"+clean(x.std).slice(0,5);
     out.push({flight:clean(x.flight),std:clean(x.std).slice(0,5),etd:clean(x.etd),takeoff:clean(x.takeoff),landing:clean(x.landing),ata:clean(x.ata),status:clean(x.status),
       fids:fids?.flights?.[key]||(fids?"absent de l'état":"?"),flightstats:lastAttempt(x,"FLIGHTSTATS"),flightaware:lastAttempt(x,"FLIGHTAWARE"),flightStatsId:/^\d+$/.test(clean(x.flightStatsId))});
   }
-  return out.sort((a,b)=>a.std.localeCompare(b.std));
+  out.sort((a,b)=>a.std.localeCompare(b.std));out.notDeparted=notDeparted;return out;
 }
 
 export async function missingAtdReport(env,{nowMs=Date.now(),date=""}={}){
@@ -26,5 +29,5 @@ export async function missingAtdReport(env,{nowMs=Date.now(),date=""}={}){
   const rows=results.map(r=>{try{return JSON.parse(r.data_json||"{}")}catch{return {}}});
   const fids=await loadFidsState(env).catch(()=>null);
   const list=missingAtd(rows,{nowMs,fids});
-  return {ok:true,mode:"MISSING_ATD_NO_WRITE",date:day,fidsReadAt:fids?.at||null,fidsStatus:fids?.status||null,count:list.length,flights:list};
+  return {ok:true,mode:"MISSING_ATD_NO_WRITE",date:day,fidsReadAt:fids?.at||null,fidsStatus:fids?.status||null,count:list.length,flights:list,delayedNotDeparted:list.notDeparted||[]};
 }
