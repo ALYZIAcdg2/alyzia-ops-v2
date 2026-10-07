@@ -118,6 +118,24 @@ function ensure(){const bar=document.querySelector('#app .v2x-d-actions');if(!ba
 new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
 })();</script>`;
 
+const REG_RESTORE_UI=String.raw`<script id="alyzia-reg-restore-js">(()=>{'use strict';
+// Bouton ADMIN : restaure les immatriculations perdues depuis le journal du tableau FR24 (aperçu, confirmation, application).
+function dateOf(){const v=document.getElementById('adminDateInput')?.value;return /^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:'';}
+async function run(btn){const msg=document.getElementById('adnPushMsg'),date=dateOf(),q=date?('?date='+encodeURIComponent(date)):'',old=btn.textContent;
+ const say=t=>{if(msg)msg.textContent=t;btn.title=t};
+ btn.disabled=true;btn.textContent='IMMAT…';
+ try{const r=await fetch('/api/admin/reg-restore'+q,{cache:'no-store'}),j=await r.json();if(!j?.ok)throw new Error(j?.error||('HTTP '+r.status));
+  if(!j.toRestore){say('Aucune immatriculation à restaurer ('+(j.date||date||'aujourd’hui')+')');return}
+  const list=(j.items||[]).slice(0,40).map(i=>i.flight+' → '+i.reg).join('\n')+((j.items||[]).length>40?'\n…':''),skip=(j.skipped||[]).length?('\n\nIgnorées (doublon proche) : '+(j.skipped||[]).map(s=>s.flight).join(', ')):'';
+  if(!window.confirm('Restaurer '+j.toRestore+' immatriculation(s) du '+j.date+' depuis le tableau FR24 ?\n\n'+list+skip))return say('Restauration annulée');
+  const r2=await fetch('/api/admin/reg-restore'+q,{method:'POST',cache:'no-store'}),k=await r2.json();if(!k?.ok)throw new Error(k?.error||('HTTP '+r2.status));
+  say('✓ IMMAT restaurées : '+(k.restored??0)+' · ignorées : '+((k.skipped||[]).length));
+  try{await window.renderAdminDashboard?.(true)}catch{}
+ }catch(e){say('ÉCHEC : '+(e?.message||e))}finally{btn.disabled=false;btn.textContent=old}}
+function ensure(){const push=document.getElementById('adminPushBtn');if(!push||document.getElementById('adminRegRestoreBtn'))return;const b=document.createElement('button');b.type='button';b.id='adminRegRestoreBtn';b.className=push.className;b.textContent='↺ IMMAT';b.title='Restaurer les immatriculations perdues (tableau FR24)';b.onclick=()=>run(b);push.insertAdjacentElement('afterend',b)}
+new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});ensure();
+})();</script>`;
+
 function stripStatusConflicts(html){return String(html||'')
  .replace(/<style id="alyzia-status-disabled-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-disabled-js">[\s\S]*?<\/script>/g,'')
@@ -127,7 +145,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+BOARDING_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+BOARDING_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+READ_ONE_UI+'\n'+BOARDING_UI+'\n'+REG_RESTORE_UI+'\n'+s.slice(i):s+PUSH_UI+READ_ONE_UI+BOARDING_UI+REG_RESTORE_UI}
 
 export default {
   async fetch(request,env,ctx){
