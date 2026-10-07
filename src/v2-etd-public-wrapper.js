@@ -18,6 +18,7 @@ import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {flightStatsStatus} from "./flightstats-status.js";
 import {probeFlightStats} from "./flightstats-probe.js";
+import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
 import {runFidsCompare} from "./fids-compare.js";
 import {runCabinConfigAudit} from "./cabin-config-audit.js";
@@ -130,6 +131,14 @@ export default {
     if(url.pathname==="/api/admin/flightstats-probe"&&request.method==="GET"){
       // Diagnostic à la demande : 1 à 3 requêtes FlightStats (page de suivi, API légère, page flight-details) pour voir laquelle répond depuis le Worker.
       try{return json(await probeFlightStats({airline:url.searchParams.get("airline")||"",number:url.searchParams.get("number")||"",date:url.searchParams.get("date")||"",flightId:url.searchParams.get("flightId")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/flightaware-status"&&request.method==="GET"){
+      // Lecture seule : lectures FlightAware du jour par vol (aucun appel FlightAware).
+      try{return json(await flightAwareStatus(env,{date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/flightaware-probe"&&request.method==="GET"){
+      // Diagnostic à la demande : 2 requêtes FlightAware (page du vol puis historique exact).
+      try{return json(await probeFlightAware({designator:url.searchParams.get("designator")||"",date:url.searchParams.get("date")||"",std:url.searchParams.get("std")||"",origin:url.searchParams.get("origin")||"CDG",destination:url.searchParams.get("destination")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/flightstats-status"&&request.method==="GET"){
       // Lecture seule : disjoncteurs FlightStats enregistrés + dernières lectures par vol du jour (aucun appel FlightStats).
