@@ -1,3 +1,4 @@
+import {lateBeyondStd15} from './late-std15.js';
 const clean=v=>String(v??'').trim();
 const upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/^(\d{1,2}):(\d{2})$/);return m?Number(m[1])*60+Number(m[2]):null};
@@ -22,7 +23,7 @@ function derived(x){
   if(/EMBARQUEMENT\s+CLOS|BOARDING\s+CLOSED|GATE\s+CLOSED/.test(raw))return 'EMBARQUEMENT CLOS';
   if(/BOARD|EMBAR/.test(raw))return 'EMBARQUEMENT';
   const std=hhmm(x.std),etd=hhmm(x.etd||x.edt);let d=std!=null&&etd!=null?etd-std:0;if(d<-720)d+=1440;if(d>720)d-=1440;
-  return /DELAY|RETARD/.test(raw)||d>=5?'RETARDÉ':'PRÉVU';
+  return lateBeyondStd15(x)?'RETARDÉ':'PRÉVU';
 }
 export async function sanitizeTodayStatuses(env){
   if(!env?.OPS_DB)return {ok:false,error:'NO_DB'};

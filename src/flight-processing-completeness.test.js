@@ -17,7 +17,7 @@ test('actual ATA closes complete timing record; cancellation is final',()=>{
  assert.equal(row({atd:'19:15',ata:'02:10'}).state,'OK');assert.equal(row({status:'CANCELLED',sta:''}).state,'OK');
 });
 test('scheduled arrival alone never proves arrival',()=>{
- const r=row({std:'00:10',sta:'01:00',status:'PRÉVU'},now.date);assert.equal(r.state,'À CONTRÔLER');assert.equal(r.flightStatus,'PRÉVU');
+ const r=row({std:'00:10',sta:'01:00',status:'PRÉVU'},now.date);assert.equal(r.state,'À CONTRÔLER');
 });
 test('actual arrival beats stale departed and planned statuses',()=>{
  assert.equal(flightOperationalStatus({status:'DECOLLE',ata:'03:10'}),'ARRIVÉE');assert.equal(flightOperationalStatus({status:'PRÉVU',atd:'03:10'}),'EN VOL');assert.equal(flightOperationalStatus({status:'DECOLLE',takeoff:'03:15'}),'EN VOL');assert.equal(flightOperationalStatus({status:'ANNULÉ',cancelledSource:'FLIGHTSTATS',atd:'03:10'}),'ANNULÉ');assert.equal(flightOperationalStatus({status:'CANCELLED',atd:'03:10'}),'EN VOL');

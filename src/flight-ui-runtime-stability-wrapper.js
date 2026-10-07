@@ -2,6 +2,7 @@ import app from "./flight-list-live-sync-wrapper.js";
 
 const RUNTIME=String.raw`<script id="alyzia-flight-runtime-stability-js">(()=>{
 'use strict';
+const late15=x=>{const m=/(\d{1,2}):(\d{2})/.exec(String(x&&x.std||''));if(!m)return false;const p={};new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).forEach(z=>{p[z.type]=z.value});const today=p.year+'-'+p.month+'-'+p.day,d=String(x.flight_date||x.flightDate||x.date||today).slice(0,10);return d<today||(d===today&&Number(p.hour)*60+Number(p.minute)>=Number(m[1])*60+Number(m[2])+15)};
 if(window.__alyziaFlightRuntimeStability)return;window.__alyziaFlightRuntimeStability=true;
 const txt=v=>String(v??'').trim(),up=v=>txt(v).toUpperCase();
 const first=(x,keys)=>{for(const k of keys){const v=txt(x?.[k]);if(v&&!/^(?:—|-|N\/A|NULL|UNKNOWN)$/i.test(v))return v}return ''};
@@ -28,7 +29,7 @@ const statusOf=x=>{if(!x)return '';
  if(first(x,['atd','actualDeparture','actual_departure','gateOut','gate_out'])||/DEPARTED|PARTI|GATE OUT/.test(raw))return 'PARTI';
  if(/EMBARQUEMENT\s+CLOS|BOARDING\s+CLOSED|GATE\s+CLOSED/.test(raw))return 'EMBARQUEMENT CLOS';
  if(/BOARD|EMBAR/.test(raw))return 'EMBARQUEMENT';
- if(/DELAY|RETARD/.test(raw))return 'RETARDÉ';
+ if(late15(x))return 'RETARDÉ';
  return ''};
 const cls=s=>{s=up(s);if(s.startsWith('ARRIVÉ'))return'arrive';if(s.startsWith('EN VOL'))return'envol';if(s==='PARTI'||s.includes('ATTERI'))return'decolle';if(s.includes('ANNUL'))return'annule';if(s.includes('RETARD'))return'retarde';if(s.includes('EMBAR'))return'embarquement';return'programme'};
 const setBadge=(badge,label)=>{if(!badge||!label)return;const extra=badge.classList.contains('ops-time-alert')?' ops-time-alert':'';const wanted='v2-status '+cls(label)+extra;if(txt(badge.textContent)!==label)badge.textContent=label;if(badge.className!==wanted)badge.className=wanted};
