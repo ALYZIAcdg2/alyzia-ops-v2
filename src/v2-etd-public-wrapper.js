@@ -16,6 +16,7 @@ import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
 import {runFlighteraBoardTest} from "./flightera-board-test.js";
+import {flightStatsStatus} from "./flightstats-status.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
 import {runFidsCompare} from "./fids-compare.js";
 import {runCabinConfigAudit} from "./cabin-config-audit.js";
@@ -124,6 +125,10 @@ export default {
     if(url.pathname==="/api/admin/times-compare"&&request.method==="GET"){
       // Lecture seule : ETD / ETA de nos vols du jour comparés au tableau FR24, au flux FIDS et à FR24 par vol (une lecture FR24 par vol).
       try{return json(await runTimesCompare(env,{limit:Number(url.searchParams.get("limit")||12),offset:Number(url.searchParams.get("offset")||0),all:url.searchParams.get("all")==="1"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/flightstats-status"&&request.method==="GET"){
+      // Lecture seule : disjoncteurs FlightStats enregistrés + dernières lectures par vol du jour (aucun appel FlightStats).
+      try{return json(await flightStatsStatus(env,{date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-status"&&request.method==="GET"){
       // Lecture seule : dernière lecture FIDS enregistrée + lecture directe du flux (fenêtre de départs couverte) + simulation du passage sans écriture.
