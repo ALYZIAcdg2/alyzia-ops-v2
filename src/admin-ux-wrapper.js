@@ -47,7 +47,7 @@ function openDetail(x){
   const by=contributions(x);
   const dash='<span class="adx-nil">—</span>';
   // Une ligne par source (statut de la dernière lecture), puis une sous-ligne par information apportée : valeur | précision | heure d'écriture.
-  const subs=list=>(list||[]).map(c=>'<tr class="adx-sub"><td></td><td></td><td><b>'+esc(c.f)+'</b> '+esc(c.v)+'</td><td>'+(c.onTime?'à l\'heure (estimé = prévu)':c.derived?'calculé':dash)+'</td><td class="adx-t">'+hm(c.at)+'</td></tr>').join('');
+  const subs=list=>(list||[]).map(c=>'<tr class="adx-sub"><td></td><td></td><td><b>'+esc(c.f)+'</b></td><td>'+esc(c.v)+(c.onTime?' <small class="adx-nil">à l\'heure (estimé = prévu)</small>':c.derived?' <small class="adx-nil">calculé</small>':'')+'</td><td class="adx-t">'+hm(c.at)+'</td></tr>').join('');
   const lastAt=(a,c)=>[a&&a.at,...(c||[]).map(v=>v.at)].filter(Boolean).sort().slice(-1)[0];
   const rows=SRC.map(s=>{const a=latest(x,s[0]);const c=by[s[0]];const head=(pill,det,at,add)=>'<tr><td><b>'+s[2]+'</b></td><td>'+pill+'</td><td>'+add+'</td><td>'+det+'</td><td class="adx-t">'+(at?hm(at):'—')+'</td></tr>';
     if(!a&&!c)return head('<span class="adx-p none">PAS LU</span>',dash,'',dash);

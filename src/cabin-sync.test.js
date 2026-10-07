@@ -14,3 +14,9 @@ test("vol sans plan choisi : choix automatique écrit",async()=>{
   const r=await syncCabinAfterAircraftChange(e,{autoApply:async(env,x)=>{x.sariaConfigKey="LY|739|X"}});
   assert.deepEqual([r.checked,r.updated],[1,1]);assert.equal(JSON.parse(e.writes[0][0]).sariaConfigKey,"LY|739|X");
 });
+test("airline absent du JSON : repris de la colonne pour choisir le plan",async()=>{
+  const e=mkEnv([],[{identity:"8",airline:"JU",flight_number:"JU241",data_json:JSON.stringify({aircraft:"320"})}]);
+  let seen=null;
+  const r=await syncCabinAfterAircraftChange(e,{autoApply:async(env,x)=>{seen=x.airline+"|"+x.flight;x.sariaConfigKey="JU|320|180Y"}});
+  assert.equal(seen,"JU|JU241");assert.equal(r.updated,1);
+});
