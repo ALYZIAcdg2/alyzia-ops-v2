@@ -370,10 +370,10 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
   const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
   // FlightAware : réservé aux vols JU sans ATD (voir FA_ONLY_AIRLINES) ; la relecture manuelle d'un vol (onDemand) reste possible pour n'importe quel vol.
-  if((onDemand||flightAwareAllowed(f.designator,base))&&!tooEarly&&(((forced||(pastStd&&atdMissing))&&noDeparture)||(noArrival&&clean(base.flightAwareHistoryUrl)&&Boolean(clean(base.atd)||clean(base.takeoff)||clean(map.FR24?.takeoff)||clean(map.FR24BOARD?.takeoff))))){
+  if((onDemand||flightAwareAllowed(f.designator,base))&&!tooEarly&&((forced||(pastStd&&atdMissing))&&noDeparture)){
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
-    if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
+    if(fa?.semantic)map.FLIGHTAWAREEXACT={atd:fa.semantic.atd||""};   // FlightAware : ATD uniquement
     if(fa?.url)faUrl=fa.url;
   }
   // PlaneFinder puis Skyscanner uniquement si quelque chose reste réellement à compléter.

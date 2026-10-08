@@ -44,11 +44,11 @@ function on429Cooldown(x,now=Date.now()){const h=x?.flightAwareExactHistory||{},
 //  - vol non parti dont la STD est passée (ATD manquant) ; - vol parti sans ATA ni atterrissage (arrivée manquante) ; - vol arrivé sans ATD.
 // Un vol complet, ou pas encore à l'heure de partir, n'est jamais lu (avant : tous les vols à moins de 90 min du départ, à chaque passage, d'où les 429).
 export function flightAwareWanted(flightDate,std,x,nowMs=Date.now()){
-  const atd=clean(x?.atd),takeoff=clean(x?.takeoff),landing=clean(x?.landing),ata=clean(x?.ata),departed=Boolean(atd||takeoff);
+  // FlightAware ne sert qu'à l'ATD (heure de départ de la porte) : lu seulement tant que l'ATD manque, vol parti ou STD passée, une fois toutes les 10 min au plus.
+  if(clean(x?.atd))return false;
   const last=Date.parse(x?.flightAwareExactHistory?.checkedAt||0);if(Number.isFinite(last)&&nowMs-last<10*60000)return false;
-  if(ata)return !atd;
-  if(!departed)return !farFromDeparture(flightDate,std,{},nowMs,0);
-  return !landing||!atd;
+  if(clean(x?.takeoff)||clean(x?.landing)||clean(x?.ata))return true;
+  return !farFromDeparture(flightDate,std,{},nowMs,0);
 }
 
 export async function recoverFlightAwareExactHistory(env){
@@ -60,7 +60,7 @@ export async function recoverFlightAwareExactHistory(env){
     try{
       const c=new AbortController(),timer=setTimeout(()=>c.abort(),8000);let r,raw="";try{r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareExact/1.1)"}});raw=await r.text()}finally{clearTimeout(timer)}
       const text=textOnly(raw);attempt={source:"FLIGHTAWARE",status:blocked(text)?"BLOCKED":r.ok?"OK":"HTTP_ERROR",httpStatus:r.status,checkedAt:at,url:r.url||url,lookupCodeType:"ICAO",lookupDesignator:(url.match(/\/flight\/([^/]+)/i)||[])[1]||""};
-      if(attempt.status==="OK"){success++;const s=semantic(text),js=flightAwareJsonSemantic(raw,{origin:x.origin||"CDG",destination:x.destination||x.dest||""});for(const k of ["atd","takeoff","eta","landing","ata"])if(!s[k]&&js[k])s[k]=js[k];let changed=false;for(const field of ["atd","takeoff","eta","landing","ata","reg"]){if(setField(x,field,s[field],at))changed=true}if(s.aircraft&&!manual(x,"aircraft")&&upper(x.aircraftActual||x.aircraft)!==s.aircraft){x.aircraftActual=s.aircraft;x.aircraftActualSource="PUBLIC_LIVE:FLIGHTAWARE_EXACT";x.aircraftActualUpdatedAt=at;changed=true}if(changed){updated++;flights.push(designator(row,x))}}
+      if(attempt.status==="OK"){success++;const s=semantic(text),js=flightAwareJsonSemantic(raw,{origin:x.origin||"CDG",destination:x.destination||x.dest||""});for(const k of ["atd","takeoff","eta","landing","ata"])if(!s[k]&&js[k])s[k]=js[k];let changed=false;for(const field of ["atd"]){if(setField(x,field,s[field],at))changed=true}if(changed){updated++;flights.push(designator(row,x))}}
     }catch(e){attempt={source:"FLIGHTAWARE",status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",checkedAt:at,url,error:String(e?.message||e).slice(0,140)}}
     mergeTelemetry(x,attempt,at);try{await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),row.identity).run()}catch{}
   }

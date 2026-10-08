@@ -10,10 +10,11 @@ test("FlightAware : politique commune (JU seulement)", () => {
   assert.equal(flightAwareAirlineAllowed("AT779"),false);
   assert.equal(flightAwareAllowed("JU241",{atd:"10:30"}),false);
 });
-test("FlightAware : toutes les lectures actives sont filtrées par la politique", () => {
-  assert.match(rd("./etd-public-flow.js"),/r===flightAware&&!flightAwareAirlineAllowed\(f\.designator\)/);          // ETD
-  assert.match(rd("./sta-public-fallbacks.js"),/read===flightAware&&!flightAwareAirlineAllowed\(flight\.designator\)/);  // STA
-  assert.match(rd("./ground-public-flow.js"),/source==="FLIGHTAWARE"&&!flightAwareAirlineAllowed\(f\.designator\)/);     // porte
-  assert.match(rd("./flightaware-exact-history.js"),/flightAwareAllowed\(designator\(row,x\),x\)/);                      // pages connues
-  assert.match(rd("./ops-public-live-flow-optimized.js"),/onDemand\|\|flightAwareAllowed\(f\.designator,base\)/);        // lecture par vol
+test("FlightAware : ATD uniquement, JU seulement, dans toutes les lectures actives", () => {
+  assert.match(rd("./etd-public-flow.js"),/r===flightAware\)continue/);                  // jamais l'ETD
+  assert.match(rd("./sta-public-fallbacks.js"),/read===flightAware\)continue/);         // jamais la STA
+  assert.match(rd("./ground-public-flow.js"),/source==="FLIGHTAWARE"\)continue/);        // jamais la porte
+  assert.match(rd("./flightaware-exact-history.js"),/flightAwareAllowed\(designator\(row,x\),x\)/);
+  assert.match(rd("./flightaware-exact-history.js"),/for\(const field of \["atd"\]\)/);   // pages connues : ATD seul
+  assert.match(rd("./ops-public-live-flow-optimized.js"),/map\.FLIGHTAWAREEXACT=\{atd:/);  // lecture par vol : ATD seul
 });

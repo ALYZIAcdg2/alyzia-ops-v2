@@ -146,7 +146,7 @@ test("FlightAware generic: the occurrence page is found from the landing page, i
   assert.equal(flightAwareHistoryUrl("<html>nothing</html>",{date:today,std:stdLocal,origin:"CDG"}),"");
 });
 
-test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24 and FlightStats give nothing",async()=>{
+test("live flow: FlightAware JSON gives ENT777 its ATD only (not takeoff / landing) when FR24 and FlightStats give nothing",async()=>{
   const flight={airline:"ENT",flight:"ENT777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA"};
   let update=null;
   const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
@@ -156,7 +156,7 @@ test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24
   const [y,m,d]=today.split("-"),day=`${y}${m}${d}`;
   const at=(h,mi)=>Date.UTC(+y,+m-1,+d,h,mi)/1000;
   // the real FlightAware keys (from the deployed diagnostic), 05:38 / 07:45 local = 03:38 / 05:45 UTC in summer time
-  const json=`"takeoffTimes":{"scheduled":${at(3,10)},"estimated":${at(3,38)},"actual":${at(3,38)}},"landingTimes":{"scheduled":${at(5,15)},"estimated":${at(5,45)},"actual":${at(5,45)}},"gateDepartureTimes":{"scheduled":${at(3,0)},"estimated":null,"actual":null},"gateArrivalTimes":{"scheduled":${at(5,30)},"estimated":null,"actual":null}`;
+  const json=`"takeoffTimes":{"scheduled":${at(3,10)},"estimated":${at(3,38)},"actual":${at(3,38)}},"landingTimes":{"scheduled":${at(5,15)},"estimated":${at(5,45)},"actual":${at(5,45)}},"gateDepartureTimes":{"scheduled":${at(3,0)},"estimated":null,"actual":${at(3,20)}},"gateArrivalTimes":{"scheduled":${at(5,30)},"estimated":null,"actual":null}`;
   const offset=Number(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
   if(offset!==2)return; // fixtures are written for summer time
   const real=globalThis.fetch;
@@ -168,10 +168,9 @@ test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.ok(update,"the flight was saved");
-    assert.equal(update.takeoff,"05:38");
-    assert.equal(update.landing,"07:45");
-    assert.equal(update.ata,"07:55");
-    assert.equal(update.status,"ARRIVÉE");
+    assert.equal(update.atd,"05:20");            // heure de porte donnée par FlightAware
+    assert.equal(update.takeoff,undefined);       // FlightAware ne sert qu'à l'ATD
+    assert.equal(update.landing,undefined);
     assert.equal(update.flightAwareHistoryUrl,`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
   }finally{globalThis.fetch=real;FA_ONLY_AIRLINES.pop()}
 });
