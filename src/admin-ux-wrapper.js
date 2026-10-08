@@ -37,7 +37,7 @@ let refDate='',flightsCache=null,flightsAt=0,loading=false;
 let pausesCache=[],pausesAt=0;
 function loadPauses(){if(Date.now()-pausesAt<30000)return;pausesAt=Date.now();fetch('/api/admin/pauses',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d&&d.ok){pausesCache=d.pauses||[];queue()}}).catch(()=>{})}
 const hmClock=iso=>{const d=new Date(iso);return Number.isFinite(d.getTime())?d.toLocaleTimeString('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',minute:'2-digit'}):''};
-function pauseNote(key){const p=pausesCache.find(x=>x.key===key&&Date.parse(x.until)>Date.now());if(!p)return '';return ' <small style="color:#8a6d3b;font-weight:800" title="'+esc(p.note||'')+'">· reprise vers '+hmClock(p.until)+' (dans '+Math.max(1,Math.ceil((Date.parse(p.until)-Date.now())/60000))+' min)</small>'}
+function pauseNote(key){const p=pausesCache.find(x=>x.key===key&&Date.parse(x.until)>Date.now());if(!p)return '';const range=p.waiting>1&&p.from&&hmClock(p.from)!==hmClock(p.until)?'de '+hmClock(p.from)+' à '+hmClock(p.until):'vers '+hmClock(p.until);return ' <small style="color:#8a6d3b;font-weight:800" title="'+esc(p.note||'')+'">· reprise '+range+' (dans '+Math.max(1,Math.ceil((Date.parse(p.from&&p.waiting>1?p.from:p.until)-Date.now())/60000))+' min)</small>'}
 function loadFlights(){if(loading||Date.now()-flightsAt<15000)return;loading=true;loadPauses();fetch('/api/admin/flight-processing',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d&&d.ok){flightsCache=d.flights||[];refDate=d.date||'';flightsAt=Date.now();queue()}}).catch(()=>{}).finally(()=>{loading=false})}
 function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&x.date===date)}
 function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
