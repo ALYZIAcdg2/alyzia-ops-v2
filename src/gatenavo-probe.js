@@ -22,14 +22,14 @@ export async function probeGatenavo(env,{flight=""}={}){
   if(!rows.length){out.error="NO_ROWS";out.head=html.slice(0,300);return out}
   const byStatus={};for(const r of rows)byStatus[r.status]=(byStatus[r.status]||0)+1;out.byStatus=byStatus;
   const fetched=rows.map(r=>r.fetchedAt).filter(Boolean).sort();out.fetchedFrom=fetched[0]||"";out.fetchedTo=fetched[fetched.length-1]||"";out.fetchedAgeMin=fetched.length?Math.round((Date.now()-Date.parse(fetched[fetched.length-1]))/60000):null;
-  const want=upper(flight).replace(/\s+/g,"");
-  if(want){out.flight=want;out.gatenavoRow=rows.find(r=>upper(r.flight)===want)||null;
+  const want=gatenavoKey(flight);
+  if(want){out.flight=want;out.gatenavoRow=rows.find(r=>gatenavoKey(r.flight)===want)||null;
     if(env?.OPS_DB){const {results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(today()).all();
-      for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(upper(x.flight||row.flight_number).replace(/\s+/g,"")===want){out.ours={status:x.status,statusSource:x.statusSource,parisAeroportPhase:x.parisAeroportPhase,parisAeroportVia:x.parisAeroportVia,parisAeroportPhaseUpdatedAt:x.parisAeroportPhaseUpdatedAt,parisAeroportStatusCheckedAt:x.parisAeroportStatusCheckedAt,std:x.std,etd:x.etd,etdSource:x.etdSource,atd:x.atd,atdSource:x.atdSource,takeoff:x.takeoff,eta:x.eta,etaSource:x.etaSource};break}}}}
+      for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(gatenavoKey(x.flight||row.flight_number)===want){out.ours={status:x.status,statusSource:x.statusSource,parisAeroportPhase:x.parisAeroportPhase,parisAeroportVia:x.parisAeroportVia,parisAeroportPhaseUpdatedAt:x.parisAeroportPhaseUpdatedAt,parisAeroportStatusCheckedAt:x.parisAeroportStatusCheckedAt,std:x.std,etd:x.etd,etdSource:x.etdSource,atd:x.atd,atdSource:x.atdSource,takeoff:x.takeoff,eta:x.eta,etaSource:x.etaSource};break}}}}
   const times=rows.map(r=>r.scheduled).filter(Boolean).sort();out.scheduledFrom=times[0];out.scheduledTo=times[times.length-1];
   out.boarding=rows.filter(r=>r.status==="boarding"||r.status==="gate_closed").map(r=>({flight:r.flight,status:r.status,raw:r.raw,scheduled:r.scheduled})).slice(0,30);
-  if(env?.OPS_DB){const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();const set=new Set(rows.map(r=>upper(r.flight)));let matched=0;const unmatched=[];
-    for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const k=upper(x.flight||row.flight_number).replace(/\s+/g,"");if(set.has(k))matched++;else unmatched.push({flight:k,std:clean(x.std),dest:upper(x.destination||x.dest),status:clean(x.status)})}
+  if(env?.OPS_DB){const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();const set=new Set(rows.map(r=>gatenavoKey(r.flight)));let matched=0;const unmatched=[];
+    for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const k=gatenavoKey(x.flight||row.flight_number);if(set.has(k))matched++;else unmatched.push({flight:k,std:clean(x.std),dest:upper(x.destination||x.dest),status:clean(x.status)})}
     out.ourFlights=results.length;out.matchedOurs=matched;
     // Nos vols du jour absents de la liste Gatenavo (numéro différent, vol hors de sa fenêtre, affrètement…).
     out.unmatchedOurs=unmatched.sort((a,b)=>String(a.std).localeCompare(String(b.std)))}
@@ -46,4 +46,6 @@ export async function fetchGatenavoRows(){
   catch(e){return {rows:[],error:String(e?.name||e?.message||e)}}finally{clearTimeout(timer)}
 }
 // Statut Paris Aéroport relayé par Gatenavo -> phase. Les autres statuts (programmé, retardé, décollé…) ne produisent aucune phase.
+// Clé de correspondance d'un numéro de vol : sans espaces ni zéros de tête (Gatenavo écrit MH021, AF004 ; nous MH21, AF4).
+export function gatenavoKey(v){const s=String(v??"").toUpperCase().replace(/\s+/g,"");const m=/^([A-Z0-9]{2})0*(\d+[A-Z]?)$/.exec(s);return m?m[1]+m[2]:s}
 export function gatenavoPhase(status){return status==="boarding"?"EMBARQUEMENT":status==="gate_closed"?"EMBARQUEMENT CLOS":status==="cancelled"?"ANNULÉ":""}
