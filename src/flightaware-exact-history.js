@@ -39,12 +39,23 @@ function designator(row,x){const a=upper(x.airline||row.airline),f=upper(x.fligh
 function mergeTelemetry(x,attempt,at){const live=x.publicLiveBackfill&&typeof x.publicLiveBackfill==="object"?x.publicLiveBackfill:{},old=Array.isArray(live.attempts)?live.attempts:[],kept=old.filter(a=>!(upper(a?.source)==="FLIGHTAWARE"&&clean(a?.url)===clean(attempt.url)));x.publicLiveBackfill={...live,checkedAt:at,attempts:[attempt,...kept].slice(0,40)};x.flightAwareExactHistory={checkedAt:at,url:attempt.url,cooldown429Minutes:45,attempts:[attempt]}}
 function on429Cooldown(x,now=Date.now()){const h=x?.flightAwareExactHistory||{},a=Array.isArray(h.attempts)?h.attempts[0]:null;if(!a||Number(a.httpStatus)!==429)return false;const t=Date.parse(a.checkedAt||h.checkedAt||0);return Number.isFinite(t)&&now-t<COOLDOWN_429_MS}
 
+// FlightAware = dernier secours : lu seulement si une information manque vraiment, et pas plus d'une fois toutes les 10 min par vol.
+//  - vol non parti dont la STD est passée (ATD manquant) ; - vol parti sans ATA ni atterrissage (arrivée manquante) ; - vol arrivé sans ATD.
+// Un vol complet, ou pas encore à l'heure de partir, n'est jamais lu (avant : tous les vols à moins de 90 min du départ, à chaque passage, d'où les 429).
+export function flightAwareWanted(flightDate,std,x,nowMs=Date.now()){
+  const atd=clean(x?.atd),takeoff=clean(x?.takeoff),landing=clean(x?.landing),ata=clean(x?.ata),departed=Boolean(atd||takeoff);
+  const last=Date.parse(x?.flightAwareExactHistory?.checkedAt||0);if(Number.isFinite(last)&&nowMs-last<10*60000)return false;
+  if(ata)return !atd;
+  if(!departed)return !farFromDeparture(flightDate,std,{},nowMs,0);
+  return !landing||!atd;
+}
+
 export async function recoverFlightAwareExactHistory(env){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const date=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
   let checked=0,success=0,updated=0,cooldownSkipped=0;const flights=[];
-  for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const key=`${designator(row,x)}|${row.flight_date}`,url=cleanFlightAwareUrl(x.flightAwareHistoryUrl||x.flightawareHistoryUrl)||clean(EXACT[key]);if(!url)continue;if(on429Cooldown(x)){cooldownSkipped++;continue}if(farFromDeparture(row.flight_date,x.std||row.std,x))continue;checked++;const at=new Date().toISOString();let attempt={source:"FLIGHTAWARE",status:"FETCH_ERROR",checkedAt:at,url};
+  for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const key=`${designator(row,x)}|${row.flight_date}`,url=cleanFlightAwareUrl(x.flightAwareHistoryUrl||x.flightawareHistoryUrl)||clean(EXACT[key]);if(!url)continue;if(on429Cooldown(x)){cooldownSkipped++;continue}if(!flightAwareWanted(row.flight_date,x.std||row.std,x))continue;checked++;const at=new Date().toISOString();let attempt={source:"FLIGHTAWARE",status:"FETCH_ERROR",checkedAt:at,url};
     try{
       const c=new AbortController(),timer=setTimeout(()=>c.abort(),8000);let r,raw="";try{r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-FlightAwareExact/1.1)"}});raw=await r.text()}finally{clearTimeout(timer)}
       const text=textOnly(raw);attempt={source:"FLIGHTAWARE",status:blocked(text)?"BLOCKED":r.ok?"OK":"HTTP_ERROR",httpStatus:r.status,checkedAt:at,url:r.url||url,lookupCodeType:"ICAO",lookupDesignator:(url.match(/\/flight\/([^/]+)/i)||[])[1]||""};
