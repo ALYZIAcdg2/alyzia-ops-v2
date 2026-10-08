@@ -45,3 +45,15 @@ test("STD dépassée, vol pas parti : le tableau revenu à la STD n'efface plus 
   await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});   // 16:00 Paris, STD 13:00 passée
   assert.equal(e.writes.length,0);
 });
+test("vol d'hier soir retardé après minuit, pas atterri : le tableau lui donne porte, immat et ETD ; un vol d'hier atterri est ignoré",async()=>{
+  __reset();
+  const N=Date.parse("2026-10-05T23:30:00Z");               // 01:30 Paris le 06/10
+  const S=Date.parse("2026-10-05T20:00:00Z")/1000;           // STD 22:00 Paris le 05/10
+  const y=(o={},id="1",num="AF430")=>({identity:id,flight_date:"2026-10-05",flight_number:num,airline:"AF",std:"22:00",data_json:JSON.stringify({airline:"AF",flight:num,origin:"CDG",std:"22:00",gate:"—",...o})});
+  const e=env([y({}),y({ata:"21:40",landing:"21:35"},"2","AF431")]);
+  const r=await sweepBoardToday(e,{nowMs:N,fetchImpl:fetchOf([{flightNumber:"AF430",status:{name:"estimated"},scheduledTime:S,estimatedTime:S+9000,gate:"K52",aircraft:{registration:"F-GSPL",type:"B772"},flightId:"x"}])});
+  assert.equal(e.writes.length,1);
+  const saved=JSON.parse(e.writes[0][0]);
+  assert.equal(saved.gate,"K52");assert.equal(saved.reg,"F-GSPL");assert.equal(saved.etd,"00:30");
+  assert.equal(r.flights,1);
+});
