@@ -28,9 +28,11 @@ export async function probeGatenavo(env,{flight=""}={}){
       for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(upper(x.flight||row.flight_number).replace(/\s+/g,"")===want){out.ours={status:x.status,statusSource:x.statusSource,parisAeroportPhase:x.parisAeroportPhase,parisAeroportVia:x.parisAeroportVia,parisAeroportPhaseUpdatedAt:x.parisAeroportPhaseUpdatedAt,parisAeroportStatusCheckedAt:x.parisAeroportStatusCheckedAt,std:x.std,etd:x.etd,etdSource:x.etdSource,atd:x.atd,atdSource:x.atdSource,takeoff:x.takeoff,eta:x.eta,etaSource:x.etaSource};break}}}}
   const times=rows.map(r=>r.scheduled).filter(Boolean).sort();out.scheduledFrom=times[0];out.scheduledTo=times[times.length-1];
   out.boarding=rows.filter(r=>r.status==="boarding"||r.status==="gate_closed").map(r=>({flight:r.flight,status:r.status,raw:r.raw,scheduled:r.scheduled})).slice(0,30);
-  if(env?.OPS_DB){const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();const set=new Set(rows.map(r=>upper(r.flight)));let matched=0;
-    for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}if(set.has(upper(x.flight||row.flight_number).replace(/\s+/g,"")))matched++}
-    out.ourFlights=results.length;out.matchedOurs=matched}
+  if(env?.OPS_DB){const date=today(),{results=[]}=await env.OPS_DB.prepare(`SELECT flight_number,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();const set=new Set(rows.map(r=>upper(r.flight)));let matched=0;const unmatched=[];
+    for(const row of results){let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}const k=upper(x.flight||row.flight_number).replace(/\s+/g,"");if(set.has(k))matched++;else unmatched.push({flight:k,std:clean(x.std),dest:upper(x.destination||x.dest),status:clean(x.status)})}
+    out.ourFlights=results.length;out.matchedOurs=matched;
+    // Nos vols du jour absents de la liste Gatenavo (numéro différent, vol hors de sa fenêtre, affrètement…).
+    out.unmatchedOurs=unmatched.sort((a,b)=>String(a.std).localeCompare(String(b.std)))}
   return out;
 }
 
