@@ -6,6 +6,8 @@ import {boardLookup,gateValue} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
+import {FA_ONLY_AIRLINES,flightAwareAllowed,flightAwareAirlineAllowed} from "./fa-policy.js";
+export {FA_ONLY_AIRLINES,flightAwareAllowed};
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {noteActualAircraft} from "./aircraft-change.js";
 
@@ -187,12 +189,6 @@ export function flightStatsImport(st){if(!st)return;for(const k of Object.keys(F
 const FS_PAGE_BUDGET=4,FS_RETRY_MIN=20;let fsPageLeft=FS_PAGE_BUDGET;
 export function flightStatsResetBudget(n=FS_PAGE_BUDGET){fsPageLeft=n}
 // FlightStats / FlightAware n'ont rien à donner avant le départ : pas d'appel pour un vol non parti dont la STD est à plus de 90 min (les heures prévues viennent du tableau FR24, de FR24 par vol et de FIDS).
-// FlightAware est réservé aux vols de ces compagnies (indicatif IATA) tant qu'ils n'ont pas d'ATD : trop de refus quand il lit tous les vols.
-export const FA_ONLY_AIRLINES=["JU"];
-export function flightAwareAllowed(flight,x){
-  const code=upper(flight||x?.flight).replace(/\s+/g,"").slice(0,2);
-  return FA_ONLY_AIRLINES.includes(code)&&!clean(x?.atd);
-}
 export const FS_FA_WINDOW_MIN=90;
 export function farFromDeparture(flightDate,std,{atd="",takeoff=""}={},nowMs=Date.now(),windowMin=FS_FA_WINDOW_MIN){
   if(clean(atd)||clean(takeoff))return false;

@@ -1,7 +1,8 @@
 import {guardDepartureClock} from "./local-time-guard.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
-import {farFromDeparture,flightAwareAllowed} from "./ops-public-live-flow-optimized.js";
+import {farFromDeparture} from "./ops-public-live-flow-optimized.js";
+import {flightAwareAllowed} from "./fa-policy.js";
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
