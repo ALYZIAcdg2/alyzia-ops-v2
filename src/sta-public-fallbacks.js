@@ -140,6 +140,7 @@ export const STA_PUBLIC_SOURCE_ORDER=[
 export async function fetchStaFallbacks(flight){
   const attempts=[];
   for(const read of READERS){
+    if(read===flightAware)continue;   // FlightAware : ATD uniquement, jamais la STA
     const r=await read(flight),nested=Array.isArray(r.lookupAttempts)?r.lookupAttempts:[];
     if(nested.length)for(const a of nested)attempts.push({source:r.source,status:a.status,lookupDesignator:a.designator,codeType:a.codeType,numberType:a.numberType});
     else attempts.push({source:r.source,status:r.status,lookupDesignator:r.lookupDesignator||flight.designator});

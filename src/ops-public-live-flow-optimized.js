@@ -6,6 +6,8 @@ import {boardLookup,gateValue} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
+import {FA_ONLY_AIRLINES,flightAwareAllowed,flightAwareAirlineAllowed} from "./fa-policy.js";
+export {FA_ONLY_AIRLINES,flightAwareAllowed};
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {noteActualAircraft} from "./aircraft-change.js";
 
@@ -187,12 +189,6 @@ export function flightStatsImport(st){if(!st)return;for(const k of Object.keys(F
 const FS_PAGE_BUDGET=4,FS_RETRY_MIN=20;let fsPageLeft=FS_PAGE_BUDGET;
 export function flightStatsResetBudget(n=FS_PAGE_BUDGET){fsPageLeft=n}
 // FlightStats / FlightAware n'ont rien à donner avant le départ : pas d'appel pour un vol non parti dont la STD est à plus de 90 min (les heures prévues viennent du tableau FR24, de FR24 par vol et de FIDS).
-// FlightAware est réservé aux vols de ces compagnies (indicatif IATA) tant qu'ils n'ont pas d'ATD : trop de refus quand il lit tous les vols.
-export const FA_ONLY_AIRLINES=["JU"];
-export function flightAwareAllowed(flight,x){
-  const code=upper(flight||x?.flight).replace(/\s+/g,"").slice(0,2);
-  return FA_ONLY_AIRLINES.includes(code)&&!clean(x?.atd);
-}
 export const FS_FA_WINDOW_MIN=90;
 export function farFromDeparture(flightDate,std,{atd="",takeoff=""}={},nowMs=Date.now(),windowMin=FS_FA_WINDOW_MIN){
   if(clean(atd)||clean(takeoff))return false;
@@ -374,10 +370,10 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
   const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
   // FlightAware : réservé aux vols JU sans ATD (voir FA_ONLY_AIRLINES) ; la relecture manuelle d'un vol (onDemand) reste possible pour n'importe quel vol.
-  if((onDemand||flightAwareAllowed(f.designator,base))&&!tooEarly&&(((forced||(pastStd&&atdMissing))&&noDeparture)||(noArrival&&clean(base.flightAwareHistoryUrl)&&Boolean(clean(base.atd)||clean(base.takeoff)||clean(map.FR24?.takeoff)||clean(map.FR24BOARD?.takeoff))))){
+  if((onDemand||flightAwareAllowed(f.designator,base))&&!tooEarly&&((forced||(pastStd&&atdMissing))&&noDeparture)){
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
-    if(fa?.semantic)map.FLIGHTAWAREEXACT=fa.semantic;
+    if(fa?.semantic)map.FLIGHTAWAREEXACT={atd:fa.semantic.atd||""};   // FlightAware : ATD uniquement
     if(fa?.url)faUrl=fa.url;
   }
   // PlaneFinder puis Skyscanner uniquement si quelque chose reste réellement à compléter.

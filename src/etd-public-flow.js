@@ -47,7 +47,8 @@ const simpleFlying=reader("SIMPLEFLYING",()=>"https://simpleflying.com/flight-tr
 
 export const ETD_PUBLIC_SOURCE_ORDER=["FR24","Paris Aéroport","FlightStats","FlightAware","PlaneFinder","Skyscanner","FlightView","Wego","Ixigo","Kayak","Flightera","Flighty","Flightradars24.fr","SimpleFlying"];
 const READERS=[fr24,paris,flightStats,flightAware,planeFinder,skyscanner,flightView,wego,ixigo,kayak,flightera,flighty,fr24fr,simpleFlying];
-export async function fetchEtd(f){const attempts=[];for(const r of READERS){const x=await r(f);attempts.push({source:x.source,status:x.status});if(x.status==="OK"&&hhmm(x.etd)&&!sameClock(x.etd,f.std))return {...x,attempts}}return {status:"NO_USABLE_ETD",etd:"",attempts}}
+export async function fetchEtd(f){const attempts=[];for(const r of READERS){if(r===flightAware)continue;   // FlightAware : ATD uniquement, jamais l'ETD
+const x=await r(f);attempts.push({source:x.source,status:x.status});if(x.status==="OK"&&hhmm(x.etd)&&!sameClock(x.etd,f.std))return {...x,attempts}}return {status:"NO_USABLE_ETD",etd:"",attempts}}
 
 async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{for(;;){const i=next++;if(i>=items.length)return;out[i]=await fn(items[i],i)}}));return out}
 async function readCurrent(env,identity){const row=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(identity).first();if(!row)return null;let x={};try{x=JSON.parse(row.data_json||"{}")}catch{}return x}

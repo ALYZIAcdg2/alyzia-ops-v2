@@ -146,7 +146,7 @@ test("FlightAware generic: the occurrence page is found from the landing page, i
   assert.equal(flightAwareHistoryUrl("<html>nothing</html>",{date:today,std:stdLocal,origin:"CDG"}),"");
 });
 
-test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24 and FlightStats give nothing",async()=>{
+test("live flow: FlightAware JSON gives ENT777 its ATD only (not takeoff / landing) when FR24 and FlightStats give nothing",async()=>{
   const flight={airline:"ENT",flight:"ENT777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA"};
   let update=null;
   const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
@@ -156,7 +156,7 @@ test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24
   const [y,m,d]=today.split("-"),day=`${y}${m}${d}`;
   const at=(h,mi)=>Date.UTC(+y,+m-1,+d,h,mi)/1000;
   // the real FlightAware keys (from the deployed diagnostic), 05:38 / 07:45 local = 03:38 / 05:45 UTC in summer time
-  const json=`"takeoffTimes":{"scheduled":${at(3,10)},"estimated":${at(3,38)},"actual":${at(3,38)}},"landingTimes":{"scheduled":${at(5,15)},"estimated":${at(5,45)},"actual":${at(5,45)}},"gateDepartureTimes":{"scheduled":${at(3,0)},"estimated":null,"actual":null},"gateArrivalTimes":{"scheduled":${at(5,30)},"estimated":null,"actual":null}`;
+  const json=`"takeoffTimes":{"scheduled":${at(3,10)},"estimated":${at(3,38)},"actual":${at(3,38)}},"landingTimes":{"scheduled":${at(5,15)},"estimated":${at(5,45)},"actual":${at(5,45)}},"gateDepartureTimes":{"scheduled":${at(3,0)},"estimated":null,"actual":${at(3,20)}},"gateArrivalTimes":{"scheduled":${at(5,30)},"estimated":null,"actual":null}`;
   const offset=Number(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
   if(offset!==2)return; // fixtures are written for summer time
   const real=globalThis.fetch;
@@ -168,10 +168,9 @@ test("live flow: FlightAware JSON gives ENT777 its takeoff and landing when FR24
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.ok(update,"the flight was saved");
-    assert.equal(update.takeoff,"05:38");
-    assert.equal(update.landing,"07:45");
-    assert.equal(update.ata,"07:55");
-    assert.equal(update.status,"ARRIVÉE");
+    assert.equal(update.atd,"05:20");            // heure de porte donnée par FlightAware
+    assert.equal(update.takeoff,undefined);       // FlightAware ne sert qu'à l'ATD
+    assert.equal(update.landing,undefined);
     assert.equal(update.flightAwareHistoryUrl,`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
   }finally{globalThis.fetch=real;FA_ONLY_AIRLINES.pop()}
 });
@@ -225,5 +224,31 @@ test("a web word that looks like a registration (E-MAIL) is not kept: the real r
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.equal(update.reg,"SP-ESB");
     assert.equal(update.takeoff,"05:37");
+  }finally{globalThis.fetch=real}
+});
+
+test("live flow: vol JU arrivé sans ATD (JU241) : FlightAware donne l'ATD (heure de porte)",async()=>{
+  const flight={airline:"JU",flight:"JU241",std:"07:00",sta:"09:25",origin:"CDG",destination:"BEG",dest:"BEG",takeoff:"07:49",landing:"09:50",ata:"10:00",reg:"YU-APU",aircraftActual:"320",aircraft:"320"};
+  let update=null;
+  const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
+    async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"JU241",airline:"JU",std:"07:00",data_json:JSON.stringify(flight)}]}},
+    async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
+    async run(){return {}}}},batch:async()=>[]}};
+  const [y,m,d]=today.split("-"),day=`${y}${m}${d}`;
+  const at=(h,mi)=>Date.UTC(+y,+m-1,+d,h,mi)/1000;
+  const offset=Number(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
+  if(offset!==2)return; // fixtures are written for summer time
+  // 07:30 locale = 05:30 UTC : départ de la porte réel donné par FlightAware
+  const json=`"gateDepartureTimes":{"scheduled":${at(5,0)},"estimated":null,"actual":${at(5,30)}},"takeoffTimes":{"scheduled":${at(5,10)},"estimated":${at(5,49)},"actual":${at(5,49)}},"landingTimes":{"scheduled":${at(7,15)},"estimated":${at(7,50)},"actual":${at(7,50)}},"gateArrivalTimes":{"scheduled":${at(7,25)},"estimated":null,"actual":${at(8,0)}}`;
+  const real=globalThis.fetch,asked=[];
+  globalThis.fetch=async(url)=>{url=String(url);asked.push(url);
+    if(/\/live\/flight\/(ASL|JU)241$/.test(url))return new Response(`<a href="https://www.flightaware.com/live/flight/ASL241/history/${day}/0500Z/LFPG/LYBE">x</a>`,{headers:{"content-type":"text/html"}});
+    if(url.includes(`/history/${day}/0500Z/LFPG/LYBE`))return new Response(`<html><script>var d={${json}}</script></html>`,{headers:{"content-type":"text/html"}});
+    return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
+  try{
+    await runPublicLiveFlow(env,{limit:1,concurrency:1});
+    assert.ok(asked.some(u=>/flightaware\.com/.test(u)),"FlightAware a été lu pour le vol JU");
+    assert.ok(update,"le vol est enregistré");
+    assert.equal(update.atd,"07:30");
   }finally{globalThis.fetch=real}
 });
