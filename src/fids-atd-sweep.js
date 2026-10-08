@@ -87,6 +87,14 @@ export function etdFromRow(row,x,{std,date}={}){
   if(v===std&&!clean(x?.etd||x?.edt))return "";
   return v;
 }
+// STA du flux (arr_time, heure locale de destination) pour une STA manquante : lue avant FlightStats, sans appel de plus (le flux est déjà lu à chaque passage).
+// Rejetée si les horodatages UTC du flux donnent une durée hors 30 min–20 h. Champ absent du flux : rien n'est écrit, la chaîne habituelle prend le relais.
+export function staFromRow(row){
+  const v=hhmm(row?.arr_time||row?.arr_scheduled);if(!v)return "";
+  const a=Number(row.arr_time_ts||row.arr_scheduled_ts),d=Number(row.dep_time_ts);
+  if(Number.isFinite(a)&&Number.isFinite(d)&&a>0&&d>0){const dur=(a-d)/60;if(dur<30||dur>1200)return ""}
+  return v;
+}
 export function pickFeedRow(index,{designator,std},tolerance=15){
   const rows=index.get(upper(designator))||[],prefer=(a,b)=>(upper(b.flight_iata)===upper(designator))-(upper(a.flight_iata)===upper(designator));
   const exact=rows.filter(r=>hhmm(r.dep_time)===std).sort(prefer)[0];
