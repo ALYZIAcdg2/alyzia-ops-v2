@@ -33,6 +33,8 @@ import {ADMIN_REORG_UI} from "./admin-reorg.js";
 import {API_NAMES_SCRUB_UI} from "./api-names-scrub.js";
 import {FICHE_CONFIG_UI} from "./fiche-config-actions.js";
 import {TAB_MEMORY_UI} from "./tab-memory.js";
+import {CLASS_ROWS_UI} from "./class-rows.js";
+import {UI_SMOOTH_UI} from "./ui-smooth.js";
 import {readFlightState} from "./flight-state-probe.js";
 import {setManualBoarding} from "./manual-boarding.js";
 import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js";
@@ -147,7 +149,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+API_NAMES_SCRUB_UI+'\n'+s.slice(i):s+PUSH_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI+API_NAMES_SCRUB_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+CLASS_ROWS_UI+'\n'+UI_SMOOTH_UI+'\n'+API_NAMES_SCRUB_UI+'\n'+s.slice(i):s+PUSH_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI+CLASS_ROWS_UI+UI_SMOOTH_UI+API_NAMES_SCRUB_UI}
 
 export default {
   async fetch(request,env,ctx){
