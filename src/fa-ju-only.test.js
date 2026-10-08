@@ -9,3 +9,11 @@ test("FlightAware réservé aux vols JU sans ATD", () => {
   assert.equal(flightAwareAllowed("AT779",{}),false);
   assert.equal(flightAwareAllowed("SK564",{}),false);
 });
+
+import {needsLiveRead} from "./ops-public-live-flow-optimized.js";
+test("vol JU arrivé sans ATD : toujours à relire ; autre compagnie complète : non", () => {
+  const full={ata:"13:00",reg:"YU-APU",aircraft:"320"};
+  assert.equal(needsLiveRead("2026-10-08","2026-10-08",{flight:"JU241",...full}),true);                 // ATD manquant
+  assert.equal(needsLiveRead("2026-10-08","2026-10-08",{flight:"JU241",atd:"10:30",...full}),false);     // ATD présent
+  assert.equal(needsLiveRead("2026-10-08","2026-10-08",{flight:"AT779",...full}),false);                 // autre compagnie : règle inchangée
+});

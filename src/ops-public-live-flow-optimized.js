@@ -342,7 +342,8 @@ export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||ro
 // flights, which are always more numerous than the slots in the evening, would starve them for good.
 // Vol à relire : ceux du jour tant qu'ATA, immatriculation ou type manquent ; ceux de la veille tant qu'ils n'ont pas d'ATA **ou pas d'ATD** (sans cela un vol arrivé la veille sans ATD n'était plus jamais relu après minuit : LO334, SK566, BJ511…).
 export function needsLiveRead(flightDate,today,x){
-  if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft));
+  // Vols dont FlightAware est la seule source d'ATD (JU, voir FA_ONLY_AIRLINES) : relus tant que l'ATD manque, même arrivés avec immatriculation et type (JU241 restait sans ATD).
+  if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft))||flightAwareAllowed(x.flight||x.designator,x);
   return !clean(x.ata)||!clean(x.atd)||fidsAtd(x);
 }
 export function pickSlots(sorted,size){
