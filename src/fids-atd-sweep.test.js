@@ -126,3 +126,10 @@ test("etdFromRow : ETD FIDS d'un vol pas encore parti",()=>{
   assert.equal(etdFromRow({...row,dep_estimated:"2026-10-07 18:00",dep_estimated_ts:1000000},{},{std:"18:00",date:"2026-10-07"}),""); // = STD, pas d'ETD chez nous
   assert.equal(etdFromRow({...row,dep_estimated:"2026-10-07 18:00",dep_estimated_ts:1000000},{etd:"18:43"},{std:"18:00",date:"2026-10-07"}),"18:00"); // FIDS dit à l'heure : on suit
 });
+
+test("ETD du flux : ignoré dès que le flux porte l'heure réelle de départ (dep_estimated = heure réelle)", async () => {
+  const {etdFromRow}=await import("./fids-atd-sweep.js");
+  const row={dep_time:"2026-10-08 12:30",dep_estimated:"2026-10-08 12:47",dep_estimated_ts:1,dep_time_ts:0};
+  assert.equal(etdFromRow(row,{etd:"12:40"},{std:"12:30",date:"2026-10-08"}),"12:47");                       // en attente de départ : estimation reprise
+  assert.equal(etdFromRow({...row,dep_actual:"2026-10-08 12:47"},{etd:"12:40"},{std:"12:30",date:"2026-10-08"}),"");   // déjà parti : on garde 12:40
+});
