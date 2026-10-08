@@ -395,8 +395,9 @@ function opsLocalUtc(date,time,code,day=0){
 function opsMinutes(n){const m=Math.max(0,Math.floor(n));return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m'}
 function opsDate(x){let d=txt(x.activeDate||x.date||'');if(!d){try{d=txt(HOME_DATE)}catch{}}return d}
 function opsDepartureUtc(x,t){
- const actual=t.takeoff||t.atd;if(!actual)return null;
- const std=opsClockMin(t.std),at=opsClockMin(actual),day=Number((t.takeoff?x.takeoffDay:x.atdDay)??(std!==null&&at!==null&&std-at>720?1:0))||0;
+ // Le temps de vol ne démarre qu'au décollage (TO) : un ATD seul (départ de porte) ne lance rien.
+ const actual=t.takeoff;if(!actual)return null;
+ const std=opsClockMin(t.std),at=opsClockMin(actual),day=Number(x.takeoffDay??(std!==null&&at!==null&&std-at>720?1:0))||0;
  return opsLocalUtc(opsDate(x),actual,x.dep||x.origin||'CDG',day);
 }
 function opsArrivalUtc(x,t){
@@ -407,7 +408,7 @@ function opsArrivalUtc(x,t){
 // Share of the flight already flown (0..1) from takeoff/ATD to ETA/STA; null when it cannot be computed.
 function opsProgress(x,t,st){
  if(t.ata||t.landing||/^(ARRIV|ATTERR)/.test(up(st.main)))return 1;
- const departure=opsDepartureUtc(x,t);if(departure===null)return /^(EN VOL|PARTI)$/.test(up(st.main))?null:0;
+ const departure=opsDepartureUtc(x,t);if(departure===null)return /^EN VOL$/.test(up(st.main))?null:0;
  let arrival=opsArrivalUtc(x,t);if(arrival===null)return null;
  if(arrival<=departure)arrival+=86400000;
  return Math.min(1,Math.max(0,(Date.now()-departure)/(arrival-departure)));
@@ -419,14 +420,18 @@ function opsListStatus(x,t){
  const mm=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},sd=mm(t.std),ed=mm(t.etd);let dl=sd!==null&&ed!==null?ed-sd:0;if(dl<-720)dl+=1440;if(dl>720)dl-=1440;
  if(/^EMBARQUEMENT/.test(up(st.main)))st.cls=(dl>15?'embarq-late':'prevu')+' embarq-blink';
  st.remain='';
- if(/^(EN VOL|PARTI)$/.test(up(st.main))){
-  const actual=t.takeoff||t.atd,minutes=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},std=minutes(t.std),at=minutes(actual);
-  const day=Number((t.takeoff?x.takeoffDay:x.atdDay)??(std!==null&&at!==null&&std-at>720?1:0))||0;
-  const departure=opsLocalUtc(date,actual,x.dep||x.origin||'CDG',day);
+ // Temps écoulé / restant : seulement entre le décollage (TO) et l'atterrissage (LDG). PARTI (ATD seul) : aucun compteur. ATTERRI : temps écoulé depuis LDG.
+ if(/^EN VOL$/.test(up(st.main))&&t.takeoff&&!t.landing&&!t.ata){
+  const minutes=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},std=minutes(t.std),at=minutes(t.takeoff);
+  const day=Number(x.takeoffDay??(std!==null&&at!==null&&std-at>720?1:0))||0;
+  const departure=opsLocalUtc(date,t.takeoff,x.dep||x.origin||'CDG',day);
   if(departure!==null&&departure<=Date.now())st.sub='depuis '+opsMinutes((Date.now()-departure)/60000);
   let arrival=Date.parse(txt(x.statusArrivalUtc));
   if(!Number.isFinite(arrival))arrival=opsLocalUtc(date,t.eta||t.sta,x.dest||x.destination,t.eta?t.etaDay:t.staDay);
   if(Number.isFinite(arrival)&&arrival>Date.now())st.remain='Arrivée dans '+opsMinutes(Math.ceil((arrival-Date.now())/60000));
+ }else if(/^ATTERRI$/.test(up(st.main))&&t.landing&&!t.ata){
+  const land=opsLocalUtc(date,t.landing,x.dest||x.destination,Number(x.landingDay)||0);
+  if(land!==null&&land<=Date.now()&&Date.now()-land<12*3600000)st.sub='atterri depuis '+opsMinutes((Date.now()-land)/60000);
  }
  if(/^ETD\b/i.test(st.sub))st.sub='';
  if(/^(PROGRAMM[ÉE]|PR[ÉE]VU)$/.test(up(st.main)))st.main='À L’HEURE';
