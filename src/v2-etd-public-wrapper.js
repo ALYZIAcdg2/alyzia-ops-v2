@@ -43,6 +43,9 @@ import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
 async function runLive(env,opts){
+  // Statuts d'embarquement (Gatenavo : un appel pour tous les vols) EN PREMIER et à l'abri des erreurs des étapes suivantes : un passage long ou en échec
+  // (lectures FlightAware / FlightStats, délais) ne doit plus empêcher la mise à jour de l'embarquement, qui ne vit que 15 à 30 min par vol.
+  const parisAeroport=await runParisAirportStatusFlow(env).catch(e=>({ok:false,error:String(e?.message||e)}));
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
   // Flux FIDS d'abord : ATD / ATA de tous les vols en un appel, pour que le passage par vol ne lise FlightStats / FlightAware que pour ce qui manque encore.
   const fidsSweep=await sweepFidsToday(env).catch(()=>null);
@@ -52,7 +55,6 @@ async function runLive(env,opts){
   // Config cabine automatique alignée sur le type réel quand un appareil a changé (sans action dans la fiche).
   const cabinSync=await syncCabinAfterAircraftChange(env).catch(e=>({ok:false,error:String(e?.message||e)}));
   const recovery=await recoverValidatedLiveFacts(env);
-  const parisAeroport=await runParisAirportStatusFlow(env);
   const regFix=await sanitizeTodayRegistrations(env);
   const arrivalFix=await sanitizeArrivalClocks(env).catch(()=>null);
   const statusModel=await runStatusModelTest(env);
