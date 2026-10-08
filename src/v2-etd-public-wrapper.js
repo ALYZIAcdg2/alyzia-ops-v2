@@ -31,6 +31,7 @@ import {probeGatenavo,probeGatenavoFlight} from "./gatenavo-probe.js";
 import {probeFr24Board} from "./fr24-board-probe.js";
 import {readPauses} from "./pauses.js";
 import {restoreRegs} from "./reg-restore.js";
+import {restoreEtds} from "./etd-restore.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
 import {API_NAMES_SCRUB_UI} from "./api-names-scrub.js";
 import {FICHE_CONFIG_UI} from "./fiche-config-actions.js";
@@ -185,6 +186,10 @@ export default {
     if(url.pathname==="/api/admin/flight-state"&&request.method==="GET"){
       // Lecture seule : heures d'un vol avec leur source et le journal des écritures (décollage, atterrissage, ATA, ATD).
       try{return json(await readFlightState(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/etd-restore"){
+      // GET : aperçu des ETD effacés après la STD qui seraient restaurés depuis le journal. POST : applique.
+      try{return json(await restoreEtds(env,{date:url.searchParams.get("date")||"",dryRun:request.method!=="POST"}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/reg-restore"){
       // GET : aperçu des immatriculations qui seraient restaurées depuis le journal (tableau FR24). POST : applique.
