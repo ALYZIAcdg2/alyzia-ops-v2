@@ -1,7 +1,7 @@
 import test from "node:test";import assert from "node:assert/strict";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {__reset} from "./fr24-board.js";
-const NOW=Date.parse("2026-10-05T14:00:00Z"),STD=Date.parse("2026-10-05T11:00:00Z")/1000; // 13:00 Paris
+const NOW=Date.parse("2026-10-05T14:00:00Z"),BEFORE_STD=Date.parse("2026-10-05T10:00:00Z"),STD=Date.parse("2026-10-05T11:00:00Z")/1000; // 13:00 Paris
 const page=fl=>`<div data-page="${JSON.stringify({props:{flights:fl,meta:{hasMoreNextData:false}}}).replace(/&/g,"&amp;").replace(/"/g,"&quot;")}"></div>`;
 const mk=(o={})=>({flightNumber:"AF430",status:{name:"departed"},scheduledTime:STD,estimatedTime:STD+1500,gate:"M24",aircraft:{registration:"F-GSPL",type:"B772"},flightId:"x",...o});
 function env(rows){const writes=[];return {writes,OPS_DB:{prepare:q=>({bind:(...a)=>({all:async()=>({results:rows}),run:async()=>{writes.push(a)}})})}}}
@@ -30,11 +30,18 @@ test("tableau revenu à la STD : l'ETD qui venait du tableau est retiré, pas ce
   __reset();
   const base={gate:"M24",reg:"F-GSPL",aircraftActual:"772"};
   const e=env([row({...base,etd:"13:14",etdSource:"PUBLIC_LIVE:FR24BOARD"})]);
-  const r=await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});
+  const r=await sweepBoardToday(e,{nowMs:BEFORE_STD,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});
   const saved=JSON.parse(e.writes[0][0]);assert.equal(saved.etd,undefined);assert.equal(saved.etdSource,undefined);assert.equal(r.counts.etdCleared,1);
   assert.equal(saved.flightInfoLog[0].to,"");
   __reset();
   const e2=env([row({...base,etd:"13:14",etdSource:"PUBLIC_ETD:FR24"})]);
-  await sweepBoardToday(e2,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});
+  await sweepBoardToday(e2,{nowMs:BEFORE_STD,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});
   assert.equal(e2.writes.length,0);
+});
+test("STD dépassée, vol pas parti : le tableau revenu à la STD n'efface plus l'ETD (AT779)",async()=>{
+  __reset();
+  const base={gate:"M24",reg:"F-GSPL",aircraftActual:"772"};
+  const e=env([row({...base,etd:"13:38",etdSource:"PUBLIC_LIVE:FR24BOARD"})]);
+  await sweepBoardToday(e,{nowMs:NOW,fetchImpl:fetchOf([mk({status:{name:"estimated"},estimatedTime:STD})])});   // 16:00 Paris, STD 13:00 passée
+  assert.equal(e.writes.length,0);
 });

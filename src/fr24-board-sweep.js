@@ -11,6 +11,8 @@ const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?String(m[1])
 const parisDate=(ms)=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(ms));
 const parisClock=sec=>{const p=new Intl.DateTimeFormat("fr-FR",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(sec*1000)),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return `${m.hour}:${m.minute}`};
 const normReg=v=>upper(v).replace(/[^A-Z0-9]/g,"");
+// STD du jour déjà dépassée (heure de Paris) : un « estimé = programmé » du tableau n'est alors pas crédible pour un vol pas encore parti.
+export function stdAlreadyPassed(std,nowMs){const m=/^(\d{2}):(\d{2})$/.exec(clean(std));if(!m)return false;const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(nowMs)).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)>Number(m[1])*60+Number(m[2])}
 const regOf=x=>clean(x?.reg||x?.registration||x?.aircraftRegistration);
 
 export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
@@ -39,7 +41,8 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
     // Le tableau est repassé à la STD (plus de retard annoncé) alors que notre ETD vient de lui : cet ETD est périmé, on le retire (vérifié sur FR24 : LO336, ETD 19:59 chez nous, 19:45 sur FR24).
     if(row&&row.time&&row.time===row.std&&row.status!=="departed"&&row.status!=="canceled"&&!clean(x.atd)&&!clean(x.takeoff)&&!manual(x,"etd")){
       const cur=hhmm(x.etd||x.edt),std=hhmm(x.std||r.std);
-      if(cur&&cur!==std&&/FR24BOARD/.test(upper(x.etdSource))){
+      // Pas d'effacement une fois la STD dépassée : AT779 (STD 13:05, ETD 13:38 juste) voyait son ETD effacé puis remis en boucle quand le tableau repassait à 13:05.
+      if(cur&&cur!==std&&/FR24BOARD/.test(upper(x.etdSource))&&!stdAlreadyPassed(std,nowMs)){
         log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from:cur,to:""});
         delete x.etd;delete x.edt;delete x.etdSource;delete x.etdUpdatedAt;changed=true;counts.etdCleared=(counts.etdCleared||0)+1}}
     if(row){
