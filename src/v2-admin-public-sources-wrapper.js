@@ -11,6 +11,7 @@ const SOURCES=[
   {key:"FR24",label:"Flightradar24 par vol",role:"ETD / TAKEOFF / ETA / LANDING / TYPE / IMMAT"},
   {key:"FLIGHTSTATS",label:"FlightStats",role:"ATD / ATA / ETA / statut"},
   {key:"FLIGHTAWARE",label:"FlightAware",role:"ATD / ETA / ATA / suivi vol"},
+  {key:"GATENAVO",label:"Gatenavo (embarquement)",role:"STATUT embarquement / embarquement clos (un appel pour tous les vols)"},
   {key:"PARIS_AEROPORT",label:"Paris Aéroport",role:"GATE / statut / décollage / horaires CDG"}
 ];
 const FIELDS=["sta","etd","atd","takeoff","eta","landing","ata","gate","reg","aircraftActual","status"];
@@ -25,6 +26,7 @@ function sourceKey(v){
   if(s.includes("FIDS"))return "FIDS";
   if(s.includes("FLIGHTSTATS"))return "FLIGHTSTATS";
   if(s.includes("FLIGHTAWARE"))return "FLIGHTAWARE";
+  if(s.includes("GATENAVO"))return "GATENAVO";
   if(s.includes("PARIS_AEROPORT")||s.includes("PARIS AEROPORT"))return "PARIS_AEROPORT";
   if(s==="FR24"||s.includes("FR24")||s.includes("FLIGHTRADAR24"))return "FR24";
   return "";
@@ -106,7 +108,7 @@ async function publicSourceStats(env){
         if(!FIELDS.includes(field))continue;
         const sig=`${key}|${field}`;if(seen.has(sig))continue;seen.add(sig);addField(stats,key,field,e?.at);
       }
-      const phaseKey=sourceKey(x.parisAeroportPhaseSource);if(stats[phaseKey]&&clean(x.parisAeroportPhase))addField(stats,phaseKey,"status",x.parisAeroportPhaseUpdatedAt||x.parisAeroportStatusCheckedAt);
+      const phaseKey=upper(x.parisAeroportVia)==="GATENAVO"?"GATENAVO":sourceKey(x.parisAeroportPhaseSource);if(phaseKey==="GATENAVO"&&stats.GATENAVO&&clean(x.parisAeroportStatusCheckedAt))addAttempt(stats,"GATENAVO",{status:"OK",checkedAt:x.parisAeroportStatusCheckedAt});if(stats[phaseKey]&&clean(x.parisAeroportPhase))addField(stats,phaseKey,"status",x.parisAeroportPhaseUpdatedAt||x.parisAeroportStatusCheckedAt);
     }
   }catch(e){return {ok:false,error:"PUBLIC_SOURCE_STATS",detail:String(e?.message||e)}}
   const sources=SOURCES.map(def=>{

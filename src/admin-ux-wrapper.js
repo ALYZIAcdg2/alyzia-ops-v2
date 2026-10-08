@@ -27,7 +27,7 @@ let page=1,sig='',view='main',queued=false;
 const root=()=>document.querySelector('#app .admin-native');
 const rows=r=>[...r.querySelectorAll('.adn-table tbody tr')];
 
-const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FR24BOARD','TB','FR24 tableau CDG'],['FIDS','FD','FIDS flightradar.live'],['FLIGHTAWARE','FA','FlightAware']];
+const SRC=[['FLIGHTSTATS','FS','FlightStats'],['FR24','FR','FlightRadar24'],['FR24BOARD','TB','FR24 tableau CDG'],['FIDS','FD','FIDS flightradar.live'],['GATENAVO','GN','Gatenavo (embarquement)'],['FLIGHTAWARE','FA','FlightAware']];
 const LAB={OK:'Lu avec succès',COOLDOWN:'En pause (limite atteinte récemment)',BLOCKED:'Bloqué par le site',NO_USABLE_DATA:'Page lue, aucune donnée utile',NOT_TRACKED:'Vol non suivi par cette source',NO_OCCURRENCE_URL:'Pas de page pour ce jour',FR24_NO_USABLE_DATA:'Aucune donnée exploitable',TIMEOUT:'Délai dépassé',FETCH_ERROR:'Erreur réseau',OCCURRENCE_MISMATCH:'Autre jour du même vol',HTTP_ERROR:'Erreur du site',NO_SOURCE:'Source non utilisée'};
 function kind(a){if(!a)return 'none';if(a.st==='OK')return 'ok';if(a.h===403||a.h===429||a.st==='BLOCKED'||a.st==='COOLDOWN')return 'block';if(/NO_USABLE|NOT_TRACKED|NO_OCCURRENCE|NO_SOURCE|MISMATCH/.test(a.st))return 'none';return 'err'}
 function label(a){let t=LAB[a.st]||a.st;if(a.h===403)t='Refusé (403) : trop de requêtes ou blocage';else if(a.h===429)t='Trop de requêtes (429) : patienter';else if(a.h&&a.st==='HTTP_ERROR')t='Erreur du site (HTTP '+a.h+')';return t}
@@ -39,8 +39,8 @@ function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&
 function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
 function pills(x){const by=contributions(x);return SRC.map(s=>{const a=latest(x,s[0]);let k=kind(a),t=a?label(a):'pas encore lu';if(k==='none'&&by[s[0]]&&by[s[0]].length){k='ok';t='a apporté '+by[s[0]].map(c=>c.f).join(', ')}return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+t)+'">'+s[1]+'</span>'}).join('')}
 // Qui a apporté quoi : dernière valeur de chaque champ écrite par chaque source, d'après le journal du vol.
-const FLD={etd:'ETD',atd:'ATD',eta:'ETA',ata:'ATA',takeoff:'TO',landing:'LDG',gate:'GATE',reg:'REG',aircraft:'A/C',status:'STATUT'};
-function srcKeyOf(src){const u=String(src||'').toUpperCase();if(u.includes('FR24BOARD'))return 'FR24BOARD';if(u.includes('FIDS'))return 'FIDS'+(u.includes('ONTIME')?'':'');if(u.includes('FLIGHTSTATS'))return 'FLIGHTSTATS';if(u.includes('FLIGHTAWARE'))return 'FLIGHTAWARE';if(u.includes('PLANEFINDER'))return 'PLANEFINDER';if(u.includes('SKYSCANNER'))return 'SKYSCANNER';if(u.includes('FR24'))return 'FR24';return 'AUTRE'}
+const FLD={etd:'ETD',atd:'ATD',eta:'ETA',ata:'ATA',takeoff:'TO',landing:'LDG',gate:'GATE',reg:'REG',aircraft:'A/C',status:'STATUT',boarding:'EMBARQ.'};
+function srcKeyOf(src){const u=String(src||'').toUpperCase();if(u.includes('FR24BOARD'))return 'FR24BOARD';if(u.includes('GATENAVO'))return 'GATENAVO';if(u.includes('FIDS'))return 'FIDS'+(u.includes('ONTIME')?'':'');if(u.includes('FLIGHTSTATS'))return 'FLIGHTSTATS';if(u.includes('FLIGHTAWARE'))return 'FLIGHTAWARE';if(u.includes('PLANEFINDER'))return 'PLANEFINDER';if(u.includes('SKYSCANNER'))return 'SKYSCANNER';if(u.includes('FR24'))return 'FR24';return 'AUTRE'}
 function contributions(x){const by={},seen={};(x.log||[]).forEach(e=>{const k=srcKeyOf(e.s),f=String(e.f||'').toLowerCase();if(!FLD[f]||!e.to)return;const id=k+'|'+f;if(seen[id])return;seen[id]=1;(by[k]=by[k]||[]).push({f:FLD[f],v:e.to,at:e.at,s:e.s,onTime:/ONTIME/i.test(e.s||''),derived:/DERIVED/i.test(e.s||'')})});return by}
 function contribHtml(list){return list.map(c=>'<span class="adx-c"><b>'+esc(c.f)+'</b> '+esc(c.v)+' <small>'+hm(c.at)+(c.onTime?' · à l\'heure (estimé = prévu)':'')+(c.derived?' · calculé':'')+'</small></span>').join('')}
 function openDetail(x){
