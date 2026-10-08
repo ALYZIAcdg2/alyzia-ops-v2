@@ -1,5 +1,4 @@
 import test from "node:test";
-import {FA_ONLY_AIRLINES} from "./ops-public-live-flow-optimized.js";
 import assert from "node:assert/strict";
 import {runPublicLiveFlow} from "./ops-public-live-flow-optimized.js";
 
@@ -164,7 +163,6 @@ test("live flow: FlightAware JSON gives ENT777 its ATD only (not takeoff / landi
     if(url.endsWith("/live/flight/ENT777"))return new Response(`<a href="https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI">x</a>`,{headers:{"content-type":"text/html"}});
     if(url.includes(`/history/${day}/0310Z/LFPG/LATI`))return new Response(`<html><script>var d={${json}}</script></html>`,{headers:{"content-type":"text/html"}});
     return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
-  FA_ONLY_AIRLINES.push("EN"); // FlightAware est réservé aux vols JU : cette compagnie de test l'est le temps du test
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.ok(update,"the flight was saved");
@@ -172,7 +170,7 @@ test("live flow: FlightAware JSON gives ENT777 its ATD only (not takeoff / landi
     assert.equal(update.takeoff,undefined);       // FlightAware ne sert qu'à l'ATD
     assert.equal(update.landing,undefined);
     assert.equal(update.flightAwareHistoryUrl,`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
-  }finally{globalThis.fetch=real;FA_ONLY_AIRLINES.pop()}
+  }finally{globalThis.fetch=real}
 });
 
 test("runLiveForFlight: dry run shows what would be written for ENT777 without saving it; POST mode saves",async()=>{
