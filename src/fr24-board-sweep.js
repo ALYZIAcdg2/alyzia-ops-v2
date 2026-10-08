@@ -19,13 +19,15 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const board=await getBoard({fetchImpl,nowMs});
   if(!board.index)return {ok:true,status:board.status,checked:0,updated:0};
-  const date=parisDate(nowMs),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();
+  // Aujourd'hui, et hier pour les vols d'hier soir retardés après minuit et pas encore atterris (le tableau les rapproche par leur date et leur STD d'origine).
+  const date=parisDate(nowMs),yesterday=parisDate(nowMs-86400000),{results:all=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date IN (?,?) AND airline<>'SYS'`).bind(date,yesterday).all();
+  const results=all.filter(r=>r.flight_date!==yesterday||(()=>{try{const x=JSON.parse(r.data_json||"{}");return !clean(x.ata)&&!clean(x.landing)}catch{return false}})());
   const at=new Date(nowMs).toISOString(),counts={gate:0,reg:0,type:0,etd:0,takeoff:0,atdRemoved:0};let checked=0,updated=0;
   for(const r of results){
     let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
     if(upper(x.origin||"CDG")!=="CDG")continue;
     const airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
-    const f={date,airline,number,designator,std:hhmm(x.std||r.std)},row=matchRow(board.index,f);
+    const rowDate=r.flight_date||date,f={date:rowDate,airline,number,designator,std:hhmm(x.std||r.std)},row=matchRow(board.index,f);
     let changed=false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     const note=(field,from,to)=>{log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field,from,to});changed=true;counts[field==="aircraft"?"type":field]=(counts[field==="aircraft"?"type":field]||0)+1};
     // ATD écrit à partir du tableau par une version précédente : c'était l'heure de décollage.
@@ -42,7 +44,7 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
     if(row&&row.time&&row.time===row.std&&row.status!=="departed"&&row.status!=="canceled"&&!clean(x.atd)&&!clean(x.takeoff)&&!manual(x,"etd")){
       const cur=hhmm(x.etd||x.edt),std=hhmm(x.std||r.std);
       // Pas d'effacement une fois la STD dépassée : AT779 (STD 13:05, ETD 13:38 juste) voyait son ETD effacé puis remis en boucle quand le tableau repassait à 13:05.
-      if(cur&&cur!==std&&/FR24BOARD/.test(upper(x.etdSource))&&!stdAlreadyPassed(std,nowMs)){
+      if(cur&&cur!==std&&/FR24BOARD/.test(upper(x.etdSource))&&!(rowDate<date||stdAlreadyPassed(std,nowMs))){
         log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field:"etd",from:cur,to:""});
         delete x.etd;delete x.edt;delete x.etdSource;delete x.etdUpdatedAt;changed=true;counts.etdCleared=(counts.etdCleared||0)+1}}
     if(row){
