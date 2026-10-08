@@ -117,6 +117,10 @@ function v2xDecorateInfo(x,body){var grid=body&&body.querySelector('.flight-info
  var tag=function(item,t){if(!item||!t)return;var s=item.querySelector('small');if(!s)return;var c=document.createElement('span');c.className='v2x-info-chg';c.textContent=t;s.appendChild(c)};
  var reg=val(x,'reg','registration','aircraftRegistration')||'';
  tag(find('GATE'),v2xFieldChange(x,'gate',x.gate));tag(find('IMMATRICULATION'),v2xFieldChange(x,'reg',reg));tag(find('CONFIGURATION'),v2xLastChange(x,'config'));
+ try{var bl=((x&&x.flightInfoLog)||[]).filter(function(e){return e&&String(e.field||'').toLowerCase()==='boarding'&&e.at}).slice(0,4);
+  if(bl.length){var it=document.createElement('div');it.className='flight-info-item';var sm=document.createElement('small');sm.textContent='STATUT · HISTORIQUE';it.appendChild(sm);
+   bl.forEach(function(e){var d=new Date(e.at),hh=isNaN(d)?'':new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}).format(d).replace(',',''),src=/GATENAVO/i.test(e.source||'')?'GATENAVO':/MANUAL/i.test(e.source||'')?'SAISIE MANUELLE':/PARIS/i.test(e.source||'')?'PARIS AÉROPORT':String(e.source||'');
+    var b=document.createElement('b');b.textContent=(up(txt(e.to))||'AUTO')+' · '+hh+' · '+src;it.appendChild(b)});grid.appendChild(it)}}catch(err){}
  var ac=find('TYPE APPAREIL');if(ac){
   var chg=x.aircraftChange?txt(x.aircraftChange.from)+' → '+txt((typeof opsCatalogType==='function'&&opsCatalogType(x.airline,up(txt(x.aircraftChange.to))))||x.aircraftChange.to):'';
   tag(ac,chg);[].slice.call(ac.querySelectorAll('div')).forEach(function(d){if(/b3261e/i.test(d.getAttribute('style')||''))d.remove()});
