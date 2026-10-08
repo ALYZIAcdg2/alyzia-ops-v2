@@ -371,7 +371,15 @@ function opsFlightForRow(row){
  const local=opsLocalFlights()[idx];if(!local)return null;
  // A flight number alone is not an occurrence: never take a different date or route from live data.
  const date=txt(local.activeDate||local.date||''),remote=live.find(x=>keyFlight(x)===keyFlight(local)&&txt(x.activeDate||x.date||'')===date&&up(x.dep||x.origin)===up(local.dep||local.origin)&&up(x.dest||x.destination)===up(local.dest||local.destination));
- return {x:{...local,...remote,config:local.config,booked:local.booked,inopSeats:local.inopSeats},idx};
+ const merged={...local,...remote,config:local.config,booked:local.booked,inopSeats:local.inopSeats};
+ // Un horaire saisi à la main dans la fiche (STD / STA) reste affiché dans la carte : la donnée distante ne l'écrase pas, sauf si elle porte une saisie manuelle plus récente.
+ if(remote){const lf=local.enrichment?.fields||{},rf=remote.enrichment?.fields||{};
+  for(const field of ['std','sta']){
+   const l=lf[field];if(!l||up(l.source)!=='MANUAL')continue;
+   const r=rf[field];if(r&&up(r.source)==='MANUAL'&&Date.parse(r.updated_at||0)>Date.parse(l.updated_at||0))continue;
+   if(field in local)merged[field]=local[field];
+  }}
+ return {x:merged,idx};
 }
 function opsClockMin(v){const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null}
 // Écart à l'horaire théorique (STD pour ETD/ATD/TO, STA pour ETA/ATA/LDG) : vert = en avance (5 min ou plus), bleu = à l'heure (jusqu'à +15 min),

@@ -24,3 +24,16 @@ test("sous l'avion : affichage branché dans la ligne de trajet",()=>{
   assert.match(REFERENCE_LIST_STYLE,/\.ops-plane-time\{/);
   assert.doesNotThrow(()=>new Function(REFERENCE_LIST_RENDERER));
 });
+test("carte liste : STD / STA saisis à la main dans la fiche ne sont pas écrasés par la donnée distante",()=>{
+  const src=REFERENCE_LIST_RENDERER.match(/function opsFlightForRow[\s\S]*?\n}\n/)[0];
+  const run=(local,remote)=>new Function("row","opsLocalFlights","live","txt","up","keyFlight",`${src};return opsFlightForRow(row)`)(
+    {getAttribute:()=>"openFlightFromHomeList(0)"},()=>[local],[remote],v=>String(v??""),v=>String(v??"").toUpperCase(),x=>x.flight).x;
+  const base={flight:"AF1",activeDate:"2026-10-08",dep:"CDG",dest:"NCE"};
+  const man=(t)=>({enrichment:{fields:{std:{source:"MANUAL",updated_at:t},sta:{source:"MANUAL",updated_at:t}}}});
+  let x=run({...base,std:"07:20",sta:"09:00",...man("2026-10-08T10:00:00Z")},{...base,std:"06:00",sta:"08:00"});
+  assert.equal(x.std,"07:20");assert.equal(x.sta,"09:00");
+  x=run({...base,std:"07:20",sta:"09:00"},{...base,std:"06:00",sta:"08:00"});          // sans saisie manuelle : la donnée distante gagne
+  assert.equal(x.std,"06:00");
+  x=run({...base,std:"07:20",...man("2026-10-08T10:00:00Z")},{...base,std:"07:45",enrichment:{fields:{std:{source:"MANUAL",updated_at:"2026-10-08T11:00:00Z"}}}});
+  assert.equal(x.std,"07:45");                                                          // saisie distante plus récente
+});
