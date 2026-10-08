@@ -49,3 +49,26 @@ export async function fetchGatenavoRows(){
 // Clé de correspondance d'un numéro de vol : sans espaces ni zéros de tête (Gatenavo écrit MH021, AF004 ; nous MH21, AF4).
 export function gatenavoKey(v){const s=String(v??"").toUpperCase().replace(/\s+/g,"");const m=/^([A-Z0-9]{2})0*(\d+[A-Z]?)$/.exec(s);return m?m[1]+m[2]:s}
 export function gatenavoPhase(status){return status==="boarding"?"EMBARQUEMENT":status==="gate_closed"?"EMBARQUEMENT CLOS":status==="cancelled"?"ANNULÉ":""}
+
+// Lecture seule : la page d'un vol (gatenavo.com/en/flights/<vol>) est-elle plus fraîche que la liste des départs ?
+// Renvoie le statut et l'heure de mise à jour de chaque côté, plus un extrait brut autour du vol pour repérer les champs de date.
+export async function probeGatenavoFlight({flight=""}={}){
+  const want=gatenavoKey(flight);if(!want)return {ok:false,error:"flight required"};
+  const slug=upper(flight).replace(/\s+/g,"").toLowerCase(),url=`https://gatenavo.com/en/flights/${encodeURIComponent(slug)}`;
+  const out={ok:true,mode:"GATENAVO_FLIGHT_PROBE_NO_WRITE",flight:want,url,now:new Date().toISOString()};
+  const get=async u=>{const c=new AbortController(),timer=setTimeout(()=>c.abort(),10000);
+    try{const r=await fetch(u,{signal:c.signal,cf:{cacheTtl:0,cacheEverything:false},headers:{accept:"text/html","accept-language":"fr-FR,fr;q=0.9,en;q=0.7","cache-control":"no-cache",pragma:"no-cache","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-Probe/1.0)"}});
+      const html=await r.text();return {status:r.status,html,age:r.headers.get("age")||"",cache:r.headers.get("x-vercel-cache")||r.headers.get("x-nextjs-cache")||"",date:r.headers.get("date")||""}}
+    catch(e){return {status:0,html:"",error:String(e?.name||e?.message||e)}}finally{clearTimeout(timer)}};
+  const page=await get(url);out.page={httpStatus:page.status,age:page.age,cache:page.cache,date:page.date,length:page.html.length,error:page.error||""};
+  if(page.status===200&&!/Pardon Our Interruption|Just a moment|cf-chl|Attention Required/i.test(page.html)){
+    const text=page.html.replace(/\\"/g,'"'),rows=parseGatenavoFlights(page.html).filter(r=>gatenavoKey(r.flight)===want);
+    out.page.rows=rows.slice(0,3);
+    out.page.updatedText=(text.replace(/<[^>]+>/g," ").match(/Updated[^.]{0,40}(?:ago|now)/i)||[""])[0].trim();
+    const i=text.indexOf(`"flightNumber":"${upper(flight).replace(/\s+/g,"")}"`);out.page.excerpt=i>=0?text.slice(Math.max(0,i-300),i+500):"";
+  }else if(page.status===200)out.page.error="BOT_PROTECTION";
+  const list=await get(URL_DEP);
+  if(list.status===200){const r=parseGatenavoFlights(list.html).find(x=>gatenavoKey(x.flight)===want);out.list={status:r?.status||"",raw:r?.raw||"",fetchedAt:r?.fetchedAt||"",ageMin:r?.fetchedAt?Math.round((Date.now()-Date.parse(r.fetchedAt))/60000):null,scheduled:r?.scheduled||""}}
+  else out.list={httpStatus:list.status,error:list.error||""};
+  return out;
+}

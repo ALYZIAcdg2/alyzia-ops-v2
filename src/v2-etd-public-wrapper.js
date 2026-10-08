@@ -27,7 +27,7 @@ import {runFidsPages} from "./fids-pages-test.js";
 import {runTimesCompare} from "./times-compare.js";
 import {sanitizeTodayRegistrations} from "./ops-reg-sanitizer.js";
 import {runParisAirportStatusFlow,probeParisAirport} from "./paris-airport-status-flow.js";
-import {probeGatenavo} from "./gatenavo-probe.js";
+import {probeGatenavo,probeGatenavoFlight} from "./gatenavo-probe.js";
 import {probeFr24Board} from "./fr24-board-probe.js";
 import {restoreRegs} from "./reg-restore.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
@@ -253,6 +253,10 @@ export default {
     if(url.pathname==="/api/admin/fr24-board-probe"&&request.method==="GET"){
       // Lecture seule : champs de temps des lignes « atterri » du tableau FR24 (source possible pour LDG).
       try{return json(await probeFr24Board())}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/gatenavo-flight-probe"&&request.method==="GET"){
+      // Lecture seule : page d'un vol Gatenavo comparée à sa liste des départs (fraîcheur).
+      try{return json(await probeGatenavoFlight({flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/gatenavo-probe"&&request.method==="GET"){
       // Lecture seule : accès et couverture de la page départs CDG de Gatenavo (statuts embarquement).
