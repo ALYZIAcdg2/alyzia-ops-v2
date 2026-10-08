@@ -17,3 +17,15 @@ export function atdOverdue(x,nowMs=Date.now(),flightDate=""){
 }
 // Vol à lire sur FlightAware : sans ATD, et le FIDS a eu le temps de la donner. Le 1er argument (numéro de vol) n'est plus utilisé : plus de liste de compagnies.
 export function flightAwareAllowed(flight,x,nowMs=Date.now(),flightDate=""){return atdOverdue(x,nowMs,flightDate)}
+
+// Arrivée manquante : vol parti dont ni l'atterrissage ni l'ATA ne sont connus alors que la durée prévue du vol + 30 min est écoulée depuis le décollage
+// (le FIDS n'a pas donné l'ATA, FR24 non plus). Vol d'un jour passé avec décollage connu : toujours.
+export const FA_ARRIVAL_GRACE_MIN=30;
+export function arrivalOverdue(x,nowMs=Date.now(),flightDate=""){
+  if(clean(x?.ata)||clean(x?.landing))return false;
+  const to=toMin(x?.takeoff);if(to===null)return false;
+  if(flightDate&&flightDate<parisDay(nowMs))return true;
+  const dur=Number(x?.duration);if(!(dur>0))return false;
+  let d=parisMin(nowMs)-to;if(d<0)d+=1440;
+  return d>=dur+FA_ARRIVAL_GRACE_MIN;
+}

@@ -6,7 +6,7 @@ import {boardLookup,gateValue} from "./fr24-board.js";
 import {withIcaoFallback,matchesFlightStatsOccurrence,publicPageStatus,flightLookupVariants} from "./public-flight-alias.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
-import {flightAwareAllowed} from "./fa-policy.js";
+import {flightAwareAllowed,arrivalOverdue} from "./fa-policy.js";
 export {flightAwareAllowed};
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {noteActualAircraft} from "./aircraft-change.js";
@@ -333,6 +333,8 @@ export function arrivingSoon(x,nowMs=Date.now()){const a=Date.parse(clean(x?.sta
 export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];
   // Vols dont FlightAware est la seule source d'ATD (JU) : dès que le vol est parti (ou sa STD passée) sans ATD, en tête de file (toutes les 10 min au plus). Sans cela, JU241, arrivé sans ATD, restait derrière les vols en l'air et n'était jamais relu.
   if((clean(x.ata)||clean(x.landing))&&flightAwareAllowed(x.flight||x.designator||row.flight_number,x,nowMs,row.flight_date)&&nowMs-checked>=10*60000)return [0.2,checked];
+  // Vol parti dont l'arrivée (LDG / ATA) manque bien après l'heure prévue : en tête aussi (AH1543 restait « ARRIVÉE » sans ATA).
+  if(arrivalOverdue(x,nowMs,row.flight_date)&&nowMs-checked>=10*60000)return [0.2,checked];
   // Took off but no ATD yet (FR24 no longer gives it): FlightStats / FlightAware are asked again, every 5 minutes at most, for 12 h after takeoff ; the flights whose FlightStats id is known (light API call) come first.
   if((!clean(x.atd)||fidsAtd(x))&&clean(x.takeoff)&&!clean(x.ata)&&nowMs-checked>=5*60000){const since=minutesSinceLocalClock(x.takeoff,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris",new Date(nowMs));if(since!==null&&since<=720)return [/^\d+$/.test(clean(x.flightStatsId))&&clean(x.flightStatsIdDate)===row.flight_date?0.3:0.4,checked]}// Déjà arrivé mais ATD (ou immatriculation) toujours manquant : relu après les vols en l'air, avant les vols sans enjeu (au plus toutes les 10 min par vol). Sans cela ces vols restaient dans le dernier groupe et n'étaient presque jamais repris.
   if(clean(x.ata)&&(!clean(x.atd)||fidsAtd(x)||!clean(x.reg||x.registration))&&nowMs-checked>=10*60000)return [1.6,checked];
@@ -372,14 +374,16 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   const noDeparture=!clean(base.atd)&&!clean(map.FLIGHTSTATS?.atd);
   // Departed flight still without landing / ATA after FR24 + FlightStats: read its known FlightAware page (PC5038 case).
   const noArrival=!clean(base.ata)&&!clean(base.landing)&&!clean(map.FR24?.ata)&&!clean(map.FR24?.landing)&&!clean(map.FLIGHTSTATS?.ata);
-  // FlightAware : ATD uniquement, pour un vol sans ATD que le FIDS n'a pas rempli ; 3 vols au plus par passage ; relecture manuelle (onDemand) toujours possible.
-  if((onDemand||(flightAwareAllowed(f.designator,base,Date.now(),f.date)&&faLeft>0))&&!tooEarly&&((forced||(pastStd&&atdMissing))&&noDeparture)){
+  // FlightAware : comble ce que le FIDS n'a pas donné, sans rien remplacer : l'ATD d'un vol sans ATD, l'atterrissage / l'ATA d'un vol parti dont l'arrivée manque bien après l'heure prévue.
+  // 3 vols au plus par passage ; la relecture manuelle (onDemand) reste possible pour n'importe quel vol.
+  {const faAtd=(onDemand||flightAwareAllowed(f.designator,base,Date.now(),f.date))&&((forced||(pastStd&&atdMissing))&&noDeparture),faArr=arrivalOverdue(base,Date.now(),f.date)&&noArrival;
+  if(!tooEarly&&(faAtd||faArr)&&(onDemand||faLeft>0)){
     if(!onDemand)faLeft--;
     const fa=await fetchFlightAwareLive(f,base.flightAwareHistoryUrl).catch(()=>null);
     attempts.push({source:"FLIGHTAWARE",status:fa?.status||"ERROR",checkedAt:new Date().toISOString()});
-    if(fa?.semantic)map.FLIGHTAWAREEXACT={atd:fa.semantic.atd||""};   // FlightAware : ATD uniquement
+    if(fa?.semantic)map.FLIGHTAWAREEXACT={atd:faAtd?(fa.semantic.atd||""):"",landing:faArr?(fa.semantic.landing||""):"",ata:faArr?(fa.semantic.ata||""):""};
     if(fa?.url)faUrl=fa.url;
-  }
+  }}
   // PlaneFinder puis Skyscanner uniquement si quelque chose reste réellement à compléter.
   for(const source of ["PLANEFINDER","SKYSCANNER"]){const found={atd:choose(map,"atd",LIVE_PUBLIC_SOURCE_ORDER.atd).value,eta:choose(map,"eta",LIVE_PUBLIC_SOURCE_ORDER.eta).value,ata:choose(map,"ata",LIVE_PUBLIC_SOURCE_ORDER.ata).value,status:choose(map,"status",LIVE_PUBLIC_SOURCE_ORDER.status).value,aircraft:choose(map,"aircraft",LIVE_PUBLIC_SOURCE_ORDER.aircraft).value,reg:choose(map,"reg",LIVE_PUBLIC_SOURCE_ORDER.reg).value};const n=needFromCurrent(base),left=(n.atd&&!found.atd)||(n.eta&&!found.eta)||(n.ata&&!found.ata)||(n.status&&!found.status)||(n.aircraft&&!found.aircraft)||(n.reg&&!found.reg);if(!left)break;const r=await fetchHtmlSource(source,f);attempts.push(attemptOf(source,r));map[source]=r?.semantic||{}}
   const current=await readCurrent(env,row.identity);if(!current)return {flight:f.designator,status:"FLIGHT_DISAPPEARED"};let changed=false;

@@ -25,3 +25,14 @@ test("FlightAware : ATD uniquement, jamais ETD / STA / porte, dans toutes les le
   assert.match(rd("./ops-public-live-flow-optimized.js"),/map\.FLIGHTAWAREEXACT=\{atd:/);
   assert.match(rd("./ops-public-live-flow-optimized.js"),/faLeft>0/);                          // 3 vols au plus par passage
 });
+
+import {arrivalOverdue} from "./fa-policy.js";
+test("arrivée manquante : vol parti, durée prévue + 30 min écoulée, ni LDG ni ATA", () => {
+  const x={takeoff:"12:00",duration:140};                       // décollage 12:00 Paris
+  assert.equal(arrivalOverdue(x,Date.parse("2026-10-08T12:30:00Z")),false);   // 14:30 Paris : en vol
+  assert.equal(arrivalOverdue(x,Date.parse("2026-10-08T12:50:00Z")),true);    // 14:50 Paris : 2 h 50 > 2 h 20 + 30 min ? (170 min) oui
+  assert.equal(arrivalOverdue({...x,landing:"14:20"},Date.parse("2026-10-08T12:50:00Z")),false);
+  assert.equal(arrivalOverdue({...x,ata:"14:30"},Date.parse("2026-10-08T12:50:00Z")),false);
+  assert.equal(arrivalOverdue({takeoff:"12:00"},Date.parse("2026-10-08T12:50:00Z")),false);   // pas de durée : on ne devine pas
+  assert.equal(arrivalOverdue({takeoff:"12:00"},Date.parse("2026-10-08T12:50:00Z"),"2026-10-07"),true);   // vol de la veille
+});
