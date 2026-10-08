@@ -82,6 +82,8 @@ export function etdFromRow(row,x,{std,date}={}){
   const v=hhmm(row?.dep_estimated);if(!clean(row?.dep_estimated)||!v)return "";
   if(date&&!clean(row.dep_estimated).startsWith(date))return "";
   if(clean(x?.atd)||clean(x?.takeoff)||clean(x?.landing)||clean(x?.ata))return "";
+  // Le flux a déjà l'heure réelle de départ : son dep_estimated vaut alors l'heure réelle, pas une estimation. On garde le dernier ETD d'avant le départ.
+  if(clean(row?.dep_actual))return "";
   const e=Number(row.dep_estimated_ts),s=Number(row.dep_time_ts);
   if(e>0&&s>0){const d=(e-s)/60;if(d<-60||d>1440)return ""}
   if(v===std&&!clean(x?.etd||x?.edt))return "";
