@@ -68,6 +68,13 @@ async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=t
   const statusModel=await runStatusModelTest(env);
   return {etd,live,ground,statusModel};
 }
+const LIGHT_CRON="1-59/2 * * * *";
+// Passage léger : mêmes écritures que dans le passage complet, mais sous le même verrou (jamais en même temps qu'un passage complet).
+async function runBoardingOnly(env){
+  if(!(await acquireCronLock(env)))return;
+  try{await runParisAirportStatusFlow(env).catch(()=>{});await runStatusModelTest(env).catch(()=>{})}
+  finally{await releaseCronLock(env)}
+}
 const CRON_LOCK_MS=100000;
 async function acquireCronLock(env){
   try{
@@ -306,6 +313,8 @@ export default {
     const headers=new Headers(response.headers);headers.delete('content-length');headers.set('cache-control','no-store');return new Response(patchHtml(await response.text()),{status:response.status,statusText:response.statusText,headers});
   },
   scheduled(controller,env,ctx){
+    // Minutes impaires : passage léger « embarquement » seulement (un appel Gatenavo + calcul du statut). Les minutes paires gardent le passage complet ci-dessous.
+    if(controller?.cron===LIGHT_CRON){ctx.waitUntil(runBoardingOnly(env));return}
     if(typeof app.scheduled==="function")app.scheduled(controller,env,ctx);
     ctx.waitUntil((async()=>{
       // The cron runs every 2 minutes: a run still in progress (lock younger than 100 s) is not doubled.
