@@ -37,7 +37,7 @@ let refDate='',flightsCache=null,flightsAt=0,loading=false;
 function loadFlights(){if(loading||Date.now()-flightsAt<15000)return;loading=true;fetch('/api/admin/flight-processing',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d&&d.ok){flightsCache=d.flights||[];refDate=d.date||'';flightsAt=Date.now();queue()}}).catch(()=>{}).finally(()=>{loading=false})}
 function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&x.date===date)}
 function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
-function pills(x){return SRC.map(s=>{const a=latest(x,s[0]);const k=kind(a);return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+(a?label(a):'pas encore lu'))+'">'+s[1]+'</span>'}).join('')}
+function pills(x){const by=contributions(x);return SRC.map(s=>{const a=latest(x,s[0]);let k=kind(a),t=a?label(a):'pas encore lu';if(k==='none'&&by[s[0]]&&by[s[0]].length){k='ok';t='a apporté '+by[s[0]].map(c=>c.f).join(', ')}return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+t)+'">'+s[1]+'</span>'}).join('')}
 // Qui a apporté quoi : dernière valeur de chaque champ écrite par chaque source, d'après le journal du vol.
 const FLD={etd:'ETD',atd:'ATD',eta:'ETA',ata:'ATA',takeoff:'TO',landing:'LDG',gate:'GATE',reg:'REG',aircraft:'A/C',status:'STATUT'};
 function srcKeyOf(src){const u=String(src||'').toUpperCase();if(u.includes('FR24BOARD'))return 'FR24BOARD';if(u.includes('FIDS'))return 'FIDS'+(u.includes('ONTIME')?'':'');if(u.includes('FLIGHTSTATS'))return 'FLIGHTSTATS';if(u.includes('FLIGHTAWARE'))return 'FLIGHTAWARE';if(u.includes('PLANEFINDER'))return 'PLANEFINDER';if(u.includes('SKYSCANNER'))return 'SKYSCANNER';if(u.includes('FR24'))return 'FR24';return 'AUTRE'}
@@ -63,7 +63,7 @@ function decorate(r){
   const date=document.getElementById('adminDateInput')?.value||'';
   rows(r).forEach(tr=>{const cell=tr.cells[col],fl=(tr.cells[0]?.textContent||'').trim();if(!cell||!fl)return;const x=find(fl,date);if(!x)return;
     // Un vol pas encore lu par aucune source (jour suivant, vol récent) garde ses pastilles, en gris « pas encore lu », avec son dernier traitement connu.
-    const att=x.attempts||[],sig=x.liveAt+'|'+att.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig&&cell.querySelector('.adx-srcs'))return;cell.dataset.adxSig=sig;
+    const att=x.attempts||[],sig=x.liveAt+'|'+((x.log||[]).length)+'|'+att.map(a=>a.s+a.st+a.h+a.d).join(',');if(cell.dataset.adxSig===sig&&cell.querySelector('.adx-srcs'))return;cell.dataset.adxSig=sig;
     if(!cell.querySelector('.adx-srcs'))cell.dataset.adxOrig=cell.textContent.replace(/\s+/g,' ').trim();
     const last=att.length?hm(x.liveAt):(cell.dataset.adxOrig||'—');
     cell.innerHTML='<div class="adx-srcs" title="Cliquer pour le détail">'+pills(x)+'</div><div style="font-size:10px;color:#6b7c90;font-weight:800;margin-top:2px">'+esc(last)+'</div>';
