@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {classify} from './admin-dashboard-native-wrapper.js';
 import {flightOperationalStatus} from './flight-operational-status.js';
@@ -35,6 +35,7 @@ test('information manquante (porte, immat, type) : EN ATTENTE, y compris pour un
 });
 
 test("ADMIN : le statut PRÉVU est affiché « À L'HEURE »",()=>{
- const r=row({},'2026-10-03');
- assert.equal(r.flightStatus,"À L'HEURE");
+ // Horloge figée le matin du vol : sans cela le résultat dépendait de l'heure réelle (RETARDÉ une fois la STD + 15 min passée).
+ mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-03T06:00:00Z')});
+ try{const r=row({},'2026-10-03');assert.equal(r.flightStatus,"À L'HEURE")}finally{mock.timers.reset()}
 });

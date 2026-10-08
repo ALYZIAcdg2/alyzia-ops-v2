@@ -298,7 +298,7 @@ function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   /* ATA : le premier qui donne l'heure la garde (FIDS, FlightStats, FlightAware) ; une autre source ne la remplace pas, seule une ATA calculée est remplacée. */
   if(field==="ata"&&before&&/FIDS|FLIGHTSTATS|FLIGHTAWARE/.test(upper(x.ataSource))){const key=v=>upper(v).replace(/^PUBLIC_LIVE:/,"").replace(/EXACT$/,"").replace(/[^A-Z]/g,"");if(key(x.ataSource)!==key(hit.source))return false}
   if(field==="atd"&&before&&/FIDS_ONTIME/.test(upper(x.atdSource))&&!/FIDS/.test(upper(hit.source)))x.atdConflict={from:before,to:hit.value,source:hit.source,at};/* ATD « parti à l'heure » (flux FIDS) contredit par une autre source : le vol passe À CONTRÔLER */const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:`PUBLIC_LIVE:${hit.source}`,field,from:before,to:hit.value});x.flightInfoLog=log.slice(0,240);x[field]=hit.value;x[field+"Source"]=`PUBLIC_LIVE:${hit.source}`;x[field+"UpdatedAt"]=at;if(field==="reg"){x.registration=hit.value;x.aircraftRegistration=hit.value}return true}
-function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x)||(/FIDS/.test(upper(x.atdSource))&&!manual(x,"atd")),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isJunkRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
+function needFromCurrent(x){return {atd:!clean(x.atd)||suspectAtd(x)||fidsAtd(x),eta:!clean(x.eta),ata:!clean(x.ata),status:!clean(x.status),aircraft:!clean(x.aircraftActual||x.aircraft),reg:!clean(x.reg||x.registration)||isJunkRegistration(x.reg||x.registration),takeoff:!clean(x.takeoff),landing:!clean(x.landing)}}
 function anyNeed(n,keys){return keys.some(k=>n[k])}
 async function readCurrent(env,id){const r=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(id).first();if(!r)return null;try{return JSON.parse(r.data_json||"{}")}catch{return {}}}
 async function saveMeta(env,data){try{await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES('v2_public_live_last',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(JSON.stringify(data)).run()}catch{}}
@@ -322,7 +322,9 @@ export function deriveAta(landingValue,zone,airline,now=new Date()){
 }
 // An ATD that is only the FR24 takeoff copied over (older readings): it is re-read first so FlightStats / FlightAware can give the real gate departure.
 // ATD venu du flux FIDS : provisoire, FlightStats / FlightAware doivent encore le confirmer.
-function fidsAtd(x){return Boolean(clean(x?.atd))&&/FIDS/.test(upper(x.atdSource))&&!manual(x,"atd")}
+// ATD du FIDS : une heure réelle de départ du flux (PUBLIC_LIVE:FIDS) est définitive, FlightStats / FlightAware ne la relisent plus ni ne la remplacent (ils ne comblent que ce que le FIDS n'a pas rempli).
+// Seul l'ATD « parti à l'heure » (PUBLIC_LIVE:FIDS_ONTIME, déduit de l'ETD, pas lu dans le flux) reste remplaçable par une vraie lecture.
+function fidsAtd(x){return Boolean(clean(x?.atd))&&/FIDS_ONTIME/.test(upper(x.atdSource))&&!manual(x,"atd")}
 export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clean(x.takeoff)&&/FR24/.test(upper(x.atdSource))&&!manual(x,"atd")}
 // Airborne flight arriving within 2 h (or just overdue): its ETA moves most, so it is re-read first, at most every 3 minutes.
 const INFLIGHT_WINDOW_MIN=120,INFLIGHT_REREAD_MIN=3;
