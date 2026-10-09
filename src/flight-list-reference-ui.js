@@ -174,7 +174,7 @@ html.alyzia-ops-cards #app .flight-home-row:not(.ops-flight-card):not(.ops-skip)
 #app .ops-route-line{position:relative}
 #app .ops-plane-flight{position:absolute;left:calc(15px + (100% - 30px)*var(--p));top:50%;transform:translate(-50%,-30px);font-size:13px;line-height:1;font-weight:900;letter-spacing:.2px;color:#2f6aa8;white-space:nowrap;pointer-events:none;transition:left .8s ease}
 #app .ops-route-line.plane-ok .ops-plane-flight{color:#12a150}#app .ops-route-line.plane-late .ops-plane-flight{color:#d93025}
-#app .ops-time-elapsed,#app .ops-time-remaining{position:absolute;top:calc(50% + 20px);display:flex;flex-direction:column;line-height:1.15;font-size:12px;font-weight:800;color:#3d5f86;white-space:nowrap;pointer-events:none}
+#app .ops-time-elapsed,#app .ops-time-remaining{position:absolute;top:calc(50% + 32px);display:flex;flex-direction:column;line-height:1.15;font-size:12px;font-weight:800;color:#3d5f86;white-space:nowrap;pointer-events:none}
 #app .ops-time-elapsed{left:0;align-items:flex-start}#app .ops-time-remaining{right:0;align-items:flex-end}
 #app .ops-time-elapsed small,#app .ops-time-remaining small{font-size:9px;font-weight:900;letter-spacing:.5px;color:#7b8ea4}
 #app .ops-time-elapsed b,#app .ops-time-remaining b{font-size:13px;font-weight:900;color:#1d4570}
