@@ -28,7 +28,7 @@ test("même construction que HORAIRES : rangée de contrôles, menu, bascule à 
 test("sélection simple, par défaut TOUS, un statut vidé par les filtres est désélectionné",()=>{
   assert.match(js,/selected=\(k==='\*'\|\|selected===k\)\?'':k/);
   assert.ok(!/sessionStorage/.test(js));
-  assert.match(js,/total>0&&!c\[selected\]/);
+  assert.ok(!/selected=''\s*;?\s*\n?\s*Array/.test(js));
   assert.match(js,/e\.key==='Escape'/);
   assert.match(js,/alyzia-home-clear'\)\)selected=''/);
 });
@@ -38,4 +38,10 @@ test("chaque statut du menu porte la couleur de son badge sur les cartes",()=>{
 test("recalcul espacé et passage léger sans mesure de mise en page",()=>{
   assert.match(js,/setTimeout\(sync,300\)/);
   assert.ok(!/getComputedStyle/.test(js.slice(js.indexOf('function quick'),js.indexOf('function hook'))));
+});
+
+test("masquage en double (classe + style en ligne prioritaire) et bouton sur sa propre ligne sur téléphone",()=>{
+  assert.match(js,/r\.style\.setProperty\('display','none','important'\)/);
+  assert.match(js,/window\.innerWidth<=900/);assert.match(js,/alyzia-status-row/);
+  assert.match(js,/window\.__alyziaStatusDebug/);
 });
