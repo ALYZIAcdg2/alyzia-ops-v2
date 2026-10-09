@@ -4,7 +4,8 @@ import {lateBeyondStd15} from "./late-std15.js";
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const today=()=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
-const manual=x=>upper(x?.statusSource||x?.status_source||"").includes("MANUAL")||Boolean(x?.manual?.status||x?.manualOverrides?.status||x?.manual_fields?.status);
+// Statut modifié à la main : « MANUAL » dans la source du statut, sauf s'il ne désigne que la source de la preuve d'un statut calculé (ALYZIA_STATUS_V1:RAISON:MANUAL, par ex. un STA saisi à la main) : sinon ce statut restait figé (TU2655 bloqué sur ARRIVÉ).
+const manual=x=>(/MANUAL/.test(upper(x?.statusSource||x?.status_source||""))&&!/^ALYZIA_STATUS_V1:/.test(upper(x?.statusSource||x?.status_source||"")))||Boolean(x?.manual?.status||x?.manualOverrides?.status||x?.manual_fields?.status);
 const hhmm=v=>{const m=clean(v).match(/^(\d{1,2}):(\d{2})$/);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
 const mins=v=>{const t=hhmm(v);if(!t)return null;const [h,m]=t.split(":").map(Number);return h*60+m};
 

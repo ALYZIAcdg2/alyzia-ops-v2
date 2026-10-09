@@ -434,7 +434,7 @@ function opsProgress(x,t,st){
  return Math.min(1,Math.max(0,(Date.now()-departure)/(arrival-departure)));
 }
 function opsListStatus(x,t){
- const raw=up(x.status),st=opStatus(x),date=opsDate(x),manual=up(x.statusSource||x.status_source).includes('MANUAL');
+ const raw=up(x.status),st=opStatus(x),date=opsDate(x),manual=/MANUAL/.test(up(x.statusSource||x.status_source))&&!/^ALYZIA_STATUS_V1:/.test(up(x.statusSource||x.status_source));
  if(raw&&(manual||raw.includes('ANNUL')))st.main=raw;
  st.cls=statusClass(st.main);if(!/EN VOL|PARTI|ARRIV|ATTERR|RETARD|ANNUL/.test(up(st.main)))st.cls='prevu';
  const mm=v=>{const c=clock(v);return c?Number(c.slice(0,2))*60+Number(c.slice(3)):null},sd=mm(t.std),ed=mm(t.etd);let dl=sd!==null&&ed!==null?ed-sd:0;if(dl<-720)dl+=1440;if(dl>720)dl-=1440;
