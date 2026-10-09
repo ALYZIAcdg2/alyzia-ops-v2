@@ -11,3 +11,12 @@ test("un vol déjà commencé va jusqu'au bout même si l'échéance tombe penda
   assert.deepEqual(await f("A"),{status:"UPDATED"});
 });
 test("le budget d'un passage laisse de la place aux autres étapes (moins du plafond de 70 s)",()=>{assert.ok(LIVE_RUN_BUDGET_MS<=45000)});
+
+import {makeReadOne} from "./ops-public-live-flow-optimized.js";
+test("une lecture de vol qui ne répond pas est coupée (TIMEOUT) et ne bloque pas les autres ; une erreur n'arrête pas le passage ; les durées sont notées",async()=>{
+  const timings=[];
+  const read=makeReadOne(async r=>{if(r.flight_number==="1")return new Promise(()=>{});if(r.flight_number==="2")throw new Error("boom");return {status:"UPDATED"}},timings,40);
+  const out=await Promise.all([read({airline:"AH",flight_number:"1"}),read({airline:"AH",flight_number:"2"}),read({airline:"AH",flight_number:"3"})]);
+  assert.deepEqual(out.map(o=>o.status),["TIMEOUT","ERROR","UPDATED"]);
+  assert.equal(timings.length,3);assert.ok(timings.find(t=>t.flight==="AH1").ms>=30);
+});
