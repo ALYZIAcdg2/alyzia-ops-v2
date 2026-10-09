@@ -1,8 +1,9 @@
-// Liste des vols (accueil) : bandeau de statuts défilant à côté de la barre de recherche (sous la recherche sur mobile). Choix multiples (À L'HEURE, EMBARQUEMENT, RETARDÉ, PARTI, EN VOL, ATTERRI, ARRIVÉ, ANNULÉ).
+// Liste des vols (accueil) : bandeau de statuts défilant à côté de la barre de recherche réduite (sur la même ligne, mobile compris). Choix multiples (À L'HEURE, EMBARQUEMENT, RETARDÉ, PARTI, EN VOL, ATTERRI, ARRIVÉ, ANNULÉ).
 // Le bandeau suit le terminal et la recherche : seuls les statuts qui ont au moins un vol dans la sélection affichée apparaissent, avec leur nombre. Le filtre se cumule avec la recherche, les terminaux, les favoris et les tranches horaires.
 export const STATUS_FILTER_UI = String.raw`<style id="alyzia-status-filter-css">.alz-status-hidden{display:none!important}
-.alz-search-row{display:flex;align-items:center;gap:12px;margin:0 0 12px}
-.alz-search-row .home-flight-search{flex:0 1 360px!important;min-width:220px;width:auto!important;margin:0!important}
+.alz-search-row{display:flex;flex-wrap:nowrap;align-items:center;gap:10px;margin:0 0 12px}
+.alz-search-row .home-flight-search{flex:0 1 clamp(130px,34%,360px)!important;min-width:120px!important;width:auto!important;max-width:360px;margin:0!important}
+.alz-search-row .home-flight-search input{min-width:0;text-overflow:ellipsis}
 .alz-status-filter{flex:1 1 0;min-width:0;display:flex;flex-wrap:nowrap;gap:8px;align-items:center;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding:2px 0}
 .alz-status-filter::-webkit-scrollbar{display:none}
 .alz-sf-chip{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;border:2px solid #d8e3ee;border-radius:999px;background:#fff;color:#28425f;font:900 11.5px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;cursor:pointer}
@@ -10,7 +11,7 @@ export const STATUS_FILTER_UI = String.raw`<style id="alyzia-status-filter-css">
 .alz-sf-chip.active{border-color:#0b70d1;background:#eef6ff;color:#0868c2}.alz-sf-chip.active b{color:#0868c2}
 .alz-sf-chip.alz-sf-none{display:none}
 .alz-sf-reset{border-style:dashed}
-@media(max-width:800px){.alz-search-row{flex-direction:column;align-items:stretch;gap:8px}.alz-search-row .home-flight-search{flex:0 0 auto!important;width:100%!important;min-width:0}.alz-sf-chip{height:34px;padding:0 11px}}</style>
+@media(max-width:800px){.alz-sf-chip{height:34px;padding:0 11px}}</style>
 <script id="alyzia-status-filter-js">(function(){
 if(window.__alyziaStatusFilter)return;window.__alyziaStatusFilter=true;
 var KEYS=[['HEURE','À L’HEURE'],['EMBARQ','EMBARQUEMENT'],['RETARD','RETARDÉ'],['PARTI','PARTI'],['ENVOL','EN VOL'],['ATTERRI','ATTERRI'],['ARRIVE','ARRIVÉ'],['ANNULE','ANNULÉ']];
