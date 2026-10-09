@@ -39,3 +39,7 @@ test("après un redessin de la liste, le bouton et le filtre sont remis dans le 
   assert.match(js,/function quick\(\)/);assert.match(js,/function own\(/);assert.ok(!/getComputedStyle/.test(js.slice(js.indexOf('function quick'),js.indexOf('function own'))));assert.match(js,/setTimeout\(sync,300\)/);
   assert.match(STATUS_FILTER_UI,/\.alz-search-row\{[^}]*justify-content:flex-start/);
 });
+
+test("chaque statut de la liste porte la couleur de son badge sur les cartes",()=>{
+  for(const [k,bg] of [["HEURE","#e1f5e9"],["RETARD","#fff0d0"],["ENVOL","#dcecff"],["ARRIVE","#d7efec"],["ANNULE","#ffe1e5"],["PARTI","#e6f8f3"]])assert.match(STATUS_FILTER_UI,new RegExp('data-k="'+k+'"\\]>span[^{]*\\{background:'+bg));
+});

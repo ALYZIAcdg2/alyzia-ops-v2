@@ -12,6 +12,14 @@ html body #app .flight-home-row.alz-status-hidden.alz-status-hidden,html body #a
 .alz-status-band{position:absolute;right:0;top:calc(100% + 6px);z-index:9999;min-width:230px;max-height:62vh;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding:6px;border:1px solid #d8e3ee;border-radius:16px;background:#fff;box-shadow:0 12px 32px rgba(20,48,80,.22)}
 .alz-status-band[hidden]{display:none}
 .alz-sf-item{position:relative;display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:44px;padding:0 12px 0 32px;border:0;border-radius:11px;background:transparent;color:#28425f;font:900 13px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:left;white-space:nowrap;cursor:pointer}
+.alz-sf-item>span{display:inline-flex;align-items:center;padding:6px 11px;border-radius:7px;border:1px solid transparent;font-size:12px;letter-spacing:.2px}
+.alz-sf-item[data-k="*"]>span{padding:6px 0;color:#28425f}
+.alz-sf-item[data-k="HEURE"]>span,.alz-sf-item[data-k="EMBARQ"]>span{background:#e1f5e9;color:#16794a;border-color:#b6e2c8}
+.alz-sf-item[data-k="RETARD"]>span{background:#fff0d0;color:#965600;border-color:#f1d08e}
+.alz-sf-item[data-k="PARTI"]>span,.alz-sf-item[data-k="ATTERRI"]>span{background:#e6f8f3;color:#008f74;border-color:#bfe9de}
+.alz-sf-item[data-k="ENVOL"]>span{background:#dcecff;color:#0b5cad;border-color:#b8d6f6}
+.alz-sf-item[data-k="ARRIVE"]>span{background:#d7efec;color:#0a665e;border-color:#a9d9d3}
+.alz-sf-item[data-k="ANNULE"]>span{background:#ffe1e5;color:#b3243b;border-color:#f3b5bf}
 .alz-sf-item b{font-size:12px;color:#6b7f95;font-weight:900}
 .alz-sf-item.active{background:#eaf3fe;color:#0868c2}.alz-sf-item.active b{color:#0868c2}
 .alz-sf-item.active::before{content:"✓";position:absolute;left:12px;font-size:13px}
