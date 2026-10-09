@@ -33,6 +33,7 @@ import {readPauses} from "./pauses.js";
 import {restoreRegs} from "./reg-restore.js";
 import {restoreEtds} from "./etd-restore.js";
 import {renameFlight} from "./flight-rename.js";
+import {setFr24Link} from "./flight-fr24-link.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
 import {API_NAMES_SCRUB_UI} from "./api-names-scrub.js";
 import {FICHE_CONFIG_UI} from "./fiche-config-actions.js";
@@ -189,6 +190,10 @@ export default {
     if(url.pathname==="/api/admin/flight-state"&&request.method==="GET"){
       // Lecture seule : heures d'un vol avec leur source et le journal des écritures (décollage, atterrissage, ATA, ATD).
       try{return json(await readFlightState(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/flights/fr24-link"&&request.method==="POST"){
+      // Lien FR24 saisi dans la fiche : { identity, link, dryRun? }. L'identifiant de l'occurrence est enregistré sur le vol (saisie manuelle, jamais remplacée).
+      try{const body=await request.json().catch(()=>({}));const r=await setFr24Link(env,{identity:body.identity,link:body.link,dryRun:body.dryRun===true});return json(r,r.ok?200:400)}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/flights/rename"&&request.method==="POST"){
       // Changement du numéro d'un vol depuis la fiche : { identity, newFlight, dryRun? }. Déplace aussi notes, pièces jointes, dossier Drive et PRÉPA ; l'historique du vol garde l'horodatage.
