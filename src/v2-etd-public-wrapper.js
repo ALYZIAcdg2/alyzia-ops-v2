@@ -12,6 +12,7 @@ import {runCoreSourceDiagnosticTest} from "./core-source-diagnostic-test.js";
 import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {sweepFidsToday,getFeed,loadFidsState} from "./fids-atd-sweep.js";
+import {sweepAtaFromLanding} from "./ata-derive-sweep.js";
 import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
@@ -56,6 +57,7 @@ async function runLive(env,opts){
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
   // Flux FIDS d'abord : ATD / ATA de tous les vols en un appel, pour que le passage par vol ne lise FlightStats / FlightAware que pour ce qui manque encore.
   const fidsSweep=await sweepFidsToday(env).catch(()=>null);
+  await sweepAtaFromLanding(env).catch(()=>null);   // ATA = LDG + 10 min pour les vols posés depuis 15 min, sans lecture
   const live=await runPublicLiveFlow(env,opts);
   // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
   const boardSweep=await sweepBoardToday(env).catch(()=>null);
