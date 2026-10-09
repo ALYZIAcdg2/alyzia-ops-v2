@@ -189,7 +189,12 @@ export function flightStatsExport(){return JSON.parse(JSON.stringify(FS_BREAKER)
 export function flightStatsImport(st){if(!st)return;for(const k of Object.keys(FS_BREAKER)){const o=st[k],b=FS_BREAKER[k];if(o&&Number(o.until)>b.until){b.until=Number(o.until)||0;b.refusals=Number(o.refusals)||0;b.level=Number(o.level)||0}else if(o&&b.until===0&&b.refusals===0&&b.level===0&&(Number(o.refusals)||Number(o.level))){b.refusals=Number(o.refusals)||0;b.level=Number(o.level)||0}}}
 // Lectures de la page FlightStats (sans identifiant mémorisé) par passage du cron : au plus FS_PAGE_BUDGET ; l'appel léger par identifiant n'est pas compté. Un vol refusé n'est pas redemandé avant 20 min.
 const FS_PAGE_BUDGET=4,FS_RETRY_MIN=20;let fsPageLeft=FS_PAGE_BUDGET;
-export function flightStatsResetBudget(n=FS_PAGE_BUDGET){fsPageLeft=n}
+// Comblement d'une ATD manquante sur un vol arrivé depuis longtemps (IZ742 : le FIDS ne suit pas IZ) : un vol au plus par passage, et seulement pendant 2 passages sur 10 (soit 6 lectures par heure au plus), une fois par vol toutes les 6 h. Sans cela FlightStats relisait des dizaines de vols arrivés et se mettait en pause.
+let fsFillLeft=0;
+export const FS_ATD_FILL_EVERY_H=6;
+export const flightStatsFillLeft=()=>fsFillLeft;
+export function flightStatsResetBudget(n=FS_PAGE_BUDGET,nowMs=Date.now()){fsPageLeft=n;fsFillLeft=Math.floor(nowMs/60000)%10<2?1:0}
+export function atdFillDue(x,flightDate="",nowMs=Date.now()){return !clean(x?.atd)&&arrivedStale(x,flightDate,nowMs)&&nowMs-(Date.parse(clean(x?.flightStatsAtdFillAt))||0)>=FS_ATD_FILL_EVERY_H*3600000}
 // FlightStats / FlightAware n'ont rien à donner avant le départ : pas d'appel pour un vol non parti dont la STD est à plus de 90 min (les heures prévues viennent du tableau FR24, de FR24 par vol et de FIDS).
 export const FS_FA_WINDOW_MIN=90;
 export function farFromDeparture(flightDate,std,{atd="",takeoff=""}={},nowMs=Date.now(),windowMin=FS_FA_WINDOW_MIN){
@@ -355,9 +360,9 @@ export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||ro
 // Vol à relire : ceux du jour tant qu'ATA, immatriculation ou type manquent ; ceux de la veille tant qu'ils n'ont pas d'ATA **ou pas d'ATD** (sans cela un vol arrivé la veille sans ATD n'était plus jamais relu après minuit : LO334, SK566, BJ511…).
 export function needsLiveRead(flightDate,today,x){
   // Vol sans ATD alors que le FIDS a eu le temps de la donner (JU, IZ… : compagnies absentes du flux) : relu tant que l'ATD manque, même arrivé avec immatriculation et type (JU241 restait sans ATD).
-  if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft))||flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate);
+  if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft))||flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate)||atdFillDue(x,flightDate);
   // Un vol arrivé depuis longtemps n'est plus relu pour un ATD manquant (sauf FlightAware, seule source d'ATD des vols JU).
-  return flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate)||((!clean(x.ata)||!clean(x.atd)||fidsAtd(x))&&!arrivedStale(x,flightDate));
+  return flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate)||atdFillDue(x,flightDate)||((!clean(x.ata)||!clean(x.atd)||fidsAtd(x))&&!arrivedStale(x,flightDate));
 }
 export function pickSlots(sorted,size){
   const reserve=Math.min(size,Math.max(1,Math.floor(size/4))),head=sorted.slice(0,size-reserve),rest=sorted.slice(size-reserve),late=rest.filter(z=>z.p[0]>=2).slice(0,reserve);
@@ -366,7 +371,7 @@ export function pickSlots(sorted,size){
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
 function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
-async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
+async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let fillStamp="",needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
   {const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft,gate:false,etd:false};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
@@ -374,7 +379,8 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   const atdMissing=(!clean(base.atd)||suspectAtd(base))&&!clean(map.FR24BOARD?.atd),etaWanted=needs.eta&&(clean(base.atd)||clean(base.takeoff))&&!clean(base.landing)&&!clean(base.ata),lastResort=forced||(pastStd&&atdMissing)||etaWanted;
   // FlightStats: seulement si un champ gate-time/status manque.
   const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
-  if(!tooEarly&&(forced||!arrivedStale(base,f.date))&&anyNeed(needs,["atd","eta","ata","status"])&&(lastResort||(fsIdKnown&&!clean(base.ata)&&(clean(base.atd)||clean(base.takeoff))))&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),onDemand?1:fsPageLeft))){if(!fsIdKnown&&!onDemand)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
+  const fsFill=!forced&&fsFillLeft>0&&atdFillDue(base,f.date);
+  if(!tooEarly&&(forced||fsFill||!arrivedStale(base,f.date))&&anyNeed(needs,["atd","eta","ata","status"])&&(lastResort||(fsIdKnown&&!clean(base.ata)&&(clean(base.atd)||clean(base.takeoff))))&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),onDemand?1:fsPageLeft))){if(!fsIdKnown&&!onDemand)fsPageLeft--;if(fsFill)fsFillLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK";if(fsFill&&!fsRefused&&fs?.status!=="COOLDOWN")fillStamp=at}
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
@@ -440,6 +446,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   if(nextStatus==="ANNULÉ"&&!clean(current.cancelledSource)&&!manual(current,"status")){current.cancelledSource=explicit.source||"PUBLIC_LIVE";changed=true}
   if(nextStatus&&!manual(current,"status")&&clean(current.status)!==nextStatus){current.status=nextStatus;if(nextStatus==="ANNULÉ")current.cancelledSource=explicit.source||"PUBLIC_LIVE";else delete current.cancelledSource;current.statusSource=explicit.value?`PUBLIC_LIVE:${explicit.source}`:"PUBLIC_LIVE:DERIVED";current.statusUpdatedAt=at;changed=true}
   if(recheck){current.dailyCheckDate=parisDate();changed=true}
+  if(fillStamp)current.flightStatsAtdFillAt=fillStamp;
   current.publicLiveBackfill={checkedAt:at,mode:"OPTIMIZED_ACTIVE_SOURCES",attempts,fr24OccurrenceId:clean(f.raw?.fr24OccurrenceId)||null};/* The reading itself (attempts, time of check) is always saved, even when no value changed: otherwise a flight whose sources refuse keeps its old check time, comes back first in every cron pass and starves the others, and ADMIN shows stale diagnostics. */if(!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(current),row.identity).run();
   const out={flight:f.designator,status:changed?"UPDATED":"UNCHANGED",attempts};
   if(dryRun){const keys=["atd","atdConfirmed","atdSources","takeoff","takeoffConfirmed","eta","etaConfirmed","landing","ata","ataConfirmed","reg","status","aircraftActual","fr24OccurrenceId","flightAwareHistoryUrl"];out.dryRun=true;out.before=Object.fromEntries(keys.map(k=>[k,base[k]??null]));out.after=Object.fromEntries(keys.map(k=>[k,current[k]??null]));out.sources=Object.fromEntries(Object.entries(map).map(([k,v])=>[k,Object.fromEntries(Object.entries(v||{}).filter(([,x])=>clean(x)))]))}
