@@ -37,12 +37,18 @@ test("chaque statut du menu porte la couleur de son badge sur les cartes",()=>{
   for(const [k,bg] of [["HEURE","#e1f5e9"],["RETARD","#fff0d0"],["ENVOL","#dcecff"],["ARRIVE","#d7efec"],["ANNULE","#ffe1e5"],["PARTI","#e6f8f3"]])assert.match(STATUS_FILTER_UI,new RegExp('data-k="'+k+'"\\]>span[^{]*\\{background:'+bg));
 });
 test("recalcul espacé et passage léger sans mesure de mise en page",()=>{
-  assert.match(js,/setTimeout\(sync,300\)/);
+  assert.match(js,/timer=setTimeout\(sync,700\)/);
   assert.ok(!/getComputedStyle/.test(js.slice(js.indexOf('function quick'),js.indexOf('function hook'))));
 });
 
-test("masquage en double (classe + style en ligne prioritaire) et bouton sur sa propre ligne sur téléphone",()=>{
-  assert.match(js,/r\.style\.setProperty\('display','none','important'\)/);
+test("masquage par classe seulement (un style en ligne serait effacé par le filtre des favoris) et bouton sur sa propre ligne sur téléphone",()=>{
+  assert.ok(!/style\.setProperty\('display'/.test(js));
   assert.match(js,/window\.innerWidth<=900/);assert.match(js,/alyzia-status-row/);
   assert.match(js,/window\.__alyziaStatusDebug/);
+});
+
+test("nombres stables : mesure confirmée deux fois, jamais vides après un redessin, compteur d'en-tête laissé à l'application",()=>{
+  assert.match(js,/sig!==pendSig/);assert.match(js,/paintCounts\(wrap,lastC\.c,lastC\.total\)/);   // le menu recréé reprend les derniers nombres
+  assert.ok(!/homeVisibleFlightCount/.test(js));                                                    // on n'écrit plus le compteur « N VOLS »
+  assert.match(js,/origApply&&origApply\(\)/);
 });

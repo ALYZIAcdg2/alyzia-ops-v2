@@ -126,7 +126,8 @@ const FAVORITES_FILTER_SCRIPT = String.raw`
     const badge=document.getElementById('homeVisibleFlightCount');
     // N'écrire que si le texte change : réécrire le même texte déclenchait l'observateur ci-dessous en boucle (une passe par image, ~90 % du processeur au repos).
     const label=visible+' VOL'+(visible>1?'S':'');
-    if(badge&&!badge.closest('.admin-native')&&badge.textContent!==label)badge.textContent=label;
+    // Le compteur d'origine est masqué (le compteur combiné de home-filter-count-sync l'a remplacé) et deux écrivains s'y disputaient (10 / 5 en alternance, des centaines de fois par seconde) : on n'y écrit plus.
+    if(badge&&!badge.closest('.admin-native')&&!badge.classList.contains('alyzia-native-flight-count')&&badge.textContent!==label)badge.textContent=label;
   }
 
   function scheduleApply(){

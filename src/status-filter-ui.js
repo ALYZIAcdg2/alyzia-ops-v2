@@ -26,7 +26,7 @@ html body #app .flight-home-row.alyzia-status-hidden.alyzia-status-hidden,html b
 <script id="alyzia-status-filter-js">(function(){
 if(window.__alyziaStatusFilter)return;window.__alyziaStatusFilter=true;
 var KEYS=[['PARTI','PARTI'],['HEURE','À L’HEURE'],['RETARD','RETARDÉ'],['ENVOL','EN VOL'],['EMBARQ','EMBARQUEMENT + CLOS'],['ATTERRI','ATTERRI'],['ARRIVE','ARRIVÉE'],['ANNULE','ANNULÉ']];
-var STORE='alyziaStatusFilter',KEEP_MS=20*60000,selected='',menuOpen=false,lastToggle=0,deferred=0;
+var lastC={c:{},total:0},shownSig='',pendSig='',settle=null,origApply=null,STORE='alyziaStatusFilter',KEEP_MS=20*60000,selected='',menuOpen=false,lastToggle=0,deferred=0;
 // Le choix survit au rechargement de la page (un téléphone qui renvoie l'onglet en arrière-plan la recharge) mais seulement 20 minutes : une nouvelle visite repart sur TOUS.
 try{var sv=JSON.parse(sessionStorage.getItem(STORE)||'null');if(sv&&sv.k&&Date.now()-sv.at<KEEP_MS)selected=sv.k}catch(e){}
 function save(){try{selected?sessionStorage.setItem(STORE,JSON.stringify({k:selected,at:Date.now()})):sessionStorage.removeItem(STORE)}catch(e){}}
@@ -35,13 +35,9 @@ function norm(t){return String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').to
 function keyOf(text){var t=norm(text);if(!t)return 'AUTRE';if(t.indexOf('EMBARQ')===0)return 'EMBARQ';if(t.indexOf('RETARD')===0)return 'RETARD';if(t.indexOf('ANNUL')===0)return 'ANNULE';if(t.indexOf('ARRIV')===0)return 'ARRIVE';if(t.indexOf('ATTERR')===0||t.indexOf('ATTERI')===0)return 'ATTERRI';if(t==='EN VOL')return 'ENVOL';if(t.indexOf('PARTI')===0)return 'PARTI';if(t.indexOf("A L'HEURE")===0||t==='PREVU'||t==='PROGRAMME')return 'HEURE';return 'AUTRE'}
 function rows(){return Array.prototype.slice.call(document.querySelectorAll('#app .flight-home-row'))}
 function rowKey(row){var b=row.querySelector('.ops-status-badge');return keyOf(b?b.textContent:'')}
-// Masquage en double : classe (comme les tranches horaires) ET style en ligne prioritaire, que les règles d'affichage des cartes ne peuvent pas battre.
-function setHidden(r,hide){
-  if(r.classList.contains('alyzia-status-hidden')!==hide)r.classList.toggle('alyzia-status-hidden',hide);
-  if(hide){if(r.style.getPropertyValue('display')!=='none'||r.style.getPropertyPriority('display')!=='important')r.style.setProperty('display','none','important');r.setAttribute('data-alz-hid','1')}
-  else if(r.hasAttribute('data-alz-hid')){r.style.removeProperty('display');r.removeAttribute('data-alz-hid')}
-}
-function visibleWithoutUs(r){var had=r.hasAttribute('data-alz-hid');if(had)setHidden(r,false);var ok=getComputedStyle(r).display!=='none';if(had)setHidden(r,true);return ok}
+// Masquage par classe, comme les tranches horaires. Un style en ligne serait effacé par le filtre des favoris de l'application (row.style.display='' à chaque passage).
+function setHidden(r,hide){if(r.classList.contains('alyzia-status-hidden')!==hide)r.classList.toggle('alyzia-status-hidden',hide)}
+function visibleWithoutUs(r){var had=r.classList.contains('alyzia-status-hidden');if(had)setHidden(r,false);var ok=getComputedStyle(r).display!=='none';if(had)setHidden(r,true);return ok}
 // Nombre de vols par statut dans la sélection affichée (terminal, recherche, favoris, tranche horaire, vols passés), sans tenir compte du statut choisi.
 function counts(){var c={};rows().forEach(function(r){if(r.classList.contains('ops-skip')||!visibleWithoutUs(r))return;var k=rowKey(r);c[k]=(c[k]||0)+1});return c}
 function controlsHost(){var all=Array.prototype.slice.call(document.querySelectorAll('#app button')).filter(function(b){return norm(b.textContent)==='ALL'&&!b.closest('.flight-home-row')})[0];return all?all.parentElement:null}
@@ -54,7 +50,7 @@ function ensure(){
     var html='<button type="button" class="alyzia-status-filter-btn" aria-haspopup="listbox" aria-label="Filtrer par statut"><span class="alz-lbl">TOUS</span><i>▾</i></button><span class="alyzia-status-filter-menu" role="listbox" aria-label="Statut des vols">';
     html+='<button type="button" role="option" class="alyzia-status-choice" data-k="*"><span>TOUS</span><b></b></button>';
     KEYS.forEach(function(p){html+='<button type="button" role="option" class="alyzia-status-choice zero" data-k="'+p[0]+'"><span>'+p[1]+'</span><b></b></button>'});
-    wrap.innerHTML=html+'</span>';host.appendChild(wrap);setOpen(menuOpen);
+    wrap.innerHTML=html+'</span>';host.appendChild(wrap);setOpen(menuOpen);paintCounts(wrap,lastC.c,lastC.total);
   }
   var narrow=window.innerWidth<=900,row=document.querySelector('#app .alyzia-status-row');
   if(narrow){
@@ -71,22 +67,31 @@ function ensure(){
   }
   return wrap;
 }
-function sync(){
-  var wrap=ensure();if(!wrap)return;
-  try{window.__alyziaApplyHomeFilters&&window.__alyziaApplyHomeFilters()}catch(e){}
-  // Des cartes pas encore construites : on attend la suite plutôt que de compter un état intermédiaire.
-  if(deferred<3&&rows().some(function(r){return !r.classList.contains('ops-flight-card')&&!r.classList.contains('ops-skip')})){deferred++;later();return}
-  deferred=0;
-  var c=counts(),total=0;Object.keys(c).forEach(function(k){total+=c[k]});
+function paintCounts(wrap,c,total){
   Array.prototype.forEach.call(wrap.querySelectorAll('.alyzia-status-choice'),function(b){
     var k=b.getAttribute('data-k'),n=k==='*'?total:(c[k]||0),nb=b.querySelector('b'),on=k==='*'?!selected:selected===k;
     if(nb&&nb.textContent!==String(n))nb.textContent=n;
     b.classList.toggle('active',on);b.setAttribute('aria-selected',on?'true':'false');b.classList.toggle('zero',k!=='*'&&!n);
   });
+}
+function sync(){
+  var wrap=ensure();if(!wrap)return;
+  hook();try{window.__alyziaApplyHomeFilters&&window.__alyziaApplyHomeFilters()}catch(e){}
+  // Des cartes pas encore construites : on attend la suite plutôt que de compter un état intermédiaire.
+  if(deferred<3&&rows().some(function(r){return !r.classList.contains('ops-flight-card')&&!r.classList.contains('ops-skip')})){deferred++;later();return}
+  deferred=0;
+  var c=counts(),total=0;Object.keys(c).forEach(function(k){total+=c[k]});
+  // Les nombres ne changent que si deux mesures espacées sont identiques : après un redessin, l'application masque les vols passés et applique ses filtres en plusieurs temps (jusqu'à 600 ms), et les nombres sautaient entre ces états.
+  var sig=JSON.stringify(c);
+  if(sig!==shownSig){
+    if(sig!==pendSig){pendSig=sig;clearTimeout(settle);settle=setTimeout(sync,500)}
+    else{lastC={c:c,total:total};shownSig=sig;pendSig=''}
+  }else pendSig='';
+  paintCounts(wrap,lastC.c,lastC.total);
   paint(wrap);
-  var visible=0;
-  rows().forEach(function(r){var hide=!!selected&&rowKey(r)!==selected;setHidden(r,hide);if(!hide&&getComputedStyle(r).display!=='none'&&!r.classList.contains('ops-skip'))visible++});
-  var badge=document.getElementById('homeVisibleFlightCount');if(badge){var t=visible+' VOL'+(visible>1?'S':'');if(badge.textContent!==t)badge.textContent=t}
+  rows().forEach(function(r){setHidden(r,!!selected&&rowKey(r)!==selected)});
+  // Le compteur « N VOLS » de l'en-tête est tenu par l'application : on lui redonne la main une fois nos cartes masquées, au lieu de l'écrire nous-mêmes.
+  try{origApply&&origApply()}catch(e){}
 }
 function paint(wrap){
   var btn=wrap.querySelector('.alyzia-status-filter-btn'),lbl=btn.querySelector('.alz-lbl'),txt=selected?labelOf(selected):'TOUS';
@@ -97,7 +102,7 @@ function quick(){
   var wrap=ensure();if(!wrap)return;paint(wrap);
   if(selected)rows().forEach(function(r){setHidden(r,rowKey(r)!==selected)});
 }
-function hook(){var o=window.__alyziaApplyHomeFilters;if(typeof o==='function'&&!o.__alzStatus){var f=function(){var r=o.apply(this,arguments);try{quick()}catch(e){}return r};f.__alzStatus=1;window.__alyziaApplyHomeFilters=f}}
+function hook(){var o=window.__alyziaApplyHomeFilters;if(typeof o==='function'&&!o.__alzStatus){origApply=o;var f=function(){var r=o.apply(this,arguments);try{quick()}catch(e){}return r};f.__alzStatus=1;window.__alyziaApplyHomeFilters=f}}
 function choose(k){selected=(k==='*'||selected===k)?'':k;save();setOpen(false);quick();sync()}
 // Comme HORAIRES : bascule à l'appui (pointerdown), donc insensible à un redessin de la liste pendant le clic ; le click qui suit est ignoré.
 document.addEventListener('pointerdown',function(e){
@@ -117,7 +122,7 @@ document.addEventListener('click',function(e){
 },true);
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&menuOpen)setOpen(false)});
 window.addEventListener('resize',function(){later()});
-var timer=null;function later(){clearTimeout(timer);timer=setTimeout(sync,300)}
+var timer=null;function later(){clearTimeout(timer);timer=setTimeout(sync,700)}
 document.addEventListener('input',function(e){if(e.target&&e.target.closest&&e.target.closest('.home-flight-search'))later()},true);
 function own(n){return !!(n&&n.closest&&n.closest('.alyzia-status-filter-wrap'))}
 try{new MutationObserver(function(list){
@@ -126,5 +131,5 @@ try{new MutationObserver(function(list){
 [0,300,900,2000].forEach(function(ms){setTimeout(function(){hook();sync()},ms)});
 setInterval(function(){if(selected&&!document.hidden){quick();save()}},1500);
 window.__alyziaStatusFilterKey=keyOf;
-window.__alyziaStatusDebug=function(){return {selected:selected,counts:counts(),rows:rows().length,hidden:rows().filter(function(r){return r.hasAttribute('data-alz-hid')}).length,narrow:window.innerWidth<=900}};
+window.__alyziaStatusDebug=function(){return {selected:selected,counts:counts(),rows:rows().length,hidden:rows().filter(function(r){return r.classList.contains('alyzia-status-hidden')}).length,narrow:window.innerWidth<=900}};
 })();</script>`;
