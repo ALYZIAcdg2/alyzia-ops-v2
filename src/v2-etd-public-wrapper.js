@@ -32,10 +32,12 @@ import {probeFr24Board} from "./fr24-board-probe.js";
 import {readPauses} from "./pauses.js";
 import {restoreRegs} from "./reg-restore.js";
 import {restoreEtds} from "./etd-restore.js";
+import {renameFlight} from "./flight-rename.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
 import {API_NAMES_SCRUB_UI} from "./api-names-scrub.js";
 import {FICHE_CONFIG_UI} from "./fiche-config-actions.js";
 import {TAB_MEMORY_UI} from "./tab-memory.js";
+import {FLIGHT_RENAME_UI} from "./flight-rename-ui.js";
 import {CLASS_ROWS_UI} from "./class-rows.js";
 import {UI_SMOOTH_UI} from "./ui-smooth.js";
 import {readFlightState} from "./flight-state-probe.js";
@@ -161,7 +163,7 @@ function stripStatusConflicts(html){return String(html||'')
  .replace(/<script id="alyzia-flight-runtime-stability-js">[\s\S]*?<\/script>/g,'')
  .replace(/<style id="alyzia-status-model-test-css">[\s\S]*?<\/style>/g,'')
  .replace(/<script id="alyzia-status-model-test-js">[\s\S]*?<\/script>/g,'');}
-function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+CLASS_ROWS_UI+'\n'+UI_SMOOTH_UI+'\n'+API_NAMES_SCRUB_UI+'\n'+s.slice(i):s+PUSH_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI+CLASS_ROWS_UI+UI_SMOOTH_UI+API_NAMES_SCRUB_UI}
+function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="alyzia-push-all-public-js"'))return s;const i=s.lastIndexOf('</body>');return i>=0?s.slice(0,i)+PUSH_UI+'\n'+FICHE_CONFIG_UI+'\n'+REG_RESTORE_UI+'\n'+ADMIN_REORG_UI+'\n'+TAB_MEMORY_UI+'\n'+FLIGHT_RENAME_UI+'\n'+CLASS_ROWS_UI+'\n'+UI_SMOOTH_UI+'\n'+API_NAMES_SCRUB_UI+'\n'+s.slice(i):s+PUSH_UI+FICHE_CONFIG_UI+REG_RESTORE_UI+ADMIN_REORG_UI+TAB_MEMORY_UI+FLIGHT_RENAME_UI+CLASS_ROWS_UI+UI_SMOOTH_UI+API_NAMES_SCRUB_UI}
 
 export default {
   async fetch(request,env,ctx){
@@ -186,6 +188,10 @@ export default {
     if(url.pathname==="/api/admin/flight-state"&&request.method==="GET"){
       // Lecture seule : heures d'un vol avec leur source et le journal des écritures (décollage, atterrissage, ATA, ATD).
       try{return json(await readFlightState(env,{date:url.searchParams.get("date")||"",flight:url.searchParams.get("flight")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/flights/rename"&&request.method==="POST"){
+      // Changement du numéro d'un vol depuis la fiche : { identity, newFlight, dryRun? }. Déplace aussi notes, pièces jointes, dossier Drive et PRÉPA ; l'historique du vol garde l'horodatage.
+      try{const body=await request.json().catch(()=>({}));const r=await renameFlight(env,{identity:body.identity,newFlight:body.newFlight,dryRun:body.dryRun===true});return json(r,r.ok?200:400)}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/etd-restore"){
       // GET : aperçu des ETD effacés après la STD qui seraient restaurés depuis le journal. POST : applique.
