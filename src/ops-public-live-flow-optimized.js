@@ -376,14 +376,17 @@ export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||ro
   // Took off but no ATD yet (FR24 no longer gives it): FlightStats / FlightAware are asked again, every 5 minutes at most, for 12 h after takeoff ; the flights whose FlightStats id is known (light API call) come first.
   // Seulement sans aucune ATD : un vol dont l'ATD est seulement estimée (FIDS « à l'heure », premier mouvement FR24) n'est plus relu à ce rang, FlightStats ne pouvant la confirmer que rarement ; il garde son rang normal (arrivée proche ou parti).
   if(!clean(x.atd)&&clean(x.takeoff)&&!clean(x.ata)&&nowMs-checked>=5*60000){const since=minutesSinceLocalClock(x.takeoff,AIRPORT_TZ[upper(x.dep||x.origin||"CDG")]||"Europe/Paris",new Date(nowMs));if(since!==null&&since<=720)return [/^\d+$/.test(clean(x.flightStatsId))&&clean(x.flightStatsIdDate)===row.flight_date?0.3:0.4,checked]}// Déjà arrivé mais ATD (ou immatriculation) toujours manquant : relu après les vols en l'air, avant les vols sans enjeu (au plus toutes les 10 min par vol). Sans cela ces vols restaient dans le dernier groupe et n'étaient presque jamais repris.
-  if(clean(x.ata)&&(!clean(x.atd)||fidsAtd(x)||!clean(x.reg||x.registration))&&nowMs-checked>=10*60000)return [1.6,checked];
+  if(clean(x.ata)&&!flightComplete(x)&&nowMs-checked>=10*60000)return [1.6,checked];
   if(departed&&!clean(x.ata)&&arrivingSoon(x,nowMs)&&nowMs-checked>=INFLIGHT_REREAD_MIN*60000)return [0.5,checked];// Départ proche (moins de 90 min, ou parti depuis moins d'1 h sans ATD) avec une information qui manque (gate, immatriculation, type, ETD dans les 45 min) : lu en premier, au plus toutes les 4 min par vol. Ne change pas le nombre d'appels, seulement l'ordre.
   if(!departed&&std!=null&&std<=nowMin+90&&nowMin-std<=60&&nowMs-checked>=4*60000&&(!clean(x.gate)||!clean(x.reg||x.registration)||!clean(x.aircraftActual||x.aircraft)||(!clean(x.etd||x.edt)&&std<=nowMin+45)))return [-1,checked];
   if(!departed&&std!=null&&std<=nowMin+30)return [nowMin-std>360?2:0,checked];if(departed&&!clean(x.ata))return [1,checked];if(!clean(x.eta)&&clean(x.atd))return [2,checked];if(std!=null&&std<=nowMin+120)return [3,checked];return [4,checked]}
 // A quarter of the slots (at least one) is kept for flights of the second tier or later (missing ETA, departure missed long ago): otherwise the airborne
 // flights, which are always more numerous than the slots in the evening, would starve them for good.
 // Vol à relire : ceux du jour tant qu'ATA, immatriculation ou type manquent ; ceux de la veille tant qu'ils n'ont pas d'ATA **ou pas d'ATD** (sans cela un vol arrivé la veille sans ATD n'était plus jamais relu après minuit : LO334, SK566, BJ511…).
+// Vol COMPLET : une ATA réelle (pas calculée) et une ATD. Il n'est plus relu du tout (ni après l'écriture de l'ATA, ni pour une immatriculation ou un type : le tableau FR24 les fournit).
+export function flightComplete(x){return Boolean(clean(x?.ata))&&!/DERIVED/.test(upper(x?.ataSource))&&Boolean(clean(x?.atd))}
 export function needsLiveRead(flightDate,today,x){
+  if(flightComplete(x))return false;
   // Vol sans ATD alors que le FIDS a eu le temps de la donner (JU, IZ… : compagnies absentes du flux) : relu tant que l'ATD manque, même arrivé avec immatriculation et type (JU241 restait sans ATD).
   if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft))||flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate)||atdFillDue(x,flightDate);
   // Un vol arrivé depuis longtemps n'est plus relu pour un ATD manquant (sauf FlightAware, seule source d'ATD des vols JU).
