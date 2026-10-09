@@ -1,6 +1,6 @@
 const clean=v=>String(v??'').trim();
 const upper=v=>clean(v).toUpperCase();
-const manual=x=>upper(x?.statusSource||x?.status_source||'').includes('MANUAL')||Boolean(x?.manual?.status||x?.manualOverrides?.status||x?.manual_fields?.status);
+const manual=x=>(/MANUAL/.test(upper(x?.statusSource||x?.status_source||''))&&!/^ALYZIA_STATUS_V1:/.test(upper(x?.statusSource||x?.status_source||'')))||Boolean(x?.manual?.status||x?.manualOverrides?.status||x?.manual_fields?.status);
 const today=()=>new Intl.DateTimeFormat('fr-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 
 export async function resetTodayAutomaticStatuses(env){

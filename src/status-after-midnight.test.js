@@ -15,3 +15,16 @@ test("vol sans passage de minuit : inchangé, ARRIVÉ 15 min après l'heure d'ar
   assert.equal(derive(x,"2026-10-07",Date.UTC(2026,9,7,13,0)).status,"EN VOL");
   assert.equal(derive(x,"2026-10-07",Date.UTC(2026,9,7,17,30)).status,"ARRIVÉ");
 });
+test("statut calculé dont la preuve vient d'un STA saisi à la main : n'est pas une saisie manuelle de statut (TU2655)",async()=>{
+  const {runStatusModelTest}=await import("./status-model-test.js");
+  const row={identity:"1",flight_date:"2026-10-08",data_json:JSON.stringify({...tu,takeoff:"02:58",status:"ARRIVÉ",statusSource:"ALYZIA_STATUS_V1:ETA_PASSED_15:MANUAL",statusReason:"ETA_PASSED_15"})};
+  const writes=[];
+  const env={OPS_DB:{prepare:q=>({bind:(...a)=>({all:async()=>({results:[row]}),run:async()=>{writes.push(a)}}),all:async()=>({results:[row]}),run:async()=>({})})}};
+  const real=Date.now;Date.now=()=>Date.UTC(2026,9,9,1,30);
+  try{await runStatusModelTest(env)}finally{Date.now=real}
+  assert.equal(writes.length,1);
+  assert.equal(JSON.parse(writes[0][0]).status,"EN VOL");
+  // une vraie saisie manuelle de statut reste intacte
+  writes.length=0;row.data_json=JSON.stringify({...tu,takeoff:"02:58",status:"ARRIVÉ",statusSource:"MANUAL"});
+  await runStatusModelTest(env);assert.equal(writes.length,0);
+});
