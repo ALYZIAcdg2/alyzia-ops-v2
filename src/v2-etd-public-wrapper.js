@@ -13,6 +13,7 @@ import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {sweepFidsToday,getFeed,loadFidsState} from "./fids-atd-sweep.js";
 import {sweepAtaFromLanding} from "./ata-derive-sweep.js";
+import {sweepFidsFlightPages} from "./fids-flight-page.js";
 import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
@@ -57,6 +58,7 @@ async function runLive(env,opts){
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
   // Flux FIDS d'abord : ATD / ATA de tous les vols en un appel, pour que le passage par vol ne lise FlightStats / FlightAware que pour ce qui manque encore.
   const fidsSweep=await sweepFidsToday(env).catch(()=>null);
+  await sweepFidsFlightPages(env).catch(()=>null);   // page FIDS du vol : ATA / ATD réels des vols sortis du flux général
   await sweepAtaFromLanding(env).catch(()=>null);   // ATA = LDG + 10 min pour les vols posés depuis 15 min, sans lecture
   const live=await runPublicLiveFlow(env,opts);
   // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
@@ -263,6 +265,10 @@ export default {
         const dry=await sweepFidsToday(env,{dryRun:true});
         return json({ok:true,mode:"FIDS_STATUS_NO_WRITE",nowUtc:new Date().toISOString(),saved:state?{at:state.at,status:state.status,http:state.http,tracked:counts}:null,feed:{status:feed.status,httpStatus:feed.httpStatus||null,rows:feed.rows?.length||0,firstDep:times[0]||null,lastDep:times[times.length-1]||null},dryRun:dry});
       }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/fids-flight-page"&&request.method==="GET"){
+      // Simulation sans écriture : vols posés / partis dont la page FIDS du vol donnerait un ATA ou un ATD réel.
+      try{return json({mode:"FIDS_FLIGHT_PAGE_NO_WRITE",...await sweepFidsFlightPages(env,{dryRun:true})})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
       // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
