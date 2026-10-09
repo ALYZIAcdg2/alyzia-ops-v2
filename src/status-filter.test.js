@@ -18,12 +18,12 @@ test("les statuts affichés sur les cartes sont rangés dans les bons filtres",(
 test("un seul bouton STATUT à côté de la recherche, qui ouvre la liste de tous les statuts",()=>{
   assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);            // même ligne
   assert.match(STATUS_FILTER_UI,/\.alz-search-row \.home-flight-search\{flex:1 1 auto!important/);  // la recherche garde sa largeur
-  assert.match(js,/class="alz-status-btn"/);assert.match(js,/aria-haspopup="listbox"/);assert.match(js,/class="alz-status-band"|className='alz-status-band'/);assert.match(STATUS_FILTER_UI,/\.alz-status-band\{display:flex;flex-wrap:nowrap[^}]*overflow-x:auto/);   // bandeau défilant
+  assert.match(js,/class="alz-status-btn"/);assert.match(js,/aria-haspopup="listbox"/);assert.match(js,/className='alz-status-band'/);assert.match(STATUS_FILTER_UI,/\.alz-status-band\{position:absolute[^}]*overflow-y:auto/);   // liste déroulante
   assert.match(js,/sessionStorage\.setItem\(OPEN/);   // reste ouvert après un rafraîchissement de la page
   assert.match(js,/TOUS LES STATUTS/);
   for(const l of ["HEURE","EMBARQUEMENT","RETARDÉ","PARTI","EN VOL","ATTERRI","ARRIVÉ","ANNULÉ"])assert.ok(js.includes(l),l);
-  assert.ok(!/alz-sf-none/.test(STATUS_FILTER_UI));                                           // aucun statut ne disparaît
-  assert.match(STATUS_FILTER_UI,/\.alz-sf-item\.zero:not\(\.active\)\{opacity:\.45\}/);       // grisé quand il n'y a aucun vol
+  assert.match(STATUS_FILTER_UI,/\.alz-sf-item\.zero:not\(\.active\)\{display:none\}/);       // seuls les statuts présents sont listés
+  assert.match(js,/total>0&&!c\[selected\]/);                                                 // un statut vidé par les filtres est désélectionné
   assert.match(js,/function visibleWithoutUs/);                                               // nombres selon terminal / recherche / horaires
   assert.match(js,/\.home-flight-search'\)\)later\(\)/);assert.match(js,/terminal-filter-bar/);
 });

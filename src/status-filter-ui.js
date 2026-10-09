@@ -1,4 +1,4 @@
-// Liste des vols (accueil) : un seul bouton « STATUT » à côté de la barre de recherche. Il déroule sous la recherche un bandeau défilant (à faire glisser) de tous les statuts avec leur nombre de vols (grisé quand il n'y en a pas) ; on en choisit un.
+// Liste des vols (accueil) : un seul bouton « STATUT » à côté de la barre de recherche. Il ouvre une liste des seuls statuts présents dans la sélection affichée (terminal, recherche, favoris, tranche horaire), avec leur nombre de vols ; on en choisit un.
 // La recherche garde sa largeur. Le nombre de chaque statut suit le terminal, la recherche, les favoris et la tranche horaire ; la liste affichée cumule le statut choisi avec ces filtres.
 export const STATUS_FILTER_UI = String.raw`<style id="alyzia-status-filter-css">.alz-status-hidden{display:none!important}
 .alz-search-row{display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-start;gap:10px;margin:0 0 12px}
@@ -7,14 +7,14 @@ export const STATUS_FILTER_UI = String.raw`<style id="alyzia-status-filter-css">
 .alz-status-btn{display:inline-flex;align-items:center;gap:7px;height:46px;padding:0 15px;border:2px solid #d8e3ee;border-radius:999px;background:#fff;color:#28425f;font:900 12px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;cursor:pointer}
 .alz-status-btn.active{border-color:#0b70d1;background:#0b70d1;color:#fff}
 .alz-status-btn .alz-caret{font-size:10px;opacity:.75}
-.alz-status-band{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin:-4px 0 12px;padding:2px 2px 6px;scroll-snap-type:x proximity}
-.alz-status-band::-webkit-scrollbar{display:none}
+.alz-status-band{position:absolute;right:0;top:calc(100% + 6px);z-index:9999;min-width:230px;max-height:62vh;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding:6px;border:1px solid #d8e3ee;border-radius:16px;background:#fff;box-shadow:0 12px 32px rgba(20,48,80,.22)}
 .alz-status-band[hidden]{display:none}
-.alz-sf-item{flex:0 0 auto;scroll-snap-align:start;display:inline-flex;align-items:center;gap:8px;height:42px;padding:0 15px;border:2px solid #d8e3ee;border-radius:999px;background:#fff;color:#28425f;font:900 12px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;cursor:pointer}
+.alz-sf-item{position:relative;display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:44px;padding:0 12px 0 32px;border:0;border-radius:11px;background:transparent;color:#28425f;font:900 13px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:left;white-space:nowrap;cursor:pointer}
 .alz-sf-item b{font-size:12px;color:#6b7f95;font-weight:900}
-.alz-sf-item.active{border-color:#0b70d1;background:#0b70d1;color:#fff}.alz-sf-item.active b{color:#dcecff}
-.alz-sf-item.zero:not(.active){opacity:.45}
-@media(max-width:800px){.alz-status-btn{height:44px;padding:0 13px}.alz-sf-item{height:40px;padding:0 13px}}</style>
+.alz-sf-item.active{background:#eaf3fe;color:#0868c2}.alz-sf-item.active b{color:#0868c2}
+.alz-sf-item.active::before{content:"✓";position:absolute;left:12px;font-size:13px}
+.alz-sf-item.zero:not(.active){display:none}
+@media(max-width:800px){.alz-status-btn{height:44px;padding:0 13px}.alz-status-band{min-width:min(260px,calc(100vw - 32px))}}</style>
 <script id="alyzia-status-filter-js">(function(){
 if(window.__alyziaStatusFilter)return;window.__alyziaStatusFilter=true;
 var KEYS=[['HEURE','À L’HEURE'],['EMBARQ','EMBARQUEMENT'],['RETARD','RETARDÉ'],['PARTI','PARTI'],['ENVOL','EN VOL'],['ATTERRI','ATTERRI'],['ARRIVE','ARRIVÉ'],['ANNULE','ANNULÉ']];
@@ -38,7 +38,7 @@ function build(search){
   var band=document.createElement('div');band.className='alz-status-band';band.setAttribute('role','listbox');band.setAttribute('aria-label','Statut des vols');band.hidden=true;
   var html='<button type="button" role="option" class="alz-sf-item" data-k="*"><span>TOUS LES STATUTS</span><b>0</b></button>';
   KEYS.forEach(function(p){html+='<button type="button" role="option" class="alz-sf-item zero" data-k="'+p[0]+'"><span>'+p[1]+'</span><b>0</b></button>'});
-  band.innerHTML=html;wrap.parentNode.insertBefore(band,wrap.nextSibling);
+  band.innerHTML=html;box.appendChild(band);
   // La croix d'effacement de la recherche se repositionne selon la nouvelle largeur de la recherche.
   setTimeout(function(){try{window.dispatchEvent(new Event('resize'))}catch(e){}},0);
 }
@@ -46,6 +46,8 @@ function sync(){
   var search=document.querySelector('#app .home-flight-search');if(!search)return;
   var box=document.querySelector('#app .alz-status-wrap');if(!box){build(search);box=document.querySelector('#app .alz-status-wrap');setOpen(menuOpen)}
   var c=counts(),total=0;Object.keys(c).forEach(function(k){total+=c[k]});
+  // Un statut qui n'a plus aucun vol dans la sélection (filtres changés) ne reste pas choisi : la liste ne se retrouve pas vide.
+  if(selected&&total>0&&!c[selected]){selected='';save()}
   Array.prototype.forEach.call(document.querySelectorAll('#app .alz-status-band .alz-sf-item'),function(b){
     var k=b.getAttribute('data-k'),n=k==='*'?total:(c[k]||0),nb=b.querySelector('b'),on=k==='*'?!selected:selected===k;
     if(nb&&nb.textContent!==String(n))nb.textContent=n;
