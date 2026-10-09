@@ -5,6 +5,7 @@ import {runPublicLiveFlow} from "./ops-public-live-flow-optimized.js";
 const today=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 // Les vols de test partent à 05:00 « aujourd'hui » avec un atterrissage à 07:45 : l'horloge est figée à 12:00 (Paris) pour que ces heures ne soient jamais dans le futur, quelle que soit l'heure d'exécution.
 import {beforeEach,afterEach,mock} from "node:test";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 beforeEach(()=>mock.timers.enable({apis:["Date"],now:Date.parse(today+"T10:00:00Z")}));
 afterEach(()=>mock.timers.reset());
 const noon=Date.UTC(+today.slice(0,4),+today.slice(5,7)-1,+today.slice(8,10),12,0)/1000;

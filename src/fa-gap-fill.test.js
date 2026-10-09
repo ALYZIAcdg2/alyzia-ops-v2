@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {needsLiveRead,priority} from "./ops-public-live-flow-optimized.js";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 test("vol arrivé sans ATD : toujours à relire ; complet : non", () => {
   const full={ata:"13:00",reg:"YU-APU",aircraft:"320"};
   assert.equal(needsLiveRead("2026-10-08","2026-10-08",{flight:"JU241",...full}),true);

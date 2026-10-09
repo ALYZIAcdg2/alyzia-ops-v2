@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {noteRefusal,saveRefusals,fetchFlightAwareLive} from "./ops-public-live-flow-optimized.js";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 const mkEnv=()=>{const store={};return {store,OPS_DB:{prepare:q=>({run:async()=>{},first:async()=>store.v?{v:store.v}:null,bind:(...a)=>({run:async()=>{if(q.includes("INSERT"))store.v=a[0]},first:async()=>store.v?{v:store.v}:null})})}}};
 test("refus : adresse sans domaine, code, Retry-After, début de réponse sans balises",async()=>{
   const env=mkEnv();
