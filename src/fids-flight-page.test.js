@@ -12,6 +12,7 @@ const html=(da,aa)=>`<div class="board__header-status  bg-secondary ">
  >${aa}</strong></div></div>`;
 test("parse la page TK1830",()=>{
   const p=parseFlightPage(html("07:25","11:51"));
+  assert.deepEqual(parseFlightPage(".board__header-status{height:93px}"+html("07:25","11:51")),{status:"landed",atd:"07:25",ata:"11:51"});
   assert.deepEqual(p,{status:"landed",atd:"07:25",ata:"11:51"});
   assert.equal(parseFlightPage("<html>erreur</html>"),null);
   assert.equal(parseFlightPage(html("07:25","").replace(/Actual<br \/><strong\s*>\s*</,"X<")).ata,"");
