@@ -1,7 +1,7 @@
 // Page FIDS d'un vol (fids.flightradar.live/flight-status/{vol}/{départ}/{arrivée}/{aaaammjjhhmm de la STD locale}) : ATD et ATA réels pour les vols qui ne sont plus dans le flux général (fenêtre ~3 h).
 // Lecture seulement, 4 vols au plus par passage du cron ; STD/STA ne sont jamais modifiées, une saisie manuelle n'est jamais écrasée.
 // ATA : seulement si vide, calculée (LDG + 10) ou déjà du FIDS. ATD : seulement si vide, « parti à l'heure » ou premier mouvement FR24.
-const BASE="https://fids.flightradar.live/flight-status",MAX_PER_RUN=6,RETRY_MS=10*60000,MAX_AGE_H=6;
+const BASE="https://fids.flightradar.live/flight-status",MAX_PER_RUN=6,FETCH_TIMEOUT_MS=4000,RETRY_MS=10*60000,MAX_AGE_H=6;
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?m[1].padStart(2,"0")+":"+m[2]:""};
 const mins=v=>{const m=hhmm(v).match(/(\d+):(\d+)/);return m?Number(m[1])*60+Number(m[2]):null};
@@ -54,14 +54,20 @@ export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now()
     cand.push({r,x})}
   cand.sort((a,b)=>(b.r.flight_date<a.r.flight_date?-1:b.r.flight_date>a.r.flight_date?1:0)||(tried.get(a.r.identity)||0)-(tried.get(b.r.identity)||0));
   const done=[],checked=[];
-  for(const {r,x} of cand.slice(0,MAX_PER_RUN)){
+  // Lectures en parallèle et bornées à 4 s : cette étape ne doit jamais retarder le traitement principal des vols (statuts, ATD, décollage).
+  const batch=cand.slice(0,MAX_PER_RUN);
+  const pages=await Promise.all(batch.map(async({r,x})=>{
     if(!dryRun)tried.set(r.identity,nowMs);
     const flight=upper(x.flight)||upper(x.airline||r.airline)+clean(r.flight_number).replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
     const url=flightPageUrl({flight,dest:x.destination||x.dest,date:r.flight_date,std:x.std||r.std});
-    if(!url)continue;
+    if(!url)return null;
     let p=null,http=0,err="";
-    try{const res=await fetchImpl(url,{headers:{accept:"text/html,*/*","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow",signal:AbortSignal.timeout(6000)});http=res.status;if(res.ok)p=parseFlightPage(await res.text())}catch(e){err=String(e?.message||e)}
+    try{const res=await fetchImpl(url,{headers:{accept:"text/html,*/*","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow",signal:AbortSignal.timeout(FETCH_TIMEOUT_MS)});http=res.status;if(res.ok)p=parseFlightPage(await res.text())}catch(e){err=String(e?.message||e)}
     if(!dryRun&&(http===404||http===410))tried.set(r.identity,nowMs+GONE_MS-RETRY_MS);
+    return {r,x,flight,url,http,err,p};
+  }));
+  for(const pg of pages){
+    if(!pg)continue;const {r,x,flight,url,http,err,p}=pg;
     checked.push({flight,url,http,err,parsed:p});if(!p)continue;
     let changed=false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     const ata=pageAta(p,x);
