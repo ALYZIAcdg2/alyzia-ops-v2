@@ -1,4 +1,5 @@
 import {timebox,TIMEOUT} from "./cron-budget.js";
+import {derive as deriveModelStatus} from "./status-model-test.js";
 import {guardDepartureClock,guardArrivalClock,isFutureActual,arrivedTooEarly,zoneOffsetMinutes} from "./local-time-guard.js";
 import {isWebWordRegistration,isJunkRegistration} from "./registration-guard.js";
 import {normRegId,regHeldByNearbyFlight} from "./reg-nearby.js";
@@ -467,6 +468,8 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   // Confirmation: stored on each time field (xxxConfirmed + xxxSources); read by the diagnostic and the admin.
   const conf={};for(const [field,hit] of [["atd",atd],["takeoff",takeoff],["eta",eta],["landing",landing],["ata",ataHit]]){if(!clean(current[field])||clean(current[field])!==clean(hit?.value))continue;const c=confirmation(map,field,hit.value);if(current[field+"Confirmed"]!==c.confirmed||clean(current[field+"Sources"])!==c.sources.join(",")){current[field+"Confirmed"]=c.confirmed;current[field+"Sources"]=c.sources.join(",");changed=true}conf[field]=c}
   const explicit=pickStatus(map,LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";nextStatus=diverted?"DÉROUTÉ":guardAirborneStatus(nextStatus,current);
+  // Statut du modèle : ETA dépassée de 15 min (vol parti, ni atterrissage ni ATA) = ARRIVÉ. Sans cela, chaque lecture du vol le remettait EN VOL (décollage connu) jusqu'au passage du modèle quelques secondes plus tard, et l'ADMIN, la fiche et la carte alternaient entre EN VOL et ARRIVÉ.
+  if(!diverted&&!clean(current.ata)&&!clean(current.landing)&&nextStatus!=="ANNULÉ"){try{const dm=deriveModelStatus({...current},f.date,Date.now());if(dm.status==="ARRIVÉ"&&dm.reason==="ETA_PASSED_15")nextStatus="ARRIVÉ"}catch{}}
   // A stored cancellation stays unless real actual times exist; a failed fetch (403) or a stray FR24 "EN VOL" must not reset it.
   if(clean(current.status)==="ANNULÉ"&&nextStatus!=="ANNULÉ"&&!clean(current.atd)&&!clean(current.takeoff)&&!clean(current.landing)&&!clean(current.ata))nextStatus="ANNULÉ";// An ANNULÉ already stored (written before cancelledSource existed) gets its marker too, otherwise the status model rewrites it.
   if(nextStatus==="ANNULÉ"&&!clean(current.cancelledSource)&&!manual(current,"status")){current.cancelledSource=explicit.source||"PUBLIC_LIVE";changed=true}
