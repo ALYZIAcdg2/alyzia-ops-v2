@@ -144,7 +144,7 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
         let atd=act?hhmm(act):"",onTime=false;
         if(!atd&&isToday&&!clean(x.atd)&&!manual(x,"atd")){atd=onTimeAtd(row,{std,takeoff:hhmm(x.takeoff),nowMin,date});onTime=Boolean(atd);if(onTime)per[key]="OK"}
         if(!atd)return false;
-        if(manual(x,"atd")||(clean(x.atd)&&!/FIDS/.test(upper(x.atdSource))))return false;
+        if(manual(x,"atd")||(clean(x.atd)&&!/FIDS|FR24MOVE/.test(upper(x.atdSource))))return false;
         if(clean(x.atd)===atd)return false;
         if(!onTime&&!plausibleActual(row,{std,takeoff:act.startsWith(date)?hhmm(x.takeoff):"",nowMin,nowMs,sameDay:act.startsWith(date)})){rejected++;return false}
         const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:onTime?"PUBLIC_LIVE:FIDS_ONTIME":"PUBLIC_LIVE:FIDS",field:"atd",from:clean(x.atd),to:atd});

@@ -268,7 +268,7 @@ async function fetchHtmlSource(source,f){if(source==="FLIGHTSTATS"){const cached
   return {source,url:r.url||url,httpStatus:r.status,status,checkedAt,semantic,detailsInfo:detailsInfo||undefined,flightId:fsId||undefined,lookupDesignator:candidate.designator,lookupCodeType:candidate.lookupCodeType}}catch(e){if(source==="FLIGHTSTATS")noteRefusal(source,url,{status:0},"EXCEPTION "+String(e?.name||"")+": "+String(e?.message||e));return {source,url,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,checkedAt,semantic:{},error:String(e?.message||e).slice(0,160)}}finally{clearTimeout(t)}})}
 function clockFromIso(iso,zone){if(!iso)return "";const d=new Date(iso);if(Number.isNaN(d.getTime()))return "";try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone||"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(d).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return ""}}
 // FR24's "actual departure" is the wheels-up time (MH21: FR24 12:02/12:03, FlightStats and FlightAware gate departure 11:50): it feeds TAKEOFF only, never ATD.
-export function fr24Semantic(fr,f){const s=fr?.candidates?.semantic||{};const takeoff=clockFromIso(s.takeoff,"Europe/Paris"),history=clean(s.atdClock);return {takeoff:takeoff||history,eta:clockFromIso(s.eta,AIRPORT_TZ[f.destination]||"Europe/Paris"),landing:clockFromIso(s.landing,AIRPORT_TZ[f.destination]||"Europe/Paris")||clean(s.landingClock),status:statusValue(s.status||fr?.candidates?.statuses?.join(" ")||""),aircraft:upper(s.type||fr?.candidates?.aircraft?.[0]),reg:upper(s.reg||fr?.candidates?.registrations?.[0])}}
+export function fr24Semantic(fr,f){const s=fr?.candidates?.semantic||{};const takeoff=clockFromIso(s.takeoff,"Europe/Paris"),history=clean(s.atdClock);return {takeoff:takeoff||history,atdEst:clockFromIso(s.moveStart,AIRPORT_TZ[upper(f.origin||"CDG")]||"Europe/Paris"),eta:clockFromIso(s.eta,AIRPORT_TZ[f.destination]||"Europe/Paris"),landing:clockFromIso(s.landing,AIRPORT_TZ[f.destination]||"Europe/Paris")||clean(s.landingClock),status:statusValue(s.status||fr?.candidates?.statuses?.join(" ")||""),aircraft:upper(s.type||fr?.candidates?.aircraft?.[0]),reg:upper(s.reg||fr?.candidates?.registrations?.[0])}}
 function choose(map,field,order){for(const src of order){const key=upper(src).replace(/[^A-Z0-9]/g,"");const hit=map[key]||map[src];const v=clean(hit?.[field]);if(v)return {value:v,source:key==="FLIGHTSTATSEXACT"?"FLIGHTSTATS":key}}return {value:"",source:""}}
 // A cancellation read on a web page is only believed when two sources agree: a single loose page text ("cancelled" elsewhere on the page) was wrong for AI142 / TU725.
 export function pickStatus(map,order){
@@ -339,7 +339,18 @@ export function deriveAta(landingValue,zone,airline,now=new Date()){
 // ATD venu du flux FIDS : provisoire, FlightStats / FlightAware doivent encore le confirmer.
 // ATD du FIDS : une heure réelle de départ du flux (PUBLIC_LIVE:FIDS) est définitive, FlightStats / FlightAware ne la relisent plus ni ne la remplacent (ils ne comblent que ce que le FIDS n'a pas rempli).
 // Seul l'ATD « parti à l'heure » (PUBLIC_LIVE:FIDS_ONTIME, déduit de l'ETD, pas lu dans le flux) reste remplaçable par une vraie lecture.
-function fidsAtd(x){return Boolean(clean(x?.atd))&&/FIDS_ONTIME/.test(upper(x.atdSource))&&!manual(x,"atd")}
+// ATD remplaçable : « parti à l'heure » du FIDS (FIDS_ONTIME) ou premier mouvement FR24 (FR24MOVE, estimée) ; toute vraie lecture la remplace.
+function fidsAtd(x){return Boolean(clean(x?.atd))&&/FIDS_ONTIME|FR24MOVE/.test(upper(x.atdSource))&&!manual(x,"atd")}
+// ATD estimée depuis le premier mouvement FR24 : seulement après le décollage (TO connu depuis 15 min au moins), sans aucune ATD, et si le mouvement précède le TO de 90 min au plus.
+export function moveAtdHit(current,fr24,takeoffValue,nowMs=Date.now(),origin="CDG"){
+  const est=clean(fr24?.atdEst);if(!est||clean(current?.atd)||manual(current,"atd"))return null;
+  const tk=clean(takeoffValue)||clean(current?.takeoff);if(!tk)return null;
+  const zone=AIRPORT_TZ[upper(origin)]||"Europe/Paris",since=minutesSinceLocalClock(tk,zone,new Date(nowMs));
+  if(since===null||since<15||since>720)return null;
+  const a=mins(est),t=mins(tk);if(a===null||t===null)return null;
+  let gap=t-a;if(gap<-720)gap+=1440;if(gap<0||gap>90)return null;
+  return {value:est,source:"FR24MOVE"};
+}
 export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clean(x.takeoff)&&/FR24/.test(upper(x.atdSource))&&!manual(x,"atd")}
 // Airborne flight arriving within 2 h (or just overdue): its ETA moves most, so it is re-read first, at most every 3 minutes.
 const INFLIGHT_WINDOW_MIN=120,INFLIGHT_REREAD_MIN=3;
@@ -437,7 +448,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
     const boardOwned=/FR24BOARD/.test(upper(current.regSource||current.registrationSource))&&!isJunkRegistration(current.reg||current.registration)&&clean(current.reg||current.registration);
     if((boardOwned&&!/FR24BOARD/.test(upper(reg.source)))||await regHeldByNearbyFlight(env,row.identity,f.date,reg.value,current.std||f.std))reg.value="";
   }
-  if(setField(current,"atd",atd,at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
+  if(setField(current,"atd",atd.value?atd:(moveAtdHit(current,map.FR24,takeoff.value||current.takeoff,Date.now(),f.origin)||atd),at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   // Confirmation: stored on each time field (xxxConfirmed + xxxSources); read by the diagnostic and the admin.
   const conf={};for(const [field,hit] of [["atd",atd],["takeoff",takeoff],["eta",eta],["landing",landing],["ata",ataHit]]){if(!clean(current[field])||clean(current[field])!==clean(hit?.value))continue;const c=confirmation(map,field,hit.value);if(current[field+"Confirmed"]!==c.confirmed||clean(current[field+"Sources"])!==c.sources.join(",")){current[field+"Confirmed"]=c.confirmed;current[field+"Sources"]=c.sources.join(",");changed=true}conf[field]=c}
   const explicit=pickStatus(map,LIVE_PUBLIC_SOURCE_ORDER.status);let nextStatus=explicit.value||flightOperationalStatus(current);if(clean(current.ata))nextStatus="ARRIVÉE";else if(clean(current.landing))nextStatus="ATTERI";else if(clean(current.takeoff)||clean(current.atd))nextStatus="EN VOL";nextStatus=diverted?"DÉROUTÉ":guardAirborneStatus(nextStatus,current);

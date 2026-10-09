@@ -103,6 +103,19 @@ function inferTakeoffFromTrack(track){
   return null;
 }
 
+// Premier mouvement au sol avant le décollage (vitesse d'au moins 5 kt, au sol) : sert d'ATD estimée quand aucune source ne l'a donnée. C'est le premier mouvement vu par le radar, donc parfois quelques minutes après la vraie sortie de porte.
+function firstMovementFromTrack(track){
+  if(!Array.isArray(track)||track.length<2)return null;
+  const takeoff=inferTakeoffFromTrack(track);if(!takeoff)return null;
+  const rows=track.filter(p=>epoch(p?.timestamp)).sort((a,b)=>Number(a.timestamp)-Number(b.timestamp));
+  for(const p of rows){
+    if(Number(p.timestamp)>=takeoff)break;
+    const alt=Number(nested(p,["altitude","feet"])),speed=Number(nested(p,["speed","kts"]));
+    if(Number.isFinite(alt)&&alt<=50&&Number.isFinite(speed)&&speed>=5)return epoch(p.timestamp);
+  }
+  return null;
+}
+
 function inferLandingFromTrack(track){
   if(!Array.isArray(track)||track.length<2)return null;
   const rows=track.filter(p=>epoch(p?.timestamp)).sort((a,b)=>Number(a.timestamp)-Number(b.timestamp));
@@ -149,6 +162,7 @@ function playbackCandidates(data,flight,id){
     sta:iso(scheduledArrival),
     eta:iso(estimatedArrival),
     landing:iso(landing),
+    moveStart:iso(firstMovementFromTrack(track)),
     type:aircraft||null,
     reg:registration||null,
     status:status||null,
