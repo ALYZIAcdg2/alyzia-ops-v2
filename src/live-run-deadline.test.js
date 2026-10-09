@@ -20,3 +20,11 @@ test("une lecture de vol qui ne répond pas est coupée (TIMEOUT) et ne bloque p
   assert.deepEqual(out.map(o=>o.status),["TIMEOUT","ERROR","UPDATED"]);
   assert.equal(timings.length,3);assert.ok(timings.find(t=>t.flight==="AH1").ms>=30);
 });
+
+test("un vol en TIMEOUT / ERREUR est marqué lu (passe au bout de la file) ; un vol lu normalement n'est pas touché ; le nom du vol n'est pas déformé",async()=>{
+  const marked=[],timings=[];
+  const read=makeReadOne(async r=>{if(r.flight_number==="LO332")return new Promise(()=>{});return {status:"UPDATED"}},timings,30,async(r,st)=>{marked.push([r.flight_number,st])});
+  await read({airline:"LO",flight_number:"LO332",identity:"i1"});await read({airline:"AH",flight_number:"1083",identity:"i2"});
+  assert.deepEqual(marked,[["LO332","TIMEOUT"]]);
+  assert.deepEqual(timings.map(t=>t.flight),["LO332","AH1083"]);
+});
