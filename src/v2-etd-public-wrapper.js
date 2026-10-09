@@ -13,7 +13,7 @@ import {backfillBoardGates} from "./fr24-board-backfill.js";
 import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {sweepFidsToday,getFeed,loadFidsState} from "./fids-atd-sweep.js";
 import {sweepAtaFromLanding} from "./ata-derive-sweep.js";
-import {sweepFidsFlightPages} from "./fids-flight-page.js";
+import {sweepFidsFlightPages,loadLastRun as loadFlightPageRun} from "./fids-flight-page.js";
 import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
@@ -52,13 +52,13 @@ import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
 async function runLive(env,opts){
+  await sweepFidsFlightPages(env).catch(()=>null);   // page FIDS du vol : ATA / ATD réels des vols sortis du flux général
   // Statuts d'embarquement (Gatenavo : un appel pour tous les vols) EN PREMIER et à l'abri des erreurs des étapes suivantes : un passage long ou en échec
   // (lectures FlightAware / FlightStats, délais) ne doit plus empêcher la mise à jour de l'embarquement, qui ne vit que 15 à 30 min par vol.
   const parisAeroport=await runParisAirportStatusFlow(env).catch(e=>({ok:false,error:String(e?.message||e)}));
   const flightAwareExact=await recoverFlightAwareExactHistory(env);
   // Flux FIDS d'abord : ATD / ATA de tous les vols en un appel, pour que le passage par vol ne lise FlightStats / FlightAware que pour ce qui manque encore.
   const fidsSweep=await sweepFidsToday(env).catch(()=>null);
-  await sweepFidsFlightPages(env).catch(()=>null);   // page FIDS du vol : ATA / ATD réels des vols sortis du flux général
   await sweepAtaFromLanding(env).catch(()=>null);   // ATA = LDG + 10 min pour les vols posés depuis 15 min, sans lecture
   const live=await runPublicLiveFlow(env,opts);
   // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
@@ -268,7 +268,7 @@ export default {
     }
     if(url.pathname==="/api/admin/fids-flight-page"&&request.method==="GET"){
       // Simulation sans écriture : vols posés / partis dont la page FIDS du vol donnerait un ATA ou un ATD réel.
-      try{return json({mode:"FIDS_FLIGHT_PAGE_NO_WRITE",...await sweepFidsFlightPages(env,{dryRun:true,only:url.searchParams.get("flight")||""})})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json({mode:"FIDS_FLIGHT_PAGE_NO_WRITE",lastCronRun:await loadFlightPageRun(env),...await sweepFidsFlightPages(env,{dryRun:true,only:url.searchParams.get("flight")||""})})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
       // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
