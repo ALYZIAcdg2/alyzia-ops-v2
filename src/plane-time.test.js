@@ -37,3 +37,10 @@ test("carte liste : STD / STA saisis à la main dans la fiche ne sont pas écras
   x=run({...base,std:"07:20",...man("2026-10-08T10:00:00Z")},{...base,std:"07:45",enrichment:{fields:{std:{source:"MANUAL",updated_at:"2026-10-08T11:00:00Z"}}}});
   assert.equal(x.std,"07:45");                                                          // saisie distante plus récente
 });
+
+test("temps écoulé / restant sous le temps de l'avion : jamais à la même hauteur (pas de chevauchement)",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const s=readFileSync(new URL("./flight-list-reference-ui.js",import.meta.url),"utf8");
+  const plane=Number(/\.ops-plane-time\{[^}]*top:calc\(50% \+ (\d+)px\)/.exec(s)[1]),el=Number(/\.ops-time-elapsed,#app \.ops-time-remaining\{position:absolute;top:calc\(50% \+ (\d+)px\)/.exec(s)[1]);
+  assert.ok(el>=plane+16,"elapsed "+el+" / plane "+plane);
+});

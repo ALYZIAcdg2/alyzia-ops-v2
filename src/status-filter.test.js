@@ -15,18 +15,20 @@ test("les statuts affichés sur les cartes sont rangés dans les bons filtres",(
   const cases={"À L’HEURE":"HEURE","À L'HEURE":"HEURE","PRÉVU":"HEURE","PROGRAMMÉ":"HEURE","EMBARQUEMENT":"EMBARQ","EMBARQUEMENT CLOS":"EMBARQ","RETARDÉ":"RETARD","PARTI":"PARTI","EN VOL":"ENVOL","ATTERRI":"ATTERRI","ATTERI":"ATTERRI","ARRIVÉE":"ARRIVE","ARRIVÉ":"ARRIVE","ANNULÉ":"ANNULE","DÉROUTÉ":"AUTRE","":"AUTRE"};
   for(const [t,k] of Object.entries(cases))assert.equal(keyOf(t),k,t);
 });
-test("statuts en liste défilante à côté de la recherche, qui garde sa largeur ; tous les statuts restent affichés",()=>{
+test("un seul bouton STATUT à côté de la recherche, qui ouvre la liste de tous les statuts",()=>{
   assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);            // même ligne
-  assert.match(STATUS_FILTER_UI,/flex:0 0 clamp\(190px,50%,360px\)!important/);               // recherche : au moins 190 px
-  assert.match(STATUS_FILTER_UI,/overflow-x:auto/);                                           // liste défilante
-  assert.ok(!/flex-direction:column/.test(STATUS_FILTER_UI));
-  assert.ok(!/alz-sf-none/.test(STATUS_FILTER_UI));                                           // plus de statut qui disparaît
-  assert.match(STATUS_FILTER_UI,/\.alz-sf-chip\.zero:not\(\.active\)\{opacity:\.5\}/);        // grisé quand il n'y a aucun vol
+  assert.match(STATUS_FILTER_UI,/\.alz-search-row \.home-flight-search\{flex:1 1 auto!important/);  // la recherche garde sa largeur
+  assert.match(js,/class="alz-status-btn"/);assert.match(js,/aria-haspopup="listbox"/);assert.match(js,/class="alz-status-band"|className='alz-status-band'/);assert.match(STATUS_FILTER_UI,/\.alz-status-band\{display:flex;flex-wrap:nowrap[^}]*overflow-x:auto/);   // bandeau défilant
+  assert.match(js,/sessionStorage\.setItem\(OPEN/);   // reste ouvert après un rafraîchissement de la page
+  assert.match(js,/TOUS LES STATUTS/);
+  for(const l of ["HEURE","EMBARQUEMENT","RETARDÉ","PARTI","EN VOL","ATTERRI","ARRIVÉ","ANNULÉ"])assert.ok(js.includes(l),l);
+  assert.ok(!/alz-sf-none/.test(STATUS_FILTER_UI));                                           // aucun statut ne disparaît
+  assert.match(STATUS_FILTER_UI,/\.alz-sf-item\.zero:not\(\.active\)\{opacity:\.45\}/);       // grisé quand il n'y a aucun vol
   assert.match(js,/function visibleWithoutUs/);                                               // nombres selon terminal / recherche / horaires
   assert.match(js,/\.home-flight-search'\)\)later\(\)/);assert.match(js,/terminal-filter-bar/);
 });
-test("sélection simple : un statut à la fois, re-toucher ou « TOUS » remet tout",()=>{
+test("sélection simple : un statut à la fois, re-toucher ou « TOUS LES STATUTS » remet tout ; la liste se ferme",()=>{
   assert.match(js,/selected=\(k==='\*'\|\|selected===k\)\?'':k/);
-  assert.match(js,/role','tablist'/);
+  assert.match(js,/setOpen\(false\)/);assert.match(js,/e\.key==='Escape'/);                   // se ferme au choix, au clic dehors, à Échap
   assert.match(js,/dispatchEvent\(new Event\('resize'\)\)/);                                 // la croix de la recherche se repositionne
 });
