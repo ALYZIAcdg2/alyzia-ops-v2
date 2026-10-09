@@ -14,6 +14,7 @@ import {sweepBoardToday} from "./fr24-board-sweep.js";
 import {sweepFidsToday,getFeed,loadFidsState} from "./fids-atd-sweep.js";
 import {sweepAtaFromLanding} from "./ata-derive-sweep.js";
 import {sweepFidsFlightPages,loadLastRun as loadFlightPageRun} from "./fids-flight-page.js";
+import {createCronBudget,saveCronTiming,loadCronTiming} from "./cron-budget.js";
 import {syncCabinAfterAircraftChange} from "./cabin-sync.js";
 import {loadRuntimeState,saveRuntimeState} from "./runtime-state.js";
 import {sanitizeArrivalClocks} from "./ops-arrival-sanitizer.js";
@@ -52,23 +53,26 @@ import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
 async function runLive(env,opts){
+  // Chaque étape a une durée maximale ; les étapes facultatives sont sautées si le passage a déjà trop duré (voir cron-budget.js). Hors cron (envoi manuel), un budget local suffit.
+  const B=globalThis.__cronBudget||createCronBudget();
   // Statuts d'embarquement (Gatenavo : un appel pour tous les vols) EN PREMIER et à l'abri des erreurs des étapes suivantes : un passage long ou en échec
   // (lectures FlightAware / FlightStats, délais) ne doit plus empêcher la mise à jour de l'embarquement, qui ne vit que 15 à 30 min par vol.
-  const parisAeroport=await runParisAirportStatusFlow(env).catch(e=>({ok:false,error:String(e?.message||e)}));
-  const flightAwareExact=await recoverFlightAwareExactHistory(env);
+  const parisAeroport=await B.step("gatenavo",()=>runParisAirportStatusFlow(env),{ms:15000,fallback:{ok:false,error:"TIMEOUT"}});
+  const flightAwareExact=await B.step("flightaware-exact",()=>recoverFlightAwareExactHistory(env),{ms:5000,optional:true});
   // Flux FIDS d'abord : ATD / ATA de tous les vols en un appel, pour que le passage par vol ne lise FlightStats / FlightAware que pour ce qui manque encore.
-  const fidsSweep=await sweepFidsToday(env).catch(()=>null);
-  await sweepAtaFromLanding(env).catch(()=>null);   // ATA = LDG + 10 min pour les vols posés depuis 15 min, sans lecture
-  const live=await runPublicLiveFlow(env,opts);
-  // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus).
-  const boardSweep=await sweepBoardToday(env).catch(()=>null);
+  const fidsSweep=await B.step("fids-bulk",()=>sweepFidsToday(env),{ms:15000});
+  await B.step("ata-from-landing",()=>sweepAtaFromLanding(env),{ms:8000});   // ATA = LDG + 10 min pour les vols posés depuis 15 min, sans lecture
+  // ESSENTIEL : lectures par vol (décollage, atterrissage, ATA, ETA).
+  const live=await B.step("live-per-flight",()=>runPublicLiveFlow(env,opts),{ms:70000,fallback:{ok:false,error:"TIMEOUT"}});
+  // Tableau FR24 de CDG : porte, immat, type, ETD, décollage de TOUS les vols du jour (l'index est en cache, aucune requête de plus). ESSENTIEL.
+  const boardSweep=await B.step("fr24-board",()=>sweepBoardToday(env),{ms:15000});
   // Config cabine automatique alignée sur le type réel quand un appareil a changé (sans action dans la fiche).
-  const cabinSync=await syncCabinAfterAircraftChange(env).catch(e=>({ok:false,error:String(e?.message||e)}));
-  const recovery=await recoverValidatedLiveFacts(env);
-  const regFix=await sanitizeTodayRegistrations(env);
-  const arrivalFix=await sanitizeArrivalClocks(env).catch(()=>null);
-  const statusModel=await runStatusModelTest(env);
-  return {...live,boardSweep,cabinSync,fidsSweep,arrivalFix,flightAwareExact,recovery,parisAeroport,regFix,statusModel};
+  const cabinSync=await B.step("cabin-sync",()=>syncCabinAfterAircraftChange(env),{ms:8000,optional:true,fallback:{ok:false,error:"SKIPPED"}});
+  const recovery=await B.step("validated-recovery",()=>recoverValidatedLiveFacts(env),{ms:5000,optional:true});
+  const regFix=await B.step("registrations",()=>sanitizeTodayRegistrations(env),{ms:8000,optional:true});
+  const arrivalFix=await B.step("arrival-clocks",()=>sanitizeArrivalClocks(env),{ms:8000,optional:true});
+  const statusModel=await B.step("status-model",()=>runStatusModelTest(env),{ms:20000,fallback:{ok:false,error:"TIMEOUT"}});
+  return {...(live||{}),boardSweep,cabinSync,fidsSweep,arrivalFix,flightAwareExact,recovery,parisAeroport,regFix,statusModel};
 }
 async function runGround(env){const ground=await runGroundPublicFlow(env);const regFix=await sanitizeTodayRegistrations(env);return {...ground,regFix}}
 async function runAllSequential(env,{liveLimit=36,liveConcurrency=4,withGround=true}={}){
@@ -265,6 +269,10 @@ export default {
         return json({ok:true,mode:"FIDS_STATUS_NO_WRITE",nowUtc:new Date().toISOString(),saved:state?{at:state.at,status:state.status,http:state.http,tracked:counts}:null,feed:{status:feed.status,httpStatus:feed.httpStatus||null,rows:feed.rows?.length||0,firstDep:times[0]||null,lastDep:times[times.length-1]||null},dryRun:dry});
       }catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
+    if(url.pathname==="/api/admin/cron-timing"&&request.method==="GET"){
+      // Lecture seule : durée de chaque étape du dernier passage automatique (ok / timeout / sautée / erreur).
+      try{return json({ok:true,last:await loadCronTiming(env)})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
     if(url.pathname==="/api/admin/fids-flight-page"&&request.method==="GET"){
       // Simulation sans écriture : vols posés / partis dont la page FIDS du vol donnerait un ATA ou un ATD réel.
       try{return json({mode:"FIDS_FLIGHT_PAGE_NO_WRITE",lastCronRun:await loadFlightPageRun(env),...await sweepFidsFlightPages(env,{dryRun:true,only:url.searchParams.get("flight")||""})})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
@@ -354,20 +362,21 @@ export default {
     ctx.waitUntil((async()=>{
       // The cron runs every 2 minutes: a run still in progress (lock younger than 100 s) is not doubled.
       if(!(await acquireCronLock(env)))return;
+      const B=createCronBudget();globalThis.__cronBudget=B;
       await loadAirportZones(env);   // fuseaux de tous les aéroports (JMK…), sinon heure de Paris par défaut
       try{
         // Pauses FlightStats et cache du tableau FR24 : relus ici, réécrits à la fin (la mémoire du Worker peut être vide à chaque passage).
         await loadRuntimeState(env);
         // Live facts (ATD, takeoff, landing…) first: they are the most time-critical; the ETD pass over every flight can be long.
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
-        await runEtd(env).catch(()=>{});
-        if(isQuarterHour(controller))await runGround(env).catch(()=>{});
+        await B.step("etd-pass",()=>runEtd(env),{ms:30000,optional:true});
+        if(isQuarterHour(controller))await B.step("ground",()=>runGround(env),{ms:20000,optional:true});
         // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.
-        if(isDailyCheckWindow())await runPublicLiveFlow(env,{limit:12,concurrency:4,recheck:true}).catch(()=>{});
-        await runStatusModelTest(env).catch(()=>{});
-        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : en toute fin de passage, lectures parallèles bornées à 4 s, pour ne jamais retarder les statuts ni les lectures des vols.
-        await sweepFidsFlightPages(env).catch(()=>{});
-      }finally{await saveRuntimeState(env);await releaseCronLock(env)}
+        if(isDailyCheckWindow())await B.step("daily-recheck",()=>runPublicLiveFlow(env,{limit:12,concurrency:4,recheck:true}),{ms:40000,optional:true});
+        await B.step("status-model-final",()=>runStatusModelTest(env),{ms:20000});
+        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : en toute fin de passage, facultative, lectures parallèles bornées à 4 s, pour ne jamais retarder statuts ni lectures des vols.
+        await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000,optional:true});
+      }finally{globalThis.__cronBudget=null;await saveCronTiming(env,B.summary());await saveRuntimeState(env);await releaseCronLock(env)}
     })());
   }
 };
