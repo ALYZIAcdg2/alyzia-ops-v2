@@ -52,7 +52,6 @@ import {runStatusModelTest,STATUS_MODEL_TEST_RULES} from "./status-model-test.js
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}})}
 async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);const flow=await runEtdPublicFlowSafe(env);return {...flow,localTimeFix:cleanup}}
 async function runLive(env,opts){
-  await sweepFidsFlightPages(env).catch(()=>null);   // page FIDS du vol : ATA / ATD réels des vols sortis du flux général
   // Statuts d'embarquement (Gatenavo : un appel pour tous les vols) EN PREMIER et à l'abri des erreurs des étapes suivantes : un passage long ou en échec
   // (lectures FlightAware / FlightStats, délais) ne doit plus empêcher la mise à jour de l'embarquement, qui ne vit que 15 à 30 min par vol.
   const parisAeroport=await runParisAirportStatusFlow(env).catch(e=>({ok:false,error:String(e?.message||e)}));
@@ -366,6 +365,8 @@ export default {
         // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.
         if(isDailyCheckWindow())await runPublicLiveFlow(env,{limit:12,concurrency:4,recheck:true}).catch(()=>{});
         await runStatusModelTest(env).catch(()=>{});
+        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : en toute fin de passage, lectures parallèles bornées à 4 s, pour ne jamais retarder les statuts ni les lectures des vols.
+        await sweepFidsFlightPages(env).catch(()=>{});
       }finally{await saveRuntimeState(env);await releaseCronLock(env)}
     })());
   }
