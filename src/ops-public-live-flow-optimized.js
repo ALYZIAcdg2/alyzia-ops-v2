@@ -314,6 +314,14 @@ export function minutesSinceLocalClock(clockValue,zone,now=new Date()){
   const c=mins(clockValue);if(c==null)return null;
   try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone||"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(now).map(x=>[x.type,x.value]));return ((Number(p.hour)*60+Number(p.minute)-c)%1440+1440)%1440}catch{return null}
 }
+// Vol arrivé depuis longtemps (ATA / LDG connu, plus de 90 min, ou arrivé un jour passé) : FlightStats n'est plus lu pour le compléter. Sans cela, les vols de la veille arrivés restaient relus toutes les 10 min, saturaient FlightStats et le mettaient en pause. Un vol de la veille arrivé après minuit depuis moins de 90 min reste lisible.
+export function arrivedStale(x,flightDate="",nowMs=Date.now()){
+  const arr=clean(x?.ata)||clean(x?.landing);if(!arr)return false;
+  const since=minutesSinceLocalClock(arr,AIRPORT_TZ[upper(x?.dest||x?.destination)]||"Europe/Paris",new Date(nowMs));if(since===null)return false;
+  const today=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(nowMs));
+  if(flightDate&&flightDate<today){const a=mins(arr),st=mins(x?.std);return !(a!==null&&st!==null&&a<st&&since<=90)}
+  return since>90;
+}
 // Landed for 15 minutes or more without an ATA: the gate arrival is taken as landing + 10 min (ENT / E4: at once, as before).
 export function deriveAta(landingValue,zone,airline,now=new Date()){
   const ld=clean(landingValue);if(!ld)return null;
@@ -347,7 +355,8 @@ export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||ro
 export function needsLiveRead(flightDate,today,x){
   // Vol sans ATD alors que le FIDS a eu le temps de la donner (JU, IZ… : compagnies absentes du flux) : relu tant que l'ATD manque, même arrivé avec immatriculation et type (JU241 restait sans ATD).
   if(flightDate===today)return !(clean(x.ata)&&clean(x.reg||x.registration)&&clean(x.aircraftActual||x.aircraft))||flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate);
-  return !clean(x.ata)||!clean(x.atd)||fidsAtd(x);
+  // Un vol arrivé depuis longtemps n'est plus relu pour un ATD manquant (sauf FlightAware, seule source d'ATD des vols JU).
+  return flightAwareAllowed(x.flight||x.designator,x,Date.now(),flightDate)||((!clean(x.ata)||!clean(x.atd)||fidsAtd(x))&&!arrivedStale(x,flightDate));
 }
 export function pickSlots(sorted,size){
   const reserve=Math.min(size,Math.max(1,Math.floor(size/4))),head=sorted.slice(0,size-reserve),rest=sorted.slice(size-reserve),late=rest.filter(z=>z.p[0]>=2).slice(0,reserve);
@@ -364,7 +373,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   const atdMissing=(!clean(base.atd)||suspectAtd(base))&&!clean(map.FR24BOARD?.atd),etaWanted=needs.eta&&(clean(base.atd)||clean(base.takeoff))&&!clean(base.landing)&&!clean(base.ata),lastResort=forced||(pastStd&&atdMissing)||etaWanted;
   // FlightStats: seulement si un champ gate-time/status manque.
   const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
-  if(!tooEarly&&anyNeed(needs,["atd","eta","ata","status"])&&(lastResort||(fsIdKnown&&!clean(base.ata)&&(clean(base.atd)||clean(base.takeoff))))&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),onDemand?1:fsPageLeft))){if(!fsIdKnown&&!onDemand)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
+  if(!tooEarly&&(forced||!arrivedStale(base,f.date))&&anyNeed(needs,["atd","eta","ata","status"])&&(lastResort||(fsIdKnown&&!clean(base.ata)&&(clean(base.atd)||clean(base.takeoff))))&&(fsIdKnown||flightStatsMayTry({...base,date:f.date},Date.now(),onDemand?1:fsPageLeft))){if(!fsIdKnown&&!onDemand)fsPageLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK"}
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
   if(anyNeed(needs,["atd","takeoff","landing","eta","status","aircraft","reg"])){const fr=await fetchFr24Public(f).catch(()=>null);attempts.push({source:"FR24",status:fr?.status||"ERROR",checkedAt:new Date().toISOString()});fr24Id=clean(fr?.candidates?.fr24OccurrenceId);map.FR24=fr24Semantic(fr,f)}
