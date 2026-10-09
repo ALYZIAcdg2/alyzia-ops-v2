@@ -57,3 +57,19 @@ test("vol d'hier soir retardé après minuit, pas atterri : le tableau lui donne
   assert.equal(saved.gate,"K52");assert.equal(saved.reg,"F-GSPL");assert.equal(saved.etd,"00:30");
   assert.equal(r.flights,1);
 });
+test("vol d'hier soir hors de la fenêtre de 3 h du tableau (TU2655, STD 19:45 lu à 01:50) : lecture complémentaire depuis sa STD",async()=>{
+  __reset();
+  const N=Date.parse("2026-10-08T23:50:00Z");               // 01:50 Paris le 09/10
+  const S=Date.parse("2026-10-08T17:45:00Z")/1000;           // STD 19:45 Paris le 08/10
+  const tu={flightNumber:"TU2655",status:{name:"estimated"},scheduledTime:S,estimatedTime:S+25380,gate:"",aircraft:{registration:"TS-IMS",type:"A320"},flightId:"y"};
+  const urls=[];
+  const fetchImpl=async url=>{urls.push(String(url));const from=Number(/date=(\d+)/.exec(String(url))[1]);return new Response(page(from<N/1000-4*3600?[tu]:[]),{status:200})};
+  const r0={identity:"1",flight_date:"2026-10-08",flight_number:"TU2655",airline:"TU",std:"19:45",data_json:JSON.stringify({airline:"TU",flight:"TU2655",origin:"CDG",std:"19:45",gate:"—"})};
+  const e=env([r0]);
+  await sweepBoardToday(e,{nowMs:N,fetchImpl});
+  const saved=JSON.parse(e.writes[0][0]);
+  assert.equal(saved.reg,"TS-IMS");assert.equal(saved.etd,"02:48");
+  const n=urls.length;
+  await sweepBoardToday(env([r0]),{nowMs:N+60000,fetchImpl});   // 1 min plus tard : pas de nouvelle lecture
+  assert.equal(urls.length,n);
+});
