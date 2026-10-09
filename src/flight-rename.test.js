@@ -54,3 +54,19 @@ test("fiche : script d'interface valide, branché sur INFOS VOL et injecté dans
   const w=fs.readFileSync(new URL("./v2-etd-public-wrapper.js",import.meta.url),"utf8");
   assert.match(w,/FLIGHT_RENAME_UI/);assert.match(w,/\/api\/flights\/rename/);
 });
+
+test("fiche : seul le numéro est modifiable (chiffres, ou chiffres + une lettre), le code compagnie reste fixe",()=>{
+  const js=/<script[^>]*>([\s\S]*)<\/script>/.exec(FLIGHT_RENAME_UI)[1];
+  const grab=n=>new RegExp("function "+n+"\\([^)]*\\)\\{[^\\n]*\\}").exec(js)[0];
+  const fns=new Function(grab("airlineOf")+grab("suffixOf")+grab("cleanSuffix")+";return {airlineOf,suffixOf,cleanSuffix}")();
+  assert.equal(fns.airlineOf({airline:"ENT",flight:"ENT579"}),"ENT");
+  assert.equal(fns.suffixOf({airline:"ENT",flight:"ENT579"}),"579");
+  assert.equal(fns.suffixOf({airline:"AF",flight:"AF12A"}),"12A");
+  assert.equal(fns.cleanSuffix("579"),"579");
+  assert.equal(fns.cleanSuffix("579a"),"579A");
+  assert.equal(fns.cleanSuffix("5-7 9"),"579");
+  assert.equal(fns.cleanSuffix("12345"),"1234");          // 4 chiffres au plus
+  assert.equal(fns.cleanSuffix("A12"),"");                // doit commencer par un chiffre
+  assert.equal(normalizeNewFlight("ENT"+fns.cleanSuffix("579a"),"ENT"),"ENT579A");
+  assert.match(js,/alz-rename-prefix/);assert.match(js,/579 ou 579A/);
+});
