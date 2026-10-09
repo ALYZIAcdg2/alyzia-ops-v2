@@ -15,16 +15,18 @@ test("les statuts affichés sur les cartes sont rangés dans les bons filtres",(
   const cases={"À L’HEURE":"HEURE","À L'HEURE":"HEURE","PRÉVU":"HEURE","PROGRAMMÉ":"HEURE","EMBARQUEMENT":"EMBARQ","EMBARQUEMENT CLOS":"EMBARQ","RETARDÉ":"RETARD","PARTI":"PARTI","EN VOL":"ENVOL","ATTERRI":"ATTERRI","ATTERI":"ATTERRI","ARRIVÉE":"ARRIVE","ARRIVÉ":"ARRIVE","ANNULÉ":"ANNULE","DÉROUTÉ":"AUTRE","":"AUTRE"};
   for(const [t,k] of Object.entries(cases))assert.equal(keyOf(t),k,t);
 });
-test("bandeau de statuts : à côté de la recherche, défilant, suit le terminal et la recherche",()=>{
-  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex/);  // même ligne que la recherche
-  assert.match(STATUS_FILTER_UI,/overflow-x:auto/);              // bandeau défilant
-  assert.match(js,/function visibleWithoutUs/);             // comptage = sélection affichée (terminal, recherche, favoris, horaires)
-  assert.match(js,/alz-sf-none/);                           // un statut sans vol disparaît du bandeau
-  assert.match(js,/\.home-flight-search'\)\)later\(\)/);    // recalcul à chaque frappe dans la recherche
-  assert.match(js,/terminal-filter-bar/);                   // et au changement de terminal
+test("statuts en liste défilante à côté de la recherche, qui garde sa largeur ; tous les statuts restent affichés",()=>{
+  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);            // même ligne
+  assert.match(STATUS_FILTER_UI,/flex:0 0 clamp\(190px,50%,360px\)!important/);               // recherche : au moins 190 px
+  assert.match(STATUS_FILTER_UI,/overflow-x:auto/);                                           // liste défilante
+  assert.ok(!/flex-direction:column/.test(STATUS_FILTER_UI));
+  assert.ok(!/alz-sf-none/.test(STATUS_FILTER_UI));                                           // plus de statut qui disparaît
+  assert.match(STATUS_FILTER_UI,/\.alz-sf-chip\.zero:not\(\.active\)\{opacity:\.5\}/);        // grisé quand il n'y a aucun vol
+  assert.match(js,/function visibleWithoutUs/);                                               // nombres selon terminal / recherche / horaires
+  assert.match(js,/\.home-flight-search'\)\)later\(\)/);assert.match(js,/terminal-filter-bar/);
 });
-test("bandeau de statuts : la recherche est réduite et le bandeau reste sur la même ligne, mobile compris",()=>{
-  assert.match(STATUS_FILTER_UI,/flex:0 1 clamp\(130px,34%,360px\)!important/);   // recherche réduite
-  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);
-  assert.ok(!/flex-direction:column/.test(STATUS_FILTER_UI));                      // plus d'empilement : il écrasait le bandeau (hauteur 0)
+test("sélection simple : un statut à la fois, re-toucher ou « TOUS » remet tout",()=>{
+  assert.match(js,/selected=\(k==='\*'\|\|selected===k\)\?'':k/);
+  assert.match(js,/role','tablist'/);
+  assert.match(js,/dispatchEvent\(new Event\('resize'\)\)/);                                 // la croix de la recherche se repositionne
 });
