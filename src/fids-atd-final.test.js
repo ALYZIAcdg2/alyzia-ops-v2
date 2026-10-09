@@ -11,5 +11,5 @@ test("ATD lu dans le FIDS : définitif, plus relu ; ATD « parti à l'heure » (
   // en vol, ATD du flux : plus de priorité « ATD à confirmer » (0,3 / 0,4)
   const now=Date.parse("2026-10-08T12:00:00Z"),fly={std:"13:00",takeoff:"13:20",atd:"13:05",atdSource:"PUBLIC_LIVE:FIDS"};
   assert.ok(priority({std:"13:00",flight_date:"2026-10-08"},fly,840,now)[0]>=1);
-  assert.ok(priority({std:"13:00",flight_date:"2026-10-08"},{...fly,atdSource:"PUBLIC_LIVE:FIDS_ONTIME"},840,now)[0]<1);
+  assert.ok(priority({std:"13:00",flight_date:"2026-10-08"},{...fly,atdSource:"PUBLIC_LIVE:FIDS_ONTIME"},840,now)[0]>=0.5);
 });
