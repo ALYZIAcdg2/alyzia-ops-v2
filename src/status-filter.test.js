@@ -23,3 +23,8 @@ test("bandeau de statuts : à côté de la recherche, défilant, suit le termina
   assert.match(js,/\.home-flight-search'\)\)later\(\)/);    // recalcul à chaque frappe dans la recherche
   assert.match(js,/terminal-filter-bar/);                   // et au changement de terminal
 });
+test("bandeau de statuts : la recherche est réduite et le bandeau reste sur la même ligne, mobile compris",()=>{
+  assert.match(STATUS_FILTER_UI,/flex:0 1 clamp\(130px,34%,360px\)!important/);   // recherche réduite
+  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);
+  assert.ok(!/flex-direction:column/.test(STATUS_FILTER_UI));                      // plus d'empilement : il écrasait le bandeau (hauteur 0)
+});
