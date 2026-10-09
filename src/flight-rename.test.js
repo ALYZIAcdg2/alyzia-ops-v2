@@ -9,7 +9,10 @@ test("numéro valide : même compagnie, 1 à 4 chiffres",()=>{
   assert.equal(normalizeNewFlight("AF12A","AF"),"AF12A");
   assert.equal(normalizeNewFlight("AF","AF"),"");
   assert.equal(normalizeNewFlight("TU655","AF"),"");           // autre compagnie
-  assert.equal(normalizeNewFlight("AF12345","AF"),"");
+  assert.equal(normalizeNewFlight("AF12345","AF"),"AF12345");      // 5 caractères au plus
+  assert.equal(normalizeNewFlight("AF123456","AF"),"");
+  assert.equal(normalizeNewFlight("ent9zw","ENT"),"ENT9ZW");       // chiffre + lettres
+  assert.equal(normalizeNewFlight("ENTABC","ENT"),"");              // au moins un chiffre
   assert.equal(normalizeNewFlight("AF1 2","AF"),"AF12");
 });
 test("l'historique garde l'horodatage, l'ancien numéro ; les identifiants de lecture de l'ancien numéro sont retirés",()=>{
@@ -55,7 +58,7 @@ test("fiche : script d'interface valide, branché sur INFOS VOL et injecté dans
   assert.match(w,/FLIGHT_RENAME_UI/);assert.match(w,/\/api\/flights\/rename/);
 });
 
-test("fiche : seul le numéro est modifiable (chiffres, ou chiffres + une lettre), le code compagnie reste fixe",()=>{
+test("fiche : seul le numéro est modifiable (lettres et chiffres, au moins un chiffre : 579, 579A, 9ZW), le code compagnie reste fixe",()=>{
   const js=/<script[^>]*>([\s\S]*)<\/script>/.exec(FLIGHT_RENAME_UI)[1];
   const grab=n=>new RegExp("function "+n+"\\([^)]*\\)\\{[^\\n]*\\}").exec(js)[0];
   const fns=new Function(grab("airlineOf")+grab("suffixOf")+grab("cleanSuffix")+";return {airlineOf,suffixOf,cleanSuffix}")();
@@ -65,8 +68,9 @@ test("fiche : seul le numéro est modifiable (chiffres, ou chiffres + une lettre
   assert.equal(fns.cleanSuffix("579"),"579");
   assert.equal(fns.cleanSuffix("579a"),"579A");
   assert.equal(fns.cleanSuffix("5-7 9"),"579");
-  assert.equal(fns.cleanSuffix("12345"),"1234");          // 4 chiffres au plus
-  assert.equal(fns.cleanSuffix("A12"),"");                // doit commencer par un chiffre
-  assert.equal(normalizeNewFlight("ENT"+fns.cleanSuffix("579a"),"ENT"),"ENT579A");
-  assert.match(js,/alz-rename-prefix/);assert.match(js,/579 ou 579A/);
+  assert.equal(fns.cleanSuffix("9zw"),"9ZW");              // chiffre + lettres
+  assert.equal(fns.cleanSuffix("123456"),"12345");         // 5 caractères au plus
+  assert.equal(fns.cleanSuffix("A12"),"A12");
+  assert.equal(normalizeNewFlight("ENT"+fns.cleanSuffix("9zw"),"ENT"),"ENT9ZW");
+  assert.match(js,/alz-rename-prefix/);assert.match(js,/9ZW/);
 });

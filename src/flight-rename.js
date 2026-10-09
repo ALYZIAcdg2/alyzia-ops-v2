@@ -3,12 +3,12 @@
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 export const identityOf=(date,airline,flight)=>[clean(date),upper(airline),upper(flight)].join("|");
-// Numéro valide : désignateur de la même compagnie suivi de 1 à 4 chiffres (suffixe lettre toléré), sans espace.
+// Numéro valide : code de la même compagnie suivi de 1 à 5 caractères (lettres ou chiffres, au moins un chiffre), sans espace : 579, 579A, 9ZW.
 export function normalizeNewFlight(raw,airline){
   const v=upper(raw).replace(/\s+/g,"");
   const a=upper(airline);
   if(!v||!a||!v.startsWith(a))return "";
-  return /^\d{1,4}[A-Z]?$/.test(v.slice(a.length))?v:"";
+  return /^(?=.*\d)[A-Z0-9]{1,5}$/.test(v.slice(a.length))?v:"";
 }
 // Identifiants de lecture propres à l'ancien numéro : ils ne valent plus pour le nouveau.
 const LOOKUP_KEYS=["fr24OccurrenceId","fr24_occurrence_id","flightStatsId","flightStatsIdDate","flightStatsRefusedAt","flightAwareHistoryUrl","flightawareHistoryUrl","publicLiveBackfill"];
@@ -29,7 +29,7 @@ export async function renameFlight(env,{identity="",newFlight="",by="MANUAL",dry
   const row=await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,std,data_json FROM flights WHERE identity=? LIMIT 1`).bind(id).first();
   if(!row)return {ok:false,error:"VOL_INTROUVABLE",identity:id};
   const next=normalizeNewFlight(newFlight,row.airline);
-  if(!next)return {ok:false,error:"NUMERO_INVALIDE",detail:`Le numéro doit commencer par ${upper(row.airline)} suivi de 1 à 4 chiffres`};
+  if(!next)return {ok:false,error:"NUMERO_INVALIDE",detail:`Le numéro doit commencer par ${upper(row.airline)} suivi de 1 à 5 lettres ou chiffres, dont au moins un chiffre`};
   const oldFlight=upper(row.flight_number).replace(/\s+/g,"");
   if(next===oldFlight)return {ok:false,error:"NUMERO_IDENTIQUE"};
   const newIdentity=identityOf(row.flight_date,row.airline,next);
