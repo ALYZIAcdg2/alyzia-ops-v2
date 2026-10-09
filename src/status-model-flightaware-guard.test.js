@@ -19,10 +19,11 @@ test("SQ335 CDG->SIN : ETA 05:51 le lendemain -> PARTI",()=>{
   const x=mk({destination:"SIN",std:"10:55",atd:"10:57",eta:"05:51"});
   assert.equal(derive(x,date,at(13,12)).status,"PARTI");
 });
-test("vraie arrivée : ETA + 14 min -> PARTI, ETA + 15 min -> ARRIVÉ (règle V1)",()=>{
+test("ETA dépassée sans ATA : le vol reste PARTI (plus d'ARRIVÉ par ETA + 15 min) ; il faut une ATA",()=>{
   const x=mk({destination:"ABJ",std:"09:00",atd:"09:32",eta:"13:44"});
   assert.equal(derive(x,date,at(13,58)).status,"PARTI");
-  assert.equal(derive(x,date,at(13,59)).status,"ARRIVÉ");
+  assert.equal(derive(x,date,at(13,59)).status,"PARTI");
+  assert.equal(derive(x,date,at(16,0)).status,"PARTI");
 });
 test("un ATA réel donne ARRIVÉ quel que soit l'horaire",()=>{
   const x=mk({destination:"ABJ",std:"09:00",atd:"09:32",eta:"13:44",ata:"13:40"});

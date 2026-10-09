@@ -55,3 +55,10 @@ test("les vols d'hier de journée ne prennent pas les places des vols du jour",a
   await sweepFidsFlightPages(env,{dryRun:true,nowMs:Date.parse("2026-10-09T10:00:00Z"),fetchImpl:async u=>{seen.push(u);return {ok:false,status:410}}});
   assert.equal(seen.length,2);assert.match(seen[0],/NEW1/);assert.match(seen[1],/OLD2/);
 });
+
+test("ATA de la page sans atterrissage connu : plausible selon le temps depuis le décollage (heures converties en UTC)",()=>{
+  const now=Date.parse("2026-10-09T12:00:00Z");
+  const x={origin:"CDG",destination:"IST",takeoff:"07:40"};
+  assert.equal(pageAta({ata:"11:51"},x,now),"11:51");   // 3 h 11 de vol
+  assert.equal(pageAta({ata:"07:50"},x,now),"");        // arrivée avant même le décollage + durée : refusée
+});

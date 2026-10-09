@@ -13,7 +13,7 @@ test("vol du 08/10 décollé le 09/10 à 02:58 : EN VOL, pas ARRIVÉ (TU2655)",(
 test("vol sans passage de minuit : inchangé, ARRIVÉ 15 min après l'heure d'arrivée",()=>{
   const x={std:"14:00",sta:"20:00",origin:"CDG",destination:"AMM",dest:"AMM",takeoff:"14:15"};
   assert.equal(derive(x,"2026-10-07",Date.UTC(2026,9,7,13,0)).status,"EN VOL");
-  assert.equal(derive(x,"2026-10-07",Date.UTC(2026,9,7,17,30)).status,"ARRIVÉ");
+  assert.equal(derive(x,"2026-10-07",Date.UTC(2026,9,7,17,30)).status,"EN VOL");   // ETA dépassée sans ATA : plus d'ARRIVÉ automatique
 });
 test("statut calculé dont la preuve vient d'un STA saisi à la main : n'est pas une saisie manuelle de statut (TU2655)",async()=>{
   const {runStatusModelTest}=await import("./status-model-test.js");

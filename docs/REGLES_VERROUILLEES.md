@@ -1,0 +1,26 @@
+# Règles verrouillées (statuts, horaires, lectures)
+
+Ces règles ont été décidées avec l'exploitant. **Aucune nouvelle fonction ne doit les modifier sans changer explicitement `src/rules-lock.test.js`** : ce test casse si une règle change. Modifier une règle = modifier ce fichier ET ce test, dans la même PR, avec l'accord de l'exploitant.
+
+## Horaires
+1. STD et STA sont théoriques : aucune source ne les modifie. Une STA vide peut être renseignée une seule fois par FR24 ; une STA présente ou saisie à la main n'est jamais changée.
+2. Aucun horaire calculé, sauf deux exceptions acceptées : ATD « parti à l'heure » du FIDS (`FIDS_ONTIME`) et ATD estimée du premier mouvement FR24 (`FR24MOVE`, seulement après le décollage). Toute vraie source les remplace.
+3. ATA calculée = atterrissage + 10 min, seulement si l'atterrissage est connu et date de 15 min ou plus (ENT / E4 : tout de suite). Une vraie ATA la remplace.
+4. Une saisie manuelle n'est jamais écrasée.
+5. Source de l'ETD de CDG : le tableau FR24 « TABLEAU DE BORD CDG ». Il n'est pas écrasé par le FIDS.
+6. Priorité de l'ATA : FIDS, puis FlightStats, puis FlightAware. FlightAware est coupé (réglage `fa-policy.js`).
+
+## Statuts
+7. ARRIVÉ = une ATA existe (réelle ou calculée). **Jamais** d'ARRIVÉ par « ETA dépassée ».
+8. ATTERRI = atterrissage connu sans ATA. EN VOL = décollage connu. PARTI = ATD connue sans décollage.
+9. RETARDÉ : vol non parti dont l'ETD dépasse la STD de plus de 15 min, ou, sans ETD, dont l'heure atteint STD + 15 min.
+10. Pas de « EMBARQUEMENT CLOS » calculé : seul Paris Aéroport / Gatenavo le donne.
+
+## Lectures
+11. Un vol parti dont l'ETA est dépassée de 15 min ou plus, sans atterrissage ni ATA, est lu EN PRIORITÉ (rang 0,1), avant les vols plus lointains, toutes les 6 min (puis 15 min après 2 h, 1 h après 6 h).
+12. La page FIDS du vol (ATA / ATD réels) est lue pour tout vol décollé ou posé sans ATA réelle, ces vols d'abord.
+13. Un vol COMPLET (ATA réelle + ATD) n'est plus lu du tout.
+14. Un vol qui ne répond pas (TIMEOUT 25 s) passe au bout de la file ; le passage a une échéance de 40 s pour les lectures par vol.
+
+## Passage automatique (cron)
+15. Étapes essentielles, jamais sautées : Gatenavo, flux FIDS en bloc, lectures par vol, tableau FR24, statuts. Les autres sont facultatives (sautées passé 60 s, durée maximale chacune). Les pages FIDS par vol sont en fin de passage.

@@ -29,7 +29,6 @@ function arrivalUtc(x,date){
    if(actual&&(Number.isFinite(dayField)&&clean(x.takeoffDay)!==""?dayField>0:std!=null&&at!=null&&std-at>720))a+=86400000;}
   while(b<a)b+=86400000;return b;
 }
-function etaPassedBy15(x,date,nowMs){const a=arrivalUtc(x,date);return a!=null&&nowMs>=a+15*60000}
 function etdDelayed(x){const s=mins(x.std),e=mins(x.etd);if(s==null||e==null)return false;let d=e-s;if(d<-720)d+=1440;if(d>720)d-=1440;return d>=5}
 // cancelledSource: written by the live flow when a cancellation is confirmed (FlightStats banner / two sources); without it this model overwrote ANNULÉ with À L'HEURE (AI142).
 function cancelled(x){return Boolean(clean(x?.cancelledSource))||(/^ANNUL/.test(upper(x?.status))&&/PUBLIC_LIVE|:CANCELLED:/.test(upper(x?.statusSource)))||/CANCEL|ANNUL/.test(rawSignals(x))||parisPhase(x)==="ANNULÉ"}
@@ -44,8 +43,7 @@ export function derive(x,date,nowMs=Date.now()){
 
   const atd=fact(x,"atd",["actualDeparture","actual_departure","gateOut","gate_out"]);
   const landing=fact(x,"landing",["landingTime","landing_time"]),takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]);
-  // arrivalUtc conservée : sans elle le vol perdait sa priorité de relecture « arrivée proche / dépassée » au moment même où son atterrissage manquait (AH1231, AT703).
-  if((atd.value||takeoff.value||landing.value)&&etaPassedBy15(x,date,nowMs))return {status:"ARRIVÉ",reason:"ETA_PASSED_15",evidence:{value:x.eta||x.sta||"",source:sourceOf(x,x.eta?"eta":"sta")||"V2_PUBLIC"},arrivalUtc:arrivalUtc(x,date)};
+  // Plus de statut ARRIVÉ par « ETA dépassée de 15 min » : ARRIVÉ seulement avec une ATA (réelle ou calculée). Un vol dont l'ETA est dépassée reste EN VOL et est relu en priorité pour récupérer LDG / ATA.
 
   // Étapes : ATD = PARTI (sorti du poste), TO = EN VOL, LDG = ATTERRI, ATA = ARRIVÉ.
   if(landing.value)return {status:"ATTERRI",reason:"LANDING",evidence:landing,arrivalUtc:arrivalUtc(x,date)};
@@ -65,7 +63,7 @@ export function derive(x,date,nowMs=Date.now()){
 
 export const STATUS_MODEL_TEST_RULES={
   mode:"V1_LOGIC_V2_PUBLIC_SOURCES",
-  ARRIVE:{trigger:"ATA, ou ETA/STA dépassée de 15 min après ATD",sources:["V2 public sources"]},
+  ARRIVE:{trigger:"ATA (réelle ou calculée) seulement",sources:["V2 public sources"]},
   PARTI:{trigger:"ATD (sorti du poste, pas encore décollé)",sources:["FIDS","FlightStats","FlightAware","FR24"]},
   ATTERRI:{trigger:"LDG renseigné, ATA absent",sources:["FIDS","FR24","fallbacks publics"]},
   EN_VOL:{trigger:"TO (décollage) renseigné",sources:["FlightStats","FlightAware","FR24","Paris Aéroport","autres fallbacks publics"]},
