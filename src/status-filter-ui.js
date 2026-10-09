@@ -99,14 +99,15 @@ function choose(k){selected=(k==='*'||selected===k)?'':k;setOpen(false);quick();
 // Comme HORAIRES : bascule à l'appui (pointerdown), donc insensible à un redessin de la liste pendant le clic ; le click qui suit est ignoré.
 document.addEventListener('pointerdown',function(e){
   if(e.button>0)return;var t=e.target&&e.target.closest?e.target:null;if(!t)return;
-  var btn=t.closest('#app .alyzia-status-filter-btn'),it=t.closest('#app .alyzia-status-choice');
-  if(btn){e.preventDefault();e.stopPropagation();lastToggle=Date.now();setOpen(!menuOpen);return}
-  if(it){e.preventDefault();e.stopPropagation();lastToggle=Date.now();choose(it.getAttribute('data-k'))}
+  // Seul le bouton bascule à l'appui. Un choix du menu se fait au click : fermer le menu à l'appui laissait le click tomber sur la carte de vol dessous (la fiche du vol s'ouvrait).
+  var btn=t.closest('#app .alyzia-status-filter-btn');
+  if(btn){e.preventDefault();e.stopPropagation();lastToggle=Date.now();setOpen(!menuOpen)}
 },true);
 document.addEventListener('click',function(e){
   var t=e.target&&e.target.closest?e.target:null;if(!t)return;
   var btn=t.closest('#app .alyzia-status-filter-btn'),it=t.closest('#app .alyzia-status-choice');
-  if(btn||it){e.preventDefault();e.stopPropagation();if(Date.now()-lastToggle>700){if(btn)setOpen(!menuOpen);else choose(it.getAttribute('data-k'))}return}
+  if(it){e.preventDefault();e.stopPropagation();choose(it.getAttribute('data-k'));return}
+  if(btn){e.preventDefault();e.stopPropagation();if(Date.now()-lastToggle>700)setOpen(!menuOpen);return}
   if(menuOpen&&!t.closest('.alyzia-status-filter-wrap'))setOpen(false);
   if(t.closest('#app .alyzia-home-clear'))selected='';   // la croix efface recherche et filtres, statut compris
   if(t.closest('#app .terminal-filter-bar,#app .home-pin,#app .alyzia-time-filter-wrap,#app .alyzia-home-clear,#app .day-nav-btn'))setTimeout(later,0);

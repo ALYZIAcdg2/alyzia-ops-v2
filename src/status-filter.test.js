@@ -19,7 +19,8 @@ test("même construction que HORAIRES : rangée de contrôles, menu, bascule à 
   assert.match(js,/function controlsHost\(\)/);assert.match(js,/alyzia-time-filter-wrap/);                 // même rangée, juste après HORAIRES
   assert.match(STATUS_FILTER_UI,/\.alyzia-status-filter-menu\{position:absolute;left:0;top:52px;z-index:200/); // menu comme celui des horaires (au-dessus des cartes)
   assert.ok(!/transform/.test(STATUS_FILTER_UI.replace(/<script[\s\S]*$/,"")));                              // aucun contexte d'empilement : le menu ne passe pas derrière les cartes
-  assert.match(js,/addEventListener\('pointerdown'/);assert.match(js,/Date\.now\(\)-lastToggle>700/);       // bascule à l'appui, click suivant ignoré
+  assert.match(js,/addEventListener\('pointerdown'/);assert.match(js,/Date\.now\(\)-lastToggle>700/);       // le bouton bascule à l'appui, click suivant ignoré
+  assert.match(js,/if\(it\)\{e\.preventDefault\(\);e\.stopPropagation\(\);choose\(/);                       // un choix du menu se fait au click, jamais à l'appui (sinon le click tombe sur la carte dessous)
   const order=[...js.matchAll(/\['(\w+)','([^']+)'\]/g)].map(m=>m[2]);
   assert.deepEqual(order.slice(0,7),["PARTI","À L’HEURE","RETARDÉ","EN VOL","EMBARQUEMENT + CLOS","ATTERRI","ARRIVÉE"]);
   assert.match(js,/<span>TOUS<\/span>/);assert.ok(!/STATUT/.test(js));                                      // « TOUS » en premier, plus de libellé STATUT
