@@ -33,6 +33,7 @@ import {readPauses} from "./pauses.js";
 import {restoreRegs} from "./reg-restore.js";
 import {restoreEtds} from "./etd-restore.js";
 import {renameFlight} from "./flight-rename.js";
+import {loadAirportZones} from "./airport-tz.js";
 import {setFr24Link} from "./flight-fr24-link.js";
 import {ADMIN_REORG_UI} from "./admin-reorg.js";
 import {API_NAMES_SCRUB_UI} from "./api-names-scrub.js";
@@ -170,6 +171,7 @@ function patchHtml(html){let s=stripStatusConflicts(html);if(s.includes('id="aly
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
+    if(url.pathname.startsWith("/api/"))await loadAirportZones(env);
     if(url.pathname==="/api/admin/etd-public-flow"){
       try{return json(await runEtd(env))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
@@ -345,6 +347,7 @@ export default {
     ctx.waitUntil((async()=>{
       // The cron runs every 2 minutes: a run still in progress (lock younger than 100 s) is not doubled.
       if(!(await acquireCronLock(env)))return;
+      await loadAirportZones(env);   // fuseaux de tous les aéroports (JMK…), sinon heure de Paris par défaut
       try{
         // Pauses FlightStats et cache du tableau FR24 : relus ici, réécrits à la fin (la mémoire du Worker peut être vide à chaque passage).
         await loadRuntimeState(env);
