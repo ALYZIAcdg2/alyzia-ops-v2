@@ -16,7 +16,7 @@ test("les statuts affichés sur les cartes sont rangés dans les bons filtres",(
   for(const [t,k] of Object.entries(cases))assert.equal(keyOf(t),k,t);
 });
 test("un seul bouton STATUT à côté de la recherche, qui ouvre la liste de tous les statuts",()=>{
-  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);            // même ligne
+  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{position:relative;display:flex;flex-wrap:nowrap/);assert.match(STATUS_FILTER_UI,/html body #app \.flight-home-row\.ops-flight-card\.alz-status-hidden\.alz-status-hidden\{display:none!important\}/);   // plus spécifique que l'affichage des cartes            // même ligne
   assert.match(STATUS_FILTER_UI,/\.alz-search-row \.home-flight-search\{flex:1 1 auto!important/);  // la recherche garde sa largeur
   assert.match(js,/class="alz-status-btn"/);assert.match(js,/aria-haspopup="listbox"/);assert.match(js,/className='alz-status-band'/);assert.match(STATUS_FILTER_UI,/\.alz-status-band\{position:absolute[^}]*overflow-y:auto/);   // liste déroulante
   assert.ok(!/sessionStorage/.test(js));   // par défaut tous les statuts : rien n'est gardé d'une ouverture de la page à l'autre
@@ -38,4 +38,8 @@ test("sélection simple : un statut à la fois, re-toucher ou « TOUS LES STATUT
 test("après un redessin de la liste, le bouton et le filtre sont remis dans le même cycle ; le bouton colle à la recherche",()=>{
   assert.match(js,/function quick\(\)/);assert.match(js,/function own\(/);assert.ok(!/getComputedStyle/.test(js.slice(js.indexOf('function quick'),js.indexOf('function own'))));assert.match(js,/setTimeout\(sync,300\)/);
   assert.match(STATUS_FILTER_UI,/\.alz-search-row\{[^}]*justify-content:flex-start/);
+});
+
+test("chaque statut de la liste porte la couleur de son badge sur les cartes",()=>{
+  for(const [k,bg] of [["HEURE","#e1f5e9"],["RETARD","#fff0d0"],["ENVOL","#dcecff"],["ARRIVE","#d7efec"],["ANNULE","#ffe1e5"],["PARTI","#e6f8f3"]])assert.match(STATUS_FILTER_UI,new RegExp('data-k="'+k+'"\\]>span[^{]*\\{background:'+bg));
 });
