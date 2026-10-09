@@ -213,6 +213,27 @@ async function fetchLiveEta(flight,id,candidates){
   return eta;
 }
 
+
+// Atterrissage lu dans l'historique du vol FR24 (« Landed 04:19 ») : la réponse « playback » ne le contient pas toujours juste après l'arrivée (TU2655, AH1543). Une seule lecture de la page d'historique, au plus toutes les 10 min par vol, seulement pour un vol décollé et pas atterri dont l'heure d'arrivée estimée est proche ou passée (ou inconnue, 45 min après le décollage).
+const HISTORY_LANDING_CACHE=new Map();
+async function fetchHistoryLanding(flight,candidates,nowMs=Date.now()){
+  const sem=candidates?.semantic||{};
+  if(!sem.takeoff||sem.landing||sem.landingClock)return null;
+  const eta=Date.parse(sem.eta||""),takeoffMs=Date.parse(sem.takeoff||"");
+  const due=Number.isFinite(eta)?nowMs>=eta-10*60000:(Number.isFinite(takeoffMs)&&nowMs-takeoffMs>=45*60000);
+  if(!due)return null;
+  const key=`${upper(flight?.designator)}|${clean(flight?.date)}`,hit=HISTORY_LANDING_CACHE.get(key);
+  if(hit&&nowMs-hit.at<10*60000)return hit.row;
+  let row=null;const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+  try{
+    const r=await fetch(`https://www.flightradar24.com/data/flights/${encodeURIComponent(upper(flight.designator).toLowerCase())}`,{redirect:"follow",signal:controller.signal,headers:{"accept":"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-PublicSourceTest/2.3; public-web-pages)"}});
+    if(r.ok)row=fr24HistoryRow(await r.text(),flight);
+  }catch{}finally{clearTimeout(timer)}
+  if(row&&!row.landing)row=null;
+  HISTORY_LANDING_CACHE.set(key,{at:nowMs,row});
+  return row;
+}
+
 async function fetchPlayback(flight,id){
   if(!id)return null;
   const url=`https://api.flightradar24.com/common/v1/flight-playback.json?flightId=${encodeURIComponent(id)}`;
@@ -351,6 +372,7 @@ async function fetchFr24PublicCore(flight,historyBodies){
     attempts.push({url:playback.url,finalUrl:playback.finalUrl,httpStatus:playback.httpStatus,status:playback.status,candidates:playback.candidates,error:playback.error});
     if(playback.status==="OK"){
       {const eta=await fetchLiveEta(flight,id,playback.candidates);if(eta){playback.candidates={...playback.candidates,semantic:{...playback.candidates.semantic,eta},times:[...(playback.candidates.times||[]),eta]}}}
+      {const row=await fetchHistoryLanding(flight,playback.candidates);if(row){playback.candidates={...playback.candidates,semantic:{...playback.candidates.semantic,landingClock:row.landing,atdClock:playback.candidates.semantic.atdClock||row.atd||""},statuses:playback.candidates.statuses?.length?playback.candidates.statuses:["LANDED"],historyRow:row}}}
       return {name:"FR24",url:playback.url,status:"OK",httpStatus:playback.httpStatus,finalUrl:playback.finalUrl,mentionsFlight:true,candidates:{...playback.candidates,method:"PUBLIC_PLAYBACK",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
     }
   }
