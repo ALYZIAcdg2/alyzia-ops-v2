@@ -1,5 +1,4 @@
 import test from "node:test";
-import {FA_ONLY_AIRLINES} from "./ops-public-live-flow-optimized.js";
 import assert from "node:assert/strict";
 import {runPublicLiveFlow} from "./ops-public-live-flow-optimized.js";
 
@@ -164,7 +163,6 @@ test("live flow: FlightAware JSON gives ENT777 its ATD only (not takeoff / landi
     if(url.endsWith("/live/flight/ENT777"))return new Response(`<a href="https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI">x</a>`,{headers:{"content-type":"text/html"}});
     if(url.includes(`/history/${day}/0310Z/LFPG/LATI`))return new Response(`<html><script>var d={${json}}</script></html>`,{headers:{"content-type":"text/html"}});
     return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
-  FA_ONLY_AIRLINES.push("EN"); // FlightAware est réservé aux vols JU : cette compagnie de test l'est le temps du test
   try{
     await runPublicLiveFlow(env,{limit:1,concurrency:1});
     assert.ok(update,"the flight was saved");
@@ -172,7 +170,7 @@ test("live flow: FlightAware JSON gives ENT777 its ATD only (not takeoff / landi
     assert.equal(update.takeoff,undefined);       // FlightAware ne sert qu'à l'ATD
     assert.equal(update.landing,undefined);
     assert.equal(update.flightAwareHistoryUrl,`https://www.flightaware.com/live/flight/ENT777/history/${day}/0310Z/LFPG/LATI`);
-  }finally{globalThis.fetch=real;FA_ONLY_AIRLINES.pop()}
+  }finally{globalThis.fetch=real}
 });
 
 test("runLiveForFlight: dry run shows what would be written for ENT777 without saving it; POST mode saves",async()=>{
@@ -250,5 +248,32 @@ test("live flow: vol JU arrivé sans ATD (JU241) : FlightAware donne l'ATD (heur
     assert.ok(asked.some(u=>/flightaware\.com/.test(u)),"FlightAware a été lu pour le vol JU");
     assert.ok(update,"le vol est enregistré");
     assert.equal(update.atd,"07:30");
+  }finally{globalThis.fetch=real}
+});
+
+test("live flow: vol parti dont l'arrivée manque longtemps après l'heure prévue (AH1543) : FlightAware donne LDG et ATA, l'ATD du FIDS n'est pas touchée",async()=>{
+  const flight={airline:"AH",flight:"AH1543",std:"07:00",sta:"09:25",origin:"CDG",destination:"ALG",dest:"ALG",duration:140,atd:"07:05",atdSource:"PUBLIC_LIVE:FIDS",takeoff:"07:49",reg:"LZ-FSG",aircraftActual:"320",aircraft:"320"};
+  let update=null;
+  const env={OPS_DB:{prepare(sql){return {bind(json){if(sql.startsWith("UPDATE flights"))update=JSON.parse(json);return this},
+    async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"AH1543",airline:"AH",std:"07:00",data_json:JSON.stringify(flight)}]}},
+    async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
+    async run(){return {}}}},batch:async()=>[]}};
+  const [y,m,d]=today.split("-"),day=`${y}${m}${d}`;
+  const at=(h,mi)=>Date.UTC(+y,+m-1,+d,h,mi)/1000;
+  const offset=Number(new Date(Date.UTC(+y,+m-1,+d,12)).toLocaleString("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",hour12:false}))-12;
+  if(offset!==2)return; // fixtures are written for summer time
+  const json=`"gateDepartureTimes":{"scheduled":${at(5,0)},"estimated":null,"actual":${at(5,35)}},"takeoffTimes":{"scheduled":${at(5,10)},"estimated":${at(5,49)},"actual":${at(5,49)}},"landingTimes":{"scheduled":${at(7,15)},"estimated":${at(7,50)},"actual":${at(7,50)}},"gateArrivalTimes":{"scheduled":${at(7,25)},"estimated":null,"actual":${at(8,0)}}`;
+  const real=globalThis.fetch;
+  globalThis.fetch=async(url)=>{url=String(url);
+    if(/\/live\/flight\/(DAH|AH)1543$/.test(url))return new Response(`<a href="https://www.flightaware.com/live/flight/DAH1543/history/${day}/0500Z/LFPG/DAAG">x</a>`,{headers:{"content-type":"text/html"}});
+    if(url.includes(`/history/${day}/0500Z/LFPG/DAAG`))return new Response(`<html><script>var d={${json}}</script></html>`,{headers:{"content-type":"text/html"}});
+    return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
+  try{
+    await runPublicLiveFlow(env,{limit:1,concurrency:1});
+    assert.ok(update,"le vol est enregistré");
+    assert.equal(update.landing,"08:50");   // heure locale d'Alger (UTC+1)
+    assert.equal(update.ata,"09:00");
+    assert.equal(update.atd,"07:05");                       // l'ATD du FIDS reste
+    assert.equal(update.atdSource,"PUBLIC_LIVE:FIDS");
   }finally{globalThis.fetch=real}
 });
