@@ -1,9 +1,9 @@
 // Liste des vols (accueil) : un seul bouton « STATUT » à côté de la barre de recherche. Il déroule sous la recherche un bandeau défilant (à faire glisser) de tous les statuts avec leur nombre de vols (grisé quand il n'y en a pas) ; on en choisit un.
 // La recherche garde sa largeur. Le nombre de chaque statut suit le terminal, la recherche, les favoris et la tranche horaire ; la liste affichée cumule le statut choisi avec ces filtres.
 export const STATUS_FILTER_UI = String.raw`<style id="alyzia-status-filter-css">.alz-status-hidden{display:none!important}
-.alz-search-row{display:flex;flex-wrap:nowrap;align-items:center;gap:10px;margin:0 0 12px}
+.alz-search-row{display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-start;gap:10px;margin:0 0 12px}
 .alz-search-row .home-flight-search{flex:1 1 auto!important;min-width:0!important;width:auto!important;margin:0!important}
-.alz-status-wrap{flex:0 0 auto;position:relative}
+.alz-status-wrap{flex:0 0 auto;position:relative;margin-left:0}
 .alz-status-btn{display:inline-flex;align-items:center;gap:7px;height:46px;padding:0 15px;border:2px solid #d8e3ee;border-radius:999px;background:#fff;color:#28425f;font:900 12px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;cursor:pointer}
 .alz-status-btn.active{border-color:#0b70d1;background:#0b70d1;color:#fff}
 .alz-status-btn .alz-caret{font-size:10px;opacity:.75}
@@ -68,7 +68,10 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&menuOpen)se
 var timer=null;function later(){clearTimeout(timer);timer=setTimeout(sync,60)}
 document.addEventListener('input',function(e){if(e.target&&e.target.closest&&e.target.closest('.home-flight-search'))later()},true);
 document.addEventListener('click',function(e){if(e.target&&e.target.closest&&e.target.closest('#app .terminal-filter-bar,#app .home-pin,#app .alyzia-time-filter-wrap,#app .alyzia-home-clear,#app .day-nav-btn'))setTimeout(later,0)},true);
-try{new MutationObserver(later).observe(document.getElementById('app')||document.body,{childList:true,subtree:true})}catch(e){}
+// Quand l'application redessine la liste (rafraîchissement), le bouton et le filtre sont remis AVANT l'affichage suivant (dans le même cycle) : plus d'apparition / disparition.
+var busy=false,obs=null;
+function now(){if(busy)return;busy=true;try{sync()}catch(e){}finally{busy=false;try{obs&&obs.takeRecords()}catch(e){}}}
+try{obs=new MutationObserver(function(){now();later()});obs.observe(document.getElementById('app')||document.body,{childList:true,subtree:true})}catch(e){}
 [0,300,900].forEach(function(ms){setTimeout(sync,ms)});
 window.__alyziaStatusFilterKey=keyOf;
 })();</script>`;
