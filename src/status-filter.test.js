@@ -19,7 +19,10 @@ test("un seul bouton STATUT à côté de la recherche, qui ouvre la liste de tou
   assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);            // même ligne
   assert.match(STATUS_FILTER_UI,/\.alz-search-row \.home-flight-search\{flex:1 1 auto!important/);  // la recherche garde sa largeur
   assert.match(js,/class="alz-status-btn"/);assert.match(js,/aria-haspopup="listbox"/);assert.match(js,/className='alz-status-band'/);assert.match(STATUS_FILTER_UI,/\.alz-status-band\{position:absolute[^}]*overflow-y:auto/);   // liste déroulante
-  assert.match(js,/sessionStorage\.setItem\(OPEN/);   // reste ouvert après un rafraîchissement de la page
+  assert.ok(!/sessionStorage/.test(js));   // par défaut tous les statuts : rien n'est gardé d'une ouverture de la page à l'autre
+  assert.match(js,/addEventListener\('pointerdown'/);   // le choix se fait à l'appui : un redessin entre appui et relâchement ne le perd pas
+  assert.match(js,/__alyziaApplyHomeFilters/);   // s'accroche au passage synchrone des filtres de l'application
+  assert.match(js,/search\.style\.setProperty\('flex','0 1 650px','important'\)/);   // bouton collé à la recherche
   assert.match(js,/TOUS LES STATUTS/);
   for(const l of ["HEURE","EMBARQUEMENT","RETARDÉ","PARTI","EN VOL","ATTERRI","ARRIVÉ","ANNULÉ"])assert.ok(js.includes(l),l);
   assert.match(STATUS_FILTER_UI,/\.alz-sf-item\.zero:not\(\.active\)\{display:none\}/);       // seuls les statuts présents sont listés
