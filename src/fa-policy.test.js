@@ -27,6 +27,7 @@ test("FlightAware : ATD uniquement, jamais ETD / STA / porte, dans toutes les le
 });
 
 import {arrivalOverdue} from "./fa-policy.js";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 test("arrivée manquante : vol parti, durée prévue + 30 min écoulée, ni LDG ni ATA", () => {
   const x={takeoff:"12:00",duration:140};                       // décollage 12:00 Paris
   assert.equal(arrivalOverdue(x,Date.parse("2026-10-08T12:30:00Z")),false);   // 14:30 Paris : en vol

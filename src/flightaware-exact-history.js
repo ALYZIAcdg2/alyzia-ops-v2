@@ -2,7 +2,7 @@ import {guardDepartureClock} from "./local-time-guard.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
 import {flightAwareJsonSemantic,cleanFlightAwareUrl} from "./flightaware-page-times.js";
 import {farFromDeparture} from "./ops-public-live-flow-optimized.js";
-import {flightAwareAllowed} from "./fa-policy.js";
+import {flightAwareAllowed,flightAwareEnabled} from "./fa-policy.js";
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?`${String(Number(m[1])).padStart(2,"0")}:${m[2]}`:""};
@@ -52,6 +52,7 @@ export function flightAwareWanted(flightDate,std,x,nowMs=Date.now()){
 }
 
 export async function recoverFlightAwareExactHistory(env){
+  if(!flightAwareEnabled())return {ok:true,disabled:true,checked:0,updated:0};
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const date=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,std,data_json FROM flights WHERE flight_date=? AND airline<>'SYS'`).bind(date).all();

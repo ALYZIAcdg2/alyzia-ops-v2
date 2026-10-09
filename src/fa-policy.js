@@ -16,7 +16,11 @@ export function atdOverdue(x,nowMs=Date.now(),flightDate=""){
   return false;
 }
 // Vol à lire sur FlightAware : sans ATD, et le FIDS a eu le temps de la donner. Le 1er argument (numéro de vol) n'est plus utilisé : plus de liste de compagnies.
-export function flightAwareAllowed(flight,x,nowMs=Date.now(),flightDate=""){return atdOverdue(x,nowMs,flightDate)}
+// Interrupteur général : FlightAware ne lit plus rien tant que ce n'est pas rétabli (un vol lu n'est pas optimal ; on y reviendra). Les tests le rallument avec setFlightAwareEnabled(true).
+let enabled=false;
+export const flightAwareEnabled=()=>enabled;
+export const setFlightAwareEnabled=v=>{enabled=Boolean(v)};
+export function flightAwareAllowed(flight,x,nowMs=Date.now(),flightDate=""){return enabled&&atdOverdue(x,nowMs,flightDate)}
 
 // Arrivée manquante : vol parti dont ni l'atterrissage ni l'ATA ne sont connus alors que la durée prévue du vol + 30 min est écoulée depuis le décollage
 // (le FIDS n'a pas donné l'ATA, FR24 non plus). Vol d'un jour passé avec décollage connu : toujours.

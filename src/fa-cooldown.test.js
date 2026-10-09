@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {fetchFlightAwareLive,flightAwareExport,flightAwareImport,flightAwareReset} from "./ops-public-live-flow-optimized.js";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 const f={airline:"TK",number:"1830",designator:"TK1830",date:"2026-10-07",std:"07:20",origin:"CDG",destination:"IST"};
 const url=n=>`https://www.flightaware.com/live/flight/THY${n}/history/20261007/0530Z/LFPG/LTFM`;
 test("après un 429, les requêtes déjà en file ne partent plus",async()=>{

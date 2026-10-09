@@ -210,6 +210,7 @@ test("FlightStats JSON API: landed flight gives landing and ATA, a cancelled one
 });
 
 import {flightStatsNoteResult,flightStatsPaused,flightStatsReset} from "./ops-public-live-flow-optimized.js";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 test("FlightStats is paused for 90 s after two refusals in a row, and a success resets the count",()=>{
   flightStatsReset();const t=Date.UTC(2026,9,5,10,0);
   flightStatsNoteResult(403,t);assert.equal(flightStatsPaused(t+1),false);

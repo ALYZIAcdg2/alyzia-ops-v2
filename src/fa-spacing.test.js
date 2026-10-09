@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {fetchFlightAwareLive} from "./ops-public-live-flow-optimized.js";
+import {setFlightAwareEnabled} from "./fa-policy.js";setFlightAwareEnabled(true);   // FlightAware est arrêté par défaut ; ces tests vérifient sa logique quand il est rallumé
 test("FlightAware : requêtes les unes après les autres, espacées (pas de rafale)",async()=>{
   const times=[],real=globalThis.fetch;
   globalThis.fetch=async()=>{times.push(Date.now());return new Response("<html></html>",{status:200})};
