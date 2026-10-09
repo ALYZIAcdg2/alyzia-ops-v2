@@ -7,6 +7,7 @@ const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?m[1].padStar
 const mins=v=>{const m=hhmm(v).match(/(\d+):(\d+)/);return m?Number(m[1])*60+Number(m[2]):null};
 const manual=(x,f)=>upper(x?.[f+"Source"]).includes("MANUAL")||Boolean(x?.manual?.[f]||x?.manualOverrides?.[f]||x?.manual_fields?.[f]);
 const parisDate=ms=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(ms));
+const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";   // mêmes en-têtes que la lecture du flux FIDS général
 const tried=new Map();
 export function flightPageUrl({flight,origin="CDG",dest,date,std}){
   const s=hhmm(std);if(!flight||!dest||!date||!s)return "";
@@ -39,25 +40,26 @@ export function wantsPage(x,nowMs){
   if(!clean(x.landing)&&!clean(x.takeoff))return false;
   return (clean(x.landing)&&!manual(x,"ata")&&ataOpen(x)&&!/^PUBLIC_LIVE:FIDS$/.test(upper(x.ataSource)))||(clean(x.takeoff)&&!manual(x,"atd")&&atdOpen(x));
 }
-export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
+export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false,only=""}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const today=parisDate(nowMs),yesterday=parisDate(nowMs-86400000),at=new Date(nowMs).toISOString();
   const {results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,airline,flight_number,std,data_json FROM flights WHERE flight_date IN (?,?) AND airline<>'SYS'`).bind(today,yesterday).all();
   const cand=[];
   for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
     if(!wantsPage(x,nowMs))continue;
-    if(nowMs-(tried.get(r.identity)||0)<RETRY_MS)continue;
+    if(only&&!upper(x.flight||r.flight_number).includes(upper(only)))continue;
+    if(!dryRun&&nowMs-(tried.get(r.identity)||0)<RETRY_MS)continue;
     cand.push({r,x})}
   cand.sort((a,b)=>(tried.get(a.r.identity)||0)-(tried.get(b.r.identity)||0));
   const done=[],checked=[];
   for(const {r,x} of cand.slice(0,MAX_PER_RUN)){
-    tried.set(r.identity,nowMs);
+    if(!dryRun)tried.set(r.identity,nowMs);
     const flight=upper(x.flight)||upper(x.airline||r.airline)+clean(r.flight_number).replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
     const url=flightPageUrl({flight,dest:x.destination||x.dest,date:r.flight_date,std:x.std||r.std});
     if(!url)continue;
-    let p=null;
-    try{const res=await fetchImpl(url,{headers:{accept:"text/html"},signal:AbortSignal.timeout(6000)});if(res.ok)p=parseFlightPage(await res.text())}catch{}
-    checked.push({flight,ok:Boolean(p)});if(!p)continue;
+    let p=null,http=0,err="";
+    try{const res=await fetchImpl(url,{headers:{accept:"text/html,*/*","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow",signal:AbortSignal.timeout(6000)});http=res.status;if(res.ok)p=parseFlightPage(await res.text())}catch(e){err=String(e?.message||e)}
+    checked.push({flight,url,http,err,parsed:p});if(!p)continue;
     let changed=false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     const ata=pageAta(p,x);
     if(ata&&!manual(x,"ata")&&ataOpen(x)&&clean(x.ata)!==ata){log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"ata",from:clean(x.ata),to:ata});x.ata=ata;x.ataSource="PUBLIC_LIVE:FIDS";x.ataUpdatedAt=at;changed=true}

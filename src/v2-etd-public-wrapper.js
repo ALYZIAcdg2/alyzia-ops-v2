@@ -268,7 +268,7 @@ export default {
     }
     if(url.pathname==="/api/admin/fids-flight-page"&&request.method==="GET"){
       // Simulation sans écriture : vols posés / partis dont la page FIDS du vol donnerait un ATA ou un ATD réel.
-      try{return json({mode:"FIDS_FLIGHT_PAGE_NO_WRITE",...await sweepFidsFlightPages(env,{dryRun:true})})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+      try{return json({mode:"FIDS_FLIGHT_PAGE_NO_WRITE",...await sweepFidsFlightPages(env,{dryRun:true,only:url.searchParams.get("flight")||""})})}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/fids-pages"&&request.method==="GET"){
       // Lecture seule : pages par vol de FIDS (vol:destination:STD) comparées à la ligne du flux général.
