@@ -3,7 +3,7 @@
 export const FLIGHT_RENAME_UI = String.raw`<style id="alyzia-flight-rename-css">.alz-rename b{font-size:1.15em}.alz-rename-note{margin-top:4px;font-size:11px;font-weight:800;color:#8a6d3b}.alz-rename-btn{margin-top:8px;border:1px solid #c7d6e6;background:#f3f8fd;color:#1d4570;border-radius:10px;padding:6px 12px;font-weight:900;font-size:12px;cursor:pointer}.alz-rename-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}.alz-rename-prefix{font-weight:900;font-size:1.1em;color:#1d4570;background:#eef4fa;border:1px solid #c7d6e6;border-radius:10px;padding:8px 10px}.alz-rename-form input{flex:1 1 140px;min-width:0;border:1px solid #c7d6e6;border-radius:10px;padding:8px 10px;font:inherit;font-weight:900;text-transform:uppercase}.alz-rename-msg{flex-basis:100%;font-size:12px;font-weight:800}.alz-rename-msg.err{color:#b3261e}.alz-rename-msg.ok{color:#12a150}</style>
 <script id="alyzia-flight-rename-js">(function(){
 if(window.__alyziaFlightRename)return;window.__alyziaFlightRename=true;
-var ERR={NUMERO_INVALIDE:'Numéro invalide : il doit commencer par le code de la compagnie suivi de 1 à 4 chiffres.',NUMERO_DEJA_UTILISE:'Ce numéro existe déjà pour ce jour.',NUMERO_IDENTIQUE:'Le numéro est inchangé.',VOL_INTROUVABLE:'Vol introuvable sur le serveur.'};
+var ERR={NUMERO_INVALIDE:'Numéro invalide : il doit commencer par le code de la compagnie suivi de 1 à 5 lettres ou chiffres, dont au moins un chiffre.',NUMERO_DEJA_UTILISE:'Ce numéro existe déjà pour ce jour.',NUMERO_IDENTIQUE:'Le numéro est inchangé.',VOL_INTROUVABLE:'Vol introuvable sur le serveur.'};
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
 function fmt(at){try{return new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}).format(new Date(at)).replace(',','')}catch(e){return ''}}
 function lastChange(x){var l=Array.isArray(x&&x.flightInfoLog)?x.flightInfoLog:[];for(var i=0;i<l.length;i++){if(l[i]&&l[i].field==='flight')return l[i]}return null}
@@ -21,15 +21,15 @@ async function save(x,value,msg,btn){
 }
 function airlineOf(x){var a=String(x.airline||'').trim().toUpperCase(),fl=String(x.flight||'').trim().toUpperCase();return a&&fl.indexOf(a)===0?a:fl.replace(/\d.*$/,'')}
 function suffixOf(x){var a=airlineOf(x);return String(x.flight||'').trim().toUpperCase().slice(a.length)}
-function cleanSuffix(v){var c=String(v||'').toUpperCase().replace(/[^0-9A-Z]/g,''),d=c.match(/^[0-9]{0,4}/)[0],r=c.slice(d.length);return d+(d&&/^[A-Z]/.test(r)?r.charAt(0):'')}
+function cleanSuffix(v){return String(v||'').toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,5)}
 function openForm(x,item){
   var holder=item.querySelector('.alz-rename-slot');if(!holder||holder.firstChild)return;
   var air=airlineOf(x);
-  holder.innerHTML='<div class="alz-rename-form"><span class="alz-rename-prefix">'+esc(air)+'</span><input type="text" inputmode="text" maxlength="5" autocomplete="off" value="'+esc(suffixOf(x))+'" aria-label="Numéro du vol (chiffres, ou chiffres et une lettre)" placeholder="579 ou 579A"><button type="button" class="alz-rename-btn" data-act="ok">ENREGISTRER</button><button type="button" class="alz-rename-btn" data-act="no">ANNULER</button><div class="alz-rename-msg">Chiffres, ou chiffres + une lettre (ex. 579 ou 579A). Le code compagnie ne change pas.</div></div>';
+  holder.innerHTML='<div class="alz-rename-form"><span class="alz-rename-prefix">'+esc(air)+'</span><input type="text" inputmode="text" maxlength="5" autocomplete="off" value="'+esc(suffixOf(x))+'" aria-label="Numéro du vol (lettres et chiffres, au moins un chiffre)" placeholder="579, 579A, 9ZW"><button type="button" class="alz-rename-btn" data-act="ok">ENREGISTRER</button><button type="button" class="alz-rename-btn" data-act="no">ANNULER</button><div class="alz-rename-msg">Lettres et chiffres, au moins un chiffre (ex. 579, 579A, 9ZW). Le code compagnie ne change pas.</div></div>';
   var input=holder.querySelector('input'),msg=holder.querySelector('.alz-rename-msg'),ok=holder.querySelector('[data-act=ok]'),no=holder.querySelector('[data-act=no]');
   input.focus();input.select();
   input.addEventListener('input',function(){var v=cleanSuffix(input.value);if(v!==input.value)input.value=v});
-  ok.onclick=function(){var v=cleanSuffix(input.value);if(!/^[0-9]{1,4}[A-Z]?$/.test(v)){msg.className='alz-rename-msg err';msg.textContent='Saisis 1 à 4 chiffres, avec une lettre en plus si besoin.';return}save(x,air+v,msg,ok)};
+  ok.onclick=function(){var v=cleanSuffix(input.value);if(!/^(?=.*[0-9])[0-9A-Z]{1,5}$/.test(v)){msg.className='alz-rename-msg err';msg.textContent='Saisis 1 à 5 lettres ou chiffres, dont au moins un chiffre (ex. 579, 579A, 9ZW).';return}save(x,air+v,msg,ok)};
   no.onclick=function(){holder.innerHTML=''};
   input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();ok.click()}});
 }
