@@ -34,7 +34,7 @@ test("ATD seulement estimée : n'occupe plus le rang des vols sans ATD ; sans AT
   assert.ok(priority({flight_date:"2026-10-09"},{...base,atd:"09:00",atdSource:"PUBLIC_LIVE:FIDS_ONTIME"},717,now)[0]>=0.5);
   assert.ok(priority({flight_date:"2026-10-09"},base,717,now)[0]<0.5);
 });
-test("statut ARRIVÉ par heure d'arrivée dépassée : l'heure d'arrivée est conservée",()=>{
+test("ETA dépassée sans ATA : le statut reste EN VOL (plus d'ARRIVÉ par ETA + 15 min) et l'heure d'arrivée est conservée pour la priorité de lecture",()=>{
   const d=derive({std:"09:00",sta:"10:15",eta:"09:43",origin:"CDG",destination:"ALG",dest:"ALG",atd:"08:47",takeoff:"08:58"},"2026-10-09",Date.parse("2026-10-09T09:57:00Z"));
-  assert.equal(d.reason,"ETA_PASSED_15");assert.ok(Number.isFinite(d.arrivalUtc));
+  assert.equal(d.status,"EN VOL");assert.equal(d.reason,"TAKEOFF");assert.ok(Number.isFinite(d.arrivalUtc));
 });
