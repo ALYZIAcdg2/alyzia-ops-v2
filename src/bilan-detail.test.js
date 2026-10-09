@@ -15,3 +15,16 @@ test("bilan : FlightAware limité aux vols JU ; un « en pause » ancien sans pa
   assert.match(s,/a\.st==='COOLDOWN'&&!pauseActive\(key\)/);
   assert.ok(s.split("latestEff(").length>=4);        // pastilles, puces du bilan, liste détaillée
 });
+
+test("bilan : une tentative refusée vieille de plus de 45 min n'est plus comptée « refusée / en pause »", () => {
+  const s=fs.readFileSync(new URL("./admin-ux-wrapper.js",import.meta.url),"utf8");
+  const fn=/function staleBlock\(a\)\{[^\n]*\}/.exec(s)[0];
+  const staleBlock=new Function(fn+";return staleBlock")();
+  assert.equal(staleBlock({at:new Date(Date.now()-60*60000).toISOString()}),true);
+  assert.equal(staleBlock({at:new Date(Date.now()-10*60000).toISOString()}),false);
+  assert.equal(staleBlock(null),false);
+  assert.match(s,/old:\{t:'ANCIENNES TENTATIVES/);
+  assert.match(s,/k==='block'&&staleBlock\(a\)\)k='old'/);        // liste détaillée
+  assert.match(s,/k==='block'&&staleBlock\(a\)\)\{old\+\+\}/);   // puces du bilan
+  assert.match(s,/sec\('old',false\)/);
+});
