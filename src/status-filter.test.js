@@ -28,10 +28,10 @@ test("même construction que HORAIRES : rangée de contrôles, menu, bascule à 
 });
 test("sélection simple, par défaut TOUS, un statut vidé par les filtres est désélectionné",()=>{
   assert.match(js,/selected=\(k==='\*'\|\|selected===k\)\?'':k/);
-  assert.ok(!/sessionStorage/.test(js));
+  assert.match(js,/KEEP_MS=20\*60000/);assert.match(js,/sessionStorage\.setItem\(STORE/);   // survit à un rechargement, 20 minutes au plus
   assert.ok(!/selected=''\s*;?\s*\n?\s*Array/.test(js));
   assert.match(js,/e\.key==='Escape'/);
-  assert.match(js,/alyzia-home-clear'\)\)selected=''/);
+  assert.match(js,/alyzia-home-clear'\)\)\{selected='';save\(\)\}/);
 });
 test("chaque statut du menu porte la couleur de son badge sur les cartes",()=>{
   for(const [k,bg] of [["HEURE","#e1f5e9"],["RETARD","#fff0d0"],["ENVOL","#dcecff"],["ARRIVE","#d7efec"],["ANNULE","#ffe1e5"],["PARTI","#e6f8f3"]])assert.match(STATUS_FILTER_UI,new RegExp('data-k="'+k+'"\\]>span[^{]*\\{background:'+bg));
