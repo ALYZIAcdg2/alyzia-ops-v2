@@ -268,7 +268,7 @@ async function fetchHtmlSource(source,f){if(source==="FLIGHTSTATS"){const cached
   return {source,url:r.url||url,httpStatus:r.status,status,checkedAt,semantic,detailsInfo:detailsInfo||undefined,flightId:fsId||undefined,lookupDesignator:candidate.designator,lookupCodeType:candidate.lookupCodeType}}catch(e){if(source==="FLIGHTSTATS")noteRefusal(source,url,{status:0},"EXCEPTION "+String(e?.name||"")+": "+String(e?.message||e));return {source,url,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR",httpStatus:0,checkedAt,semantic:{},error:String(e?.message||e).slice(0,160)}}finally{clearTimeout(t)}})}
 function clockFromIso(iso,zone){if(!iso)return "";const d=new Date(iso);if(Number.isNaN(d.getTime()))return "";try{const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:zone||"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(d).map(x=>[x.type,x.value]));return `${p.hour}:${p.minute}`}catch{return ""}}
 // FR24's "actual departure" is the wheels-up time (MH21: FR24 12:02/12:03, FlightStats and FlightAware gate departure 11:50): it feeds TAKEOFF only, never ATD.
-export function fr24Semantic(fr,f){const s=fr?.candidates?.semantic||{};const takeoff=clockFromIso(s.takeoff,"Europe/Paris"),history=clean(s.atdClock);return {takeoff:takeoff||history,atdEst:clockFromIso(s.moveStart,AIRPORT_TZ[upper(f.origin||"CDG")]||"Europe/Paris"),eta:clockFromIso(s.eta,AIRPORT_TZ[f.destination]||"Europe/Paris"),landing:clockFromIso(s.landing,AIRPORT_TZ[f.destination]||"Europe/Paris")||clean(s.landingClock),status:statusValue(s.status||fr?.candidates?.statuses?.join(" ")||""),aircraft:upper(s.type||fr?.candidates?.aircraft?.[0]),reg:upper(s.reg||fr?.candidates?.registrations?.[0])}}
+export function fr24Semantic(fr,f){const s=fr?.candidates?.semantic||{};const takeoff=clockFromIso(s.takeoff,"Europe/Paris"),history=clean(s.atdClock);return {takeoff:takeoff||history,atdEst:clockFromIso(s.moveStart,AIRPORT_TZ[upper(f.origin||"CDG")]||"Europe/Paris"),sta:clockFromIso(s.sta,AIRPORT_TZ[f.destination]||"Europe/Paris"),eta:clockFromIso(s.eta,AIRPORT_TZ[f.destination]||"Europe/Paris"),landing:clockFromIso(s.landing,AIRPORT_TZ[f.destination]||"Europe/Paris")||clean(s.landingClock),status:statusValue(s.status||fr?.candidates?.statuses?.join(" ")||""),aircraft:upper(s.type||fr?.candidates?.aircraft?.[0]),reg:upper(s.reg||fr?.candidates?.registrations?.[0])}}
 function choose(map,field,order){for(const src of order){const key=upper(src).replace(/[^A-Z0-9]/g,"");const hit=map[key]||map[src];const v=clean(hit?.[field]);if(v)return {value:v,source:key==="FLIGHTSTATSEXACT"?"FLIGHTSTATS":key}}return {value:"",source:""}}
 // A cancellation read on a web page is only believed when two sources agree: a single loose page text ("cancelled" elsewhere on the page) was wrong for AI142 / TU725.
 export function pickStatus(map,order){
@@ -297,6 +297,12 @@ function arrivalLocal(h,current,f){
   if(!h?.value)return h;
   const g=guardArrivalClock(h.value,{std:current.std||f.std,sta:current.sta,date:f.date,originZone:AIRPORT_TZ[upper(f.origin)]||"Europe/Paris",destZone:AIRPORT_TZ[upper(f.destination)]||"Europe/Paris"});
   return g.status==="SHIFTED"?{...h,value:g.value,source:`${h.source}+DEST_LOCAL`}:h;
+}
+// STA vide (vol charter, vol renommé) : l'heure d'arrivée prévue de FR24 (heure locale de la destination) la renseigne. Une STA déjà présente n'est jamais modifiée, ni une saisie manuelle.
+export function fillStaFromFr24(x,sta,at){
+  const v=clean(sta);if(!/^\d{2}:\d{2}$/.test(v)||clean(x.sta)||manual(x,"sta"))return false;
+  const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FR24",field:"sta",from:"",to:v});x.flightInfoLog=log.slice(0,240);
+  x.sta=v;x.staSource="PUBLIC_LIVE:FR24";x.staUpdatedAt=at;return true;
 }
 function setField(x,field,hit,at){if(!hit?.value||manual(x,field))return false;
   // Departure clocks must be local to the origin: a UTC reading (more than 50 min before STD) is shifted, an impossible one refused.
@@ -449,6 +455,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
     const boardOwned=/FR24BOARD/.test(upper(current.regSource||current.registrationSource))&&!isJunkRegistration(current.reg||current.registration)&&clean(current.reg||current.registration);
     if((boardOwned&&!/FR24BOARD/.test(upper(reg.source)))||await regHeldByNearbyFlight(env,row.identity,f.date,reg.value,current.std||f.std))reg.value="";
   }
+  if(fillStaFromFr24(current,map.FR24?.sta,at))changed=true;
   if(setField(current,"atd",atd.value?atd:(moveAtdHit(current,map.FR24,takeoff.value||current.takeoff,Date.now(),f.origin)||atd),at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   // Confirmation: stored on each time field (xxxConfirmed + xxxSources); read by the diagnostic and the admin.
   const conf={};for(const [field,hit] of [["atd",atd],["takeoff",takeoff],["eta",eta],["landing",landing],["ata",ataHit]]){if(!clean(current[field])||clean(current[field])!==clean(hit?.value))continue;const c=confirmation(map,field,hit.value);if(current[field+"Confirmed"]!==c.confirmed||clean(current[field+"Sources"])!==c.sources.join(",")){current[field+"Confirmed"]=c.confirmed;current[field+"Sources"]=c.sources.join(",");changed=true}conf[field]=c}
