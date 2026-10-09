@@ -13,7 +13,8 @@ const parisClock=sec=>{if(!sec)return"";const p=new Intl.DateTimeFormat("fr-FR",
 export const parisDay=sec=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(sec*1000));
 
 // Un même numéro de vol peut partir deux fois dans la journée (TU441, EC4541) : on garde toutes les lignes par numéro.
-export function indexRows(rows){const m=new Map();for(const r of rows){const k=upper(r.flight);if(!k)continue;if(!m.has(k))m.set(k,[]);m.get(k).push(r)}return m}
+// Un vol sans numéro commercial (charter) est listé par son indicatif (ENT9ZW) : la ligne est donc aussi classée sous son indicatif.
+export function indexRows(rows){const m=new Map();const add=(k,r)=>{if(!k)return;if(!m.has(k))m.set(k,[]);const l=m.get(k);if(!l.includes(r))l.push(r)};for(const r of rows){add(upper(r.flight),r);add(upper(r.callsign),r)}return m}
 // Ligne du tableau pour ce vol : même numéro (ou variante IATA/OACI), même date et même heure prévue (STD).
 export function matchRow(index,f){
   const keys=[upper(f.designator),...flightLookupVariants({airline:f.airline,number:f.number}).map(v=>upper(v.airline)+upper(v.number))];
