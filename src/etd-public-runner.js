@@ -24,7 +24,7 @@ async function apply(env,row){
   const current=await readCurrent(env,row.identity);if(!current)return {flight:f.designator,status:"FLIGHT_DISAPPEARED"};
   if(hhmm(current.atd)||hhmm(current.takeoff))return {flight:f.designator,status:"STOP_ATD"};
   const from=hhmm(current.etd||current.edt);
-  if(/FIDS/.test(upper(current.etdSource))&&from)return {flight:f.designator,status:"FIDS_PRIORITY",etd:from};
+  if(/FIDS|FR24BOARD/.test(upper(current.etdSource))&&from)return {flight:f.designator,status:"FIDS_PRIORITY",etd:from};
   if(from===etd&&upper(current.etdSource)===`PUBLIC_ETD:${upper(hit.source)}`&&current.etdTimeBasis==="CDG_LOCAL")return {flight:f.designator,status:"UNCHANGED",etd,source:hit.source};
   const at=new Date().toISOString();current.etd=etd;current.edt=etd;current.etdSource=`PUBLIC_ETD:${hit.source}`;current.etdUpdatedAt=at;current.etdTimeBasis="CDG_LOCAL";current.etdBackfill={checkedAt:at,status:"OK",source:hit.source,attempts:hit.attempts||[]};
   const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];if(from!==etd)log.unshift({at,source:`PUBLIC_ETD:${hit.source}`,field:"etd",from,to:etd});current.flightInfoLog=log.slice(0,200);
