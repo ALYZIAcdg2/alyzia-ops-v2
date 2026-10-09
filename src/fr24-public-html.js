@@ -177,6 +177,28 @@ function playbackCandidates(data,flight,id){
   };
 }
 
+
+// Arrivée estimée d'un vol en l'air : la réponse « playback » ne la contient pas, la page de suivi FR24 (appel « clickhandler » de la page du vol) la donne dans time.estimated.arrival (TU2655 : 4:17 sur la page, vide chez nous). Lue seulement pour un vol décollé et pas atterri, au plus une fois toutes les 5 min par vol ; seule l'ETA en est reprise, jamais une heure calculée.
+const LIVE_ETA_CACHE=new Map();
+async function fetchLiveEta(flight,id,candidates){
+  const sem=candidates?.semantic||{};
+  if(sem.eta||sem.landing||!sem.takeoff||!id)return null;
+  const hit=LIVE_ETA_CACHE.get(id);if(hit&&Date.now()-hit.at<5*60000)return hit.eta;
+  let eta=null;const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+  try{
+    const r=await fetch(`https://data-live.flightradar24.com/clickhandler/?flight=${encodeURIComponent(id)}&version=1.5`,{redirect:"follow",signal:controller.signal,headers:{"accept":"application/json,text/plain,*/*","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","origin":"https://www.flightradar24.com","referer":`https://www.flightradar24.com/${encodeURIComponent(upper(flight.designator))}/${encodeURIComponent(id)}`,"user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36"}});
+    if(r.ok&&clean(r.headers.get("content-type")).toLowerCase().includes("json")){
+      const data=await r.json(),f=data&&typeof data==="object"?data:null;
+      const ts=epoch(nested(f,["time","estimated","arrival"]));
+      // La réponse doit être bien celle de ce vol.
+      const number=upper(nested(f,["identification","number","default"])||""),ok=!number||new Set(historyDesignators(flight)).has(number)||number.replace(/\s+/g,"")===upper(flight.designator);
+      if(ts&&ok)eta=iso(ts);
+    }
+  }catch{}finally{clearTimeout(timer)}
+  LIVE_ETA_CACHE.set(id,{at:Date.now(),eta});
+  return eta;
+}
+
 async function fetchPlayback(flight,id){
   if(!id)return null;
   const url=`https://api.flightradar24.com/common/v1/flight-playback.json?flightId=${encodeURIComponent(id)}`;
@@ -314,6 +336,7 @@ async function fetchFr24PublicCore(flight,historyBodies){
     const playback=await fetchPlayback(flight,id);
     attempts.push({url:playback.url,finalUrl:playback.finalUrl,httpStatus:playback.httpStatus,status:playback.status,candidates:playback.candidates,error:playback.error});
     if(playback.status==="OK"){
+      {const eta=await fetchLiveEta(flight,id,playback.candidates);if(eta){playback.candidates={...playback.candidates,semantic:{...playback.candidates.semantic,eta},times:[...(playback.candidates.times||[]),eta]}}}
       return {name:"FR24",url:playback.url,status:"OK",httpStatus:playback.httpStatus,finalUrl:playback.finalUrl,mentionsFlight:true,candidates:{...playback.candidates,method:"PUBLIC_PLAYBACK",attempts:attempts.map(a=>({url:a.url,finalUrl:a.finalUrl,httpStatus:a.httpStatus,status:a.status,useful:a.candidates?.useful||0,error:a.error||""}))},checkedAt};
     }
   }
