@@ -44,7 +44,8 @@ export function derive(x,date,nowMs=Date.now()){
 
   const atd=fact(x,"atd",["actualDeparture","actual_departure","gateOut","gate_out"]);
   const landing=fact(x,"landing",["landingTime","landing_time"]),takeoff=fact(x,"takeoff",["takeoffTime","takeoff_time"]);
-  if((atd.value||takeoff.value||landing.value)&&etaPassedBy15(x,date,nowMs))return {status:"ARRIVÉ",reason:"ETA_PASSED_15",evidence:{value:x.eta||x.sta||"",source:sourceOf(x,x.eta?"eta":"sta")||"V2_PUBLIC"}};
+  // arrivalUtc conservée : sans elle le vol perdait sa priorité de relecture « arrivée proche / dépassée » au moment même où son atterrissage manquait (AH1231, AT703).
+  if((atd.value||takeoff.value||landing.value)&&etaPassedBy15(x,date,nowMs))return {status:"ARRIVÉ",reason:"ETA_PASSED_15",evidence:{value:x.eta||x.sta||"",source:sourceOf(x,x.eta?"eta":"sta")||"V2_PUBLIC"},arrivalUtc:arrivalUtc(x,date)};
 
   // Étapes : ATD = PARTI (sorti du poste), TO = EN VOL, LDG = ATTERRI, ATA = ARRIVÉ.
   if(landing.value)return {status:"ATTERRI",reason:"LANDING",evidence:landing,arrivalUtc:arrivalUtc(x,date)};

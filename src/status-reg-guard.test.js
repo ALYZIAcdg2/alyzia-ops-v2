@@ -164,7 +164,8 @@ test("airborne flights arriving within 2 h are re-read first, at most every 3 mi
   assert.equal(priority({std:"08:00"},{...soon,publicLiveBackfill:{checkedAt:iso(-1)}},600,now)[0],1);
   assert.equal(priority({std:"08:00"},{...soon,statusArrivalUtc:iso(400)},600,now)[0],1);
   assert.equal(arrivingSoon({...soon,ata:"11:00"},now),false);
-  assert.equal(arrivingSoon({...soon,statusArrivalUtc:iso(-40)},now),false);
+  assert.equal(arrivingSoon({...soon,statusArrivalUtc:iso(-100)},now),true);
+  assert.equal(arrivingSoon({...soon,statusArrivalUtc:iso(-150)},now),false);
 });
 
 test("a flight that took off without ATD is asked again by the cron (FlightStats / FlightAware)",()=>{
