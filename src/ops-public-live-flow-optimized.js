@@ -365,7 +365,10 @@ export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clea
 // Airborne flight arriving within 2 h (or overdue by up to 2 h : its landing is still missing): its ETA moves most, so it is re-read first, at most every 3 minutes.
 const INFLIGHT_WINDOW_MIN=120,INFLIGHT_REREAD_MIN=3;
 export function arrivingSoon(x,nowMs=Date.now()){const a=Date.parse(clean(x?.statusArrivalUtc));if(!Number.isFinite(a)||clean(x?.ata))return false;const m=(a-nowMs)/60000;return m<=INFLIGHT_WINDOW_MIN&&m>=-120}
+export function etaOverdueMin(x,nowMs=Date.now()){const a=Date.parse(clean(x?.statusArrivalUtc));return Number.isFinite(a)?(nowMs-a)/60000:null}
 export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];
+  // ETA dépassée de 15 min ou plus (vol parti) sans atterrissage ni ATA : relu AVANT les vols plus lointains, pour récupérer LDG / ATA. Délai entre deux lectures du même vol : 6 min jusqu'à 2 h après l'ETA, 15 min jusqu'à 6 h, puis 1 h (un vol resté sans donnée ne monopolise plus les places).
+  {const ov=etaOverdueMin(x,nowMs);if(departed&&!clean(x.ata)&&!clean(x.landing)&&ov!==null&&ov>=15){const gap=ov<120?6:ov<360?15:60;if(nowMs-checked>=gap*60000)return [0.1,checked]}}
   // Vols dont FlightAware est la seule source d'ATD (JU) : dès que le vol est parti (ou sa STD passée) sans ATD, en tête de file (toutes les 10 min au plus). Sans cela, JU241, arrivé sans ATD, restait derrière les vols en l'air et n'était jamais relu.
   if((clean(x.ata)||clean(x.landing))&&flightAwareAllowed(x.flight||x.designator||row.flight_number,x,nowMs,row.flight_date)&&nowMs-checked>=10*60000)return [0.2,checked];
   // Vol parti dont l'arrivée (LDG / ATA) manque bien après l'heure prévue : en tête aussi (AH1543 restait « ARRIVÉE » sans ATA).

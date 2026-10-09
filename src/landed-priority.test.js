@@ -23,7 +23,9 @@ test("vol dont l'arrivée est dépassée (atterrissage manquant) : relu en prior
   const x=m=>({statusArrivalUtc:new Date(now-m*60000).toISOString()});
   assert.equal(arrivingSoon(x(10),now),true);assert.equal(arrivingSoon(x(100),now),true);assert.equal(arrivingSoon(x(150),now),false);
   const f={std:"09:00",atd:"08:47",atdSource:"PUBLIC_LIVE:FIDS",takeoff:"08:58",...x(75),publicLiveBackfill:{checkedAt:new Date(now-70*60000).toISOString()}};
-  assert.equal(priority({flight_date:"2026-10-09"},f,717,now)[0],0.5);
+  assert.equal(priority({flight_date:"2026-10-09"},f,717,now)[0],0.1);   // ETA dépassée de plus de 15 min : rang 0,1 (avant les vols plus lointains)
+  // ETA dépassée de moins de 15 min : reste au rang « arrivée proche » 0,5
+  assert.equal(priority({flight_date:"2026-10-09"},{...f,...x(8)},717,now)[0],0.5);
 });
 test("ATD seulement estimée : n'occupe plus le rang des vols sans ATD ; sans ATD du tout : rang inchangé",()=>{
   const now=Date.parse("2026-10-09T09:57:00Z"),checked=new Date(now-20*60000).toISOString();
