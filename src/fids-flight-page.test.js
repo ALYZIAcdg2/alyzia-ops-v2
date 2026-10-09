@@ -45,3 +45,13 @@ test("le passage remplace l'ATA calculée par l'ATA du FIDS",async()=>{
   const r2=await sweepFidsFlightPages(env,{nowMs:Date.parse("2026-10-09T10:01:00Z"),fetchImpl:async()=>{throw new Error("no")}});
   assert.equal(r2.candidates,0);
 });
+
+test("les vols d'hier de journée ne prennent pas les places des vols du jour",async()=>{
+  _resetFlightPageMemo();
+  const mk=(id,date,std,extra={})=>({identity:id,flight_date:date,airline:"TK",flight_number:"1",std,data_json:JSON.stringify({flight:id,airline:"TK",origin:"CDG",destination:"IST",std,takeoff:"09:00",landing:"12:00",...extra})});
+  const rows=[mk("OLD1","2026-10-08","09:00"),mk("OLD2","2026-10-08","22:00"),mk("NEW1","2026-10-09","09:00")];
+  const env={OPS_DB:{prepare:()=>({bind:()=>({all:async()=>({results:rows}),run:async()=>{}})})}};
+  const seen=[];
+  await sweepFidsFlightPages(env,{dryRun:true,nowMs:Date.parse("2026-10-09T10:00:00Z"),fetchImpl:async u=>{seen.push(u);return {ok:false,status:410}}});
+  assert.equal(seen.length,2);assert.match(seen[0],/NEW1/);assert.match(seen[1],/OLD2/);
+});

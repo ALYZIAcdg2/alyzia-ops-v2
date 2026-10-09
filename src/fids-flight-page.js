@@ -1,7 +1,7 @@
 // Page FIDS d'un vol (fids.flightradar.live/flight-status/{vol}/{départ}/{arrivée}/{aaaammjjhhmm de la STD locale}) : ATD et ATA réels pour les vols qui ne sont plus dans le flux général (fenêtre ~3 h).
 // Lecture seulement, 4 vols au plus par passage du cron ; STD/STA ne sont jamais modifiées, une saisie manuelle n'est jamais écrasée.
 // ATA : seulement si vide, calculée (LDG + 10) ou déjà du FIDS. ATD : seulement si vide, « parti à l'heure » ou premier mouvement FR24.
-const BASE="https://fids.flightradar.live/flight-status",MAX_PER_RUN=4,RETRY_MS=10*60000,MAX_AGE_H=6;
+const BASE="https://fids.flightradar.live/flight-status",MAX_PER_RUN=6,RETRY_MS=10*60000,MAX_AGE_H=6;
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?m[1].padStart(2,"0")+":"+m[2]:""};
 const mins=v=>{const m=hhmm(v).match(/(\d+):(\d+)/);return m?Number(m[1])*60+Number(m[2]):null};
@@ -47,10 +47,12 @@ export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now()
   const cand=[];
   for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
     if(!wantsPage(x,nowMs))continue;
+    // Vol d'hier : sa page a disparu (410) sauf s'il est parti après minuit ; seuls les départs de 20 h ou plus sont relus.
+    if(r.flight_date<today&&(mins(x.std||r.std)??0)<20*60)continue;
     if(only&&!upper(x.flight||r.flight_number).includes(upper(only)))continue;
     if(!dryRun&&nowMs-(tried.get(r.identity)||0)<RETRY_MS)continue;
     cand.push({r,x})}
-  cand.sort((a,b)=>(tried.get(a.r.identity)||0)-(tried.get(b.r.identity)||0));
+  cand.sort((a,b)=>(b.r.flight_date<a.r.flight_date?-1:b.r.flight_date>a.r.flight_date?1:0)||(tried.get(a.r.identity)||0)-(tried.get(b.r.identity)||0));
   const done=[],checked=[];
   for(const {r,x} of cand.slice(0,MAX_PER_RUN)){
     if(!dryRun)tried.set(r.identity,nowMs);
