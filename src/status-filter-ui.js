@@ -1,9 +1,11 @@
 // Liste des vols (accueil) : un seul bouton « STATUT » à côté de la barre de recherche. Il ouvre une liste des seuls statuts présents dans la sélection affichée (terminal, recherche, favoris, tranche horaire), avec leur nombre de vols ; on en choisit un.
 // La recherche garde sa largeur. Le nombre de chaque statut suit le terminal, la recherche, les favoris et la tranche horaire ; la liste affichée cumule le statut choisi avec ces filtres.
 export const STATUS_FILTER_UI = String.raw`<style id="alyzia-status-filter-css">.alz-status-hidden{display:none!important}
-.alz-search-row{display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-start;gap:10px;margin:0 0 12px}
+/* Plus spécifique que les règles d'affichage des cartes de l'application (#app .flight-home-row.ops-flight-card{display:…!important}) : sans cela le filtre ne cachait rien. */
+html body #app .flight-home-row.alz-status-hidden.alz-status-hidden,html body #app .flight-home-row.ops-flight-card.alz-status-hidden.alz-status-hidden{display:none!important}
+.alz-search-row{position:relative;display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-start;gap:10px;margin:0 0 12px;padding-right:126px;box-sizing:border-box}
 .alz-search-row .home-flight-search{flex:1 1 auto!important;min-width:0!important;width:auto!important;margin:0!important}
-.alz-status-wrap{flex:0 0 auto;position:relative;margin-left:0}
+.alz-status-wrap{position:absolute;top:50%;transform:translateY(-50%);left:calc(min(650px,100% - 126px) + 10px)}
 .alz-status-btn{display:inline-flex;align-items:center;gap:7px;height:46px;padding:0 15px;border:2px solid #d8e3ee;border-radius:999px;background:#fff;color:#28425f;font:900 12px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;cursor:pointer}
 .alz-status-btn.active{border-color:#0b70d1;background:#0b70d1;color:#fff}
 .alz-status-btn .alz-caret{font-size:10px;opacity:.75}
@@ -34,13 +36,13 @@ function build(search){
   var wrap=search.parentNode&&search.parentNode.classList&&search.parentNode.classList.contains('alz-search-row')?search.parentNode:null;
   if(!wrap){wrap=document.createElement('div');wrap.className='alz-search-row';search.parentNode.insertBefore(wrap,search);wrap.appendChild(search)}
   // Mise en page posée en ligne : rien dans la feuille de style de l'application ne la repousse (bouton collé à la recherche).
-  wrap.style.setProperty('display','flex','important');wrap.style.setProperty('justify-content','flex-start','important');wrap.style.setProperty('flex-wrap','nowrap','important');wrap.style.setProperty('align-items','center','important');wrap.style.setProperty('width','100%','important');
+  wrap.style.setProperty('display','flex','important');wrap.style.setProperty('justify-content','flex-start','important');wrap.style.setProperty('flex-wrap','nowrap','important');wrap.style.setProperty('align-items','center','important');wrap.style.setProperty('width','100%','important');wrap.style.setProperty('padding-right','126px','important');wrap.style.setProperty('box-sizing','border-box','important');wrap.style.setProperty('position','relative','important');
   search.style.setProperty('flex','0 1 650px','important');search.style.setProperty('max-width','650px','important');search.style.setProperty('min-width','0','important');search.style.setProperty('margin','0','important');
-  var box=document.createElement('div');box.className='alz-status-wrap';box.style.setProperty('margin','0','important');box.style.setProperty('flex','0 0 auto','important');
+  var box=document.createElement('div');box.className='alz-status-wrap';
   box.innerHTML='<button type="button" class="alz-status-btn" aria-haspopup="listbox" aria-expanded="false"><span class="alz-lbl">STATUT</span><span class="alz-caret">▾</span></button>';wrap.appendChild(box);
   var band=document.createElement('div');band.className='alz-status-band';band.setAttribute('role','listbox');band.setAttribute('aria-label','Statut des vols');band.hidden=true;
-  var html='<button type="button" role="option" class="alz-sf-item" data-k="*"><span>TOUS LES STATUTS</span><b>0</b></button>';
-  KEYS.forEach(function(p){html+='<button type="button" role="option" class="alz-sf-item zero" data-k="'+p[0]+'"><span>'+p[1]+'</span><b>0</b></button>'});
+  var html='<button type="button" role="option" class="alz-sf-item" data-k="*"><span>TOUS LES STATUTS</span><b></b></button>';
+  KEYS.forEach(function(p){html+='<button type="button" role="option" class="alz-sf-item zero" data-k="'+p[0]+'"><span>'+p[1]+'</span><b></b></button>'});
   band.innerHTML=html;box.appendChild(band);
   // La croix d'effacement de la recherche se repositionne selon la nouvelle largeur de la recherche.
   setTimeout(function(){try{window.dispatchEvent(new Event('resize'))}catch(e){}},0);

@@ -16,7 +16,7 @@ test("les statuts affichés sur les cartes sont rangés dans les bons filtres",(
   for(const [t,k] of Object.entries(cases))assert.equal(keyOf(t),k,t);
 });
 test("un seul bouton STATUT à côté de la recherche, qui ouvre la liste de tous les statuts",()=>{
-  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex;flex-wrap:nowrap/);            // même ligne
+  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{position:relative;display:flex;flex-wrap:nowrap/);assert.match(STATUS_FILTER_UI,/html body #app \.flight-home-row\.ops-flight-card\.alz-status-hidden\.alz-status-hidden\{display:none!important\}/);   // plus spécifique que l'affichage des cartes            // même ligne
   assert.match(STATUS_FILTER_UI,/\.alz-search-row \.home-flight-search\{flex:1 1 auto!important/);  // la recherche garde sa largeur
   assert.match(js,/class="alz-status-btn"/);assert.match(js,/aria-haspopup="listbox"/);assert.match(js,/className='alz-status-band'/);assert.match(STATUS_FILTER_UI,/\.alz-status-band\{position:absolute[^}]*overflow-y:auto/);   // liste déroulante
   assert.ok(!/sessionStorage/.test(js));   // par défaut tous les statuts : rien n'est gardé d'une ouverture de la page à l'autre
