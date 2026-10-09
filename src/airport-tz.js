@@ -29,6 +29,20 @@ export const AIRPORT_TZ={
  PMO:"Europe/Rome", SUF:"Europe/Rome", BLQ:"Europe/Rome",
  GOH:"America/Nuuk", SFJ:"America/Nuuk"
 };
+// Table complète : l'application connaît ≈ 8 800 aéroports (public/airports.json : [ville, fuseau, OACI]). Sans elle, un aéroport absent de la liste ci-dessus (ex. JMK, Mykonos) retombait sur l'heure de Paris :
+// l'ETA / STA / ATA affichée était décalée (ETA 13:29 au lieu de 14:29 à Mykonos). Chargée une fois par instance ; la liste ci-dessus reste prioritaire.
+let zonesLoaded=false;
+export async function loadAirportZones(env){
+  if(zonesLoaded)return;
+  try{
+    const r=await env?.ASSETS?.fetch(new Request("https://assets.local/airports.json"));
+    if(!r||!r.ok)return;
+    const all=await r.json();
+    for(const [iata,v] of Object.entries(all||{})){const tz=Array.isArray(v)?String(v[1]||""):"";if(tz&&!AIRPORT_TZ[iata])AIRPORT_TZ[iata]=tz}
+    zonesLoaded=true;
+  }catch{}
+}
+export const __resetAirportZones=()=>{zonesLoaded=false};
 const cache={};
 export function tzOffsetMinutes(iata,date=new Date()){
   const zone=AIRPORT_TZ[String(iata||"").toUpperCase()]||"Europe/Paris";
