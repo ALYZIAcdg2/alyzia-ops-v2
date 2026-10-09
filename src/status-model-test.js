@@ -22,7 +22,11 @@ function arrivalUtc(x,date){
   const arr=hhmm(x.eta||x.estimatedArrival||x.estimated_arrival||x.sta);if(!arr)return null;
   const dest=upper(x.destination||x.dest||"");if(!AIRPORT_TZ[dest])return null;
   const dep=hhmm(x.atd||x.actualDeparture||x.actual_departure||x.takeoff||x.takeoffTime||x.takeoff_time||x.std);if(!dep)return null;
-  const origin=upper(x.origin||x.dep||"CDG");let a=localDateTimeUtc(date,dep,origin),b=localDateTimeUtc(date,arr,dest);if(a==null||b==null)return null;while(b<a)b+=86400000;return b;
+  const origin=upper(x.origin||x.dep||"CDG");let a=localDateTimeUtc(date,dep,origin),b=localDateTimeUtc(date,arr,dest);if(a==null||b==null)return null;
+  // Départ réel le lendemain de la date du vol (vol d'hier soir retardé après minuit : STD 19:45, décollage 02:58) : sans cela l'arrivée était calculée la veille, déjà « passée », et le vol passait ARRIVÉ au décollage (TU2655).
+  {const actual=hhmm(x.atd||x.actualDeparture||x.actual_departure||x.takeoff||x.takeoffTime||x.takeoff_time),std=mins(x.std),at=mins(actual),dayField=Number(x.takeoffDay);
+   if(actual&&(Number.isFinite(dayField)&&clean(x.takeoffDay)!==""?dayField>0:std!=null&&at!=null&&std-at>720))a+=86400000;}
+  while(b<a)b+=86400000;return b;
 }
 function etaPassedBy15(x,date,nowMs){const a=arrivalUtc(x,date);return a!=null&&nowMs>=a+15*60000}
 function etdDelayed(x){const s=mins(x.std),e=mins(x.etd);if(s==null||e==null)return false;let d=e-s;if(d<-720)d+=1440;if(d>720)d-=1440;return d>=5}
