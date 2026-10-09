@@ -2,7 +2,7 @@
 // Le passage enchaîne une dizaine d'étapes et son temps est limité : le 9 octobre, une étape secondaire (lecture des pages FIDS par vol) a pris presque tout le temps et le passage a été coupé avant les lectures par vol (décollage, atterrissage, ATA).
 // Règles : chaque étape a sa durée maximale (au-delà on passe à la suivante, le résultat est « timeout ») ; une étape facultative est sautée quand le passage a déjà duré plus que la limite douce ;
 // les étapes essentielles (lectures par vol, tableau FR24, statuts) ne sont jamais sautées. Les durées de chaque étape sont gardées pour le diagnostic.
-const TIMEOUT=Symbol("timeout");
+export const TIMEOUT=Symbol("timeout");
 export function timebox(work,ms){
   let timer;
   return Promise.race([
@@ -11,9 +11,10 @@ export function timebox(work,ms){
   ]).then(v=>{clearTimeout(timer);return v},e=>{clearTimeout(timer);throw e});
 }
 export function createCronBudget({now=()=>Date.now(),softLimitMs=60000}={}){
-  const start=now(),steps=[];
+  const start=now(),steps=[],meta={};
   return {
     elapsed:()=>now()-start,
+    note(k,v){meta[k]=v},
     async step(name,fn,{ms=15000,optional=false,fallback=null}={}){
       const t0=now();
       if(optional&&t0-start>softLimitMs){steps.push({name,status:"skipped",startAt:t0-start});return fallback}
@@ -25,7 +26,7 @@ export function createCronBudget({now=()=>Date.now(),softLimitMs=60000}={}){
         steps.push({name,status:"error",ms:now()-t0,startAt:t0-start,error:String(e?.message||e).slice(0,120)});return fallback;
       }
     },
-    summary(){return {at:new Date(start).toISOString(),totalMs:now()-start,softLimitMs,steps:steps.slice()}}
+    summary(){return {at:new Date(start).toISOString(),totalMs:now()-start,softLimitMs,...meta,steps:steps.slice()}}
   };
 }
 const KEY="cron_timing_v1";

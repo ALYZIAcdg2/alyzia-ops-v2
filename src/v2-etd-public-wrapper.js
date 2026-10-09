@@ -4,7 +4,7 @@ import {ETD_PUBLIC_SOURCE_ORDER} from "./etd-public-flow.js";
 import {runEtdPublicFlowSafe,etdPublicStatusSafe} from "./etd-public-runner.js";
 import {normalizeFr24EtdLocalTime} from "./etd-fr24-localtime.js";
 import {runGroundPublicFlow,groundPublicStatus} from "./ground-public-flow.js";
-import {runPublicLiveFlow,runLiveForFlight,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER} from "./ops-public-live-flow-optimized.js";
+import {runPublicLiveFlow,runLiveForFlight,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER,LIVE_RUN_BUDGET_MS,FLIGHT_READ_TIMEOUT_MS} from "./ops-public-live-flow-optimized.js";
 import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js";
 import {recoverFlightAwareExactHistory} from "./flightaware-exact-history.js";
 import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-source-candidate-test.js";
@@ -55,6 +55,7 @@ async function runEtd(env){const cleanup=await normalizeFr24EtdLocalTime(env);co
 async function runLive(env,opts){
   // Chaque étape a une durée maximale ; les étapes facultatives sont sautées si le passage a déjà trop duré (voir cron-budget.js). Hors cron (envoi manuel), un budget local suffit.
   const B=globalThis.__cronBudget||createCronBudget();
+  B.note("liveBudgetMs",LIVE_RUN_BUDGET_MS);B.note("flightReadTimeoutMs",FLIGHT_READ_TIMEOUT_MS);
   // Statuts d'embarquement (Gatenavo : un appel pour tous les vols) EN PREMIER et à l'abri des erreurs des étapes suivantes : un passage long ou en échec
   // (lectures FlightAware / FlightStats, délais) ne doit plus empêcher la mise à jour de l'embarquement, qui ne vit que 15 à 30 min par vol.
   const parisAeroport=await B.step("gatenavo",()=>runParisAirportStatusFlow(env),{ms:15000,fallback:{ok:false,error:"TIMEOUT"}});
