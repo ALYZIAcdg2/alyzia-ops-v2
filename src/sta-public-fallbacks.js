@@ -1,6 +1,7 @@
 import {withIcaoFallback,flightLookupVariants} from "./public-flight-alias.js";
 import {fetchFr24Public} from "./fr24-public-html.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
+import {guardedFetch} from "./fs-guard.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -69,7 +70,7 @@ export function parsePublicScheduledArrival(text){
 async function fetchPage(name,url,flight){
   const checkedAt=new Date().toISOString(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
   try{
-    const r=await fetch(url,{redirect:"follow",signal:controller.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Fallback/1.3; public-web-page)"}});
+    const r=await guardedFetch(url,{redirect:"follow",signal:controller.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-STA-Fallback/1.3; public-web-page)"}});
     const body=await r.text(),text=htmlText(body),u=upper(text);
     if(/JUST A MOMENT|ATTENTION REQUIRED|VERIFY YOU ARE HUMAN|ACCESS DENIED|UNUSUAL TRAFFIC/.test(u))return {source:name,status:"BLOCKED",url,finalUrl:r.url,httpStatus:r.status,checkedAt};
     if(!r.ok)return {source:name,status:"HTTP_ERROR",url,finalUrl:r.url,httpStatus:r.status,checkedAt};

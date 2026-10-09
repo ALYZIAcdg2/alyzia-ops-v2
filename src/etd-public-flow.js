@@ -2,6 +2,7 @@ import {guardDepartureClock} from "./local-time-guard.js";
 import {withIcaoFallback} from "./public-flight-alias.js";
 import {fetchFr24Public,utcToLocal} from "./fr24-public-html.js";
 import {AIRPORT_TZ} from "./airport-tz.js";
+import {guardedFetch} from "./fs-guard.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -14,7 +15,7 @@ function textOnly(html){return String(html||"").replace(/<script\b[^>]*>[\s\S]*?
 function estimatedDeparture(text){const T="(\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?)";const patterns=[new RegExp(`(?:estimated departure|departure estimate|estimated gate departure|departure estimated|départ estimé)[^0-9]{0,50}${T}`,"i"),new RegExp(`\\bETD\\b[^0-9]{0,25}${T}`,"i")];for(const p of patterns){const m=String(text||"").match(p);if(m){const raw=upper(m[1]);const mm=raw.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/);if(!mm)continue;let h=Number(mm[1]);if(mm[3]==="AM"&&h===12)h=0;if(mm[3]==="PM"&&h!==12)h+=12;return `${String(h).padStart(2,"0")}:${mm[2]}`}}return ""}
 function dateTokens(date){const [y,m,d]=String(date||"").split("-");const mon=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][Number(m)-1]||"";return [date,`${d}-${mon}-${y}`,`${Number(d)} ${mon} ${y}`,`${mon} ${Number(d)} ${y}`,`${d}/${m}/${y}`].map(upper)}
 function occurrenceMatch(text,f){const u=upper(text);return (u.includes(upper(f.designator))||u.includes(`${upper(f.airline)} ${upper(f.number)}`))&&u.includes(upper(f.origin))&&u.includes(upper(f.destination))&&dateTokens(f.date).some(t=>u.includes(t))}
-async function page(name,url,f){const c=new AbortController(),timer=setTimeout(()=>c.abort(),6000);try{const r=await fetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-ETD/1.1)"}});const text=textOnly(await r.text());if(!r.ok)return {source:name,status:"HTTP_ERROR"};if(!occurrenceMatch(text,f))return {source:name,status:"OCCURRENCE_MISMATCH"};const etd=estimatedDeparture(text);return {source:name,status:etd?"OK":"NO_ETD",etd}}catch(e){return {source:name,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}finally{clearTimeout(timer)}}
+async function page(name,url,f){const c=new AbortController(),timer=setTimeout(()=>c.abort(),6000);try{const r=await guardedFetch(url,{redirect:"follow",signal:c.signal,headers:{accept:"text/html,application/xhtml+xml","accept-language":"fr-FR,fr;q=0.9,en;q=0.8","user-agent":"Mozilla/5.0 (compatible; AlyziaOpsV2-ETD/1.1)"}});const text=textOnly(await r.text());if(!r.ok)return {source:name,status:"HTTP_ERROR",httpStatus:r.status};if(!occurrenceMatch(text,f))return {source:name,status:"OCCURRENCE_MISMATCH"};const etd=estimatedDeparture(text);return {source:name,status:etd?"OK":"NO_ETD",etd}}catch(e){return {source:name,status:e?.name==="AbortError"?"TIMEOUT":"FETCH_ERROR"}}finally{clearTimeout(timer)}}
 function reader(name,build){return f=>withIcaoFallback(f,build,x=>page(name,build(x),x))}
 
 // FR24 pages read by the Worker are rendered in UTC: a time found in their text is UTC, converted here to the local clock of the origin.
