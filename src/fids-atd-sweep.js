@@ -135,9 +135,9 @@ export async function sweepFidsToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRu
         if(eta&&clean(x.eta)!==eta&&!manual(x,"eta")&&(!clean(x.eta)||/FIDS|FLIGHTAWARE/.test(upper(x.etaSource)))){
           const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"eta",from:clean(x.eta),to:eta});
           x.flightInfoLog=log.slice(0,240);x.eta=eta;x.etaSource="PUBLIC_LIVE:FIDS";x.etaUpdatedAt=at;etaUpdated++;changed=true}}
-      // ETD : estimation du flux, prioritaire sur les ETD FR24 (tableau / par vol) ; jamais une saisie manuelle.
+      // ETD : estimation du flux. Le tableau de bord FR24 CDG reste la source de l'ETD pour le moment : un ETD qu'il a écrit n'est pas écrasé ; jamais une saisie manuelle.
       {const etd=etdFromRow(row,x,{std,date});
-        if(etd&&hhmm(x.etd||x.edt)!==etd&&!manual(x,"etd")){
+        if(etd&&hhmm(x.etd||x.edt)!==etd&&!manual(x,"etd")&&!/FR24BOARD/.test(upper(x.etdSource))){
           const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"etd",from:clean(x.etd||x.edt),to:etd});
           x.flightInfoLog=log.slice(0,240);x.etd=etd;x.edt=etd;x.etdSource="PUBLIC_LIVE:FIDS";x.etdUpdatedAt=at;x.etdTimeBasis="CDG_LOCAL";etdUpdated++;changed=true}}
       const atdStep=()=>{

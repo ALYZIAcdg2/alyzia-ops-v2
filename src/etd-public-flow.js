@@ -71,7 +71,7 @@ async function apply(env,row){
   // Local clock of the origin: a public page rendered in UTC gives an ETD hours before the STD.
   {const g=guardDepartureClock(hit.etd,f.std,f.date,AIRPORT_TZ[upper(f.origin)]||"Europe/Paris");if(g.status==="REJECTED")return {flight:f.designator,status:"ETD_NOT_LOCAL",etd:hit.etd};hit.etd=g.value}
   if(sameClock(hit.etd,f.std))return {flight:f.designator,status:"ETD_EQUALS_STD"};
-  if(/FIDS/.test(upper(current.etdSource))&&hhmm(current.etd||current.edt))return {flight:f.designator,status:"FIDS_PRIORITY",etd:hhmm(current.etd||current.edt)};
+  if(/FIDS|FR24BOARD/.test(upper(current.etdSource))&&hhmm(current.etd||current.edt))return {flight:f.designator,status:"FIDS_PRIORITY",etd:hhmm(current.etd||current.edt)};
   const at=new Date().toISOString(),from=hhmm(current.etd||current.edt);
   current.etd=hit.etd;current.edt=hit.etd;current.etdSource=`PUBLIC_ETD:${hit.source}`;current.etdUpdatedAt=at;current.etdTimeBasis="CDG_LOCAL";current.etdBackfill={checkedAt:at,status:"OK",source:hit.source,attempts:hit.attempts||[]};
   const log=Array.isArray(current.flightInfoLog)?current.flightInfoLog:[];log.unshift({at,source:`PUBLIC_ETD:${hit.source}`,field:"etd",from,to:hit.etd});current.flightInfoLog=log.slice(0,200);

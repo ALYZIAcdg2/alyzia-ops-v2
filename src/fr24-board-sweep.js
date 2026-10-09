@@ -75,7 +75,8 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
         const tk=parisClock(row.time);if(!clean(x.takeoff)||(/FR24BOARD/.test(upper(x.takeoffSource))&&clean(x.takeoff)!==tk)){if(!manual(x,"takeoff")){note("takeoff",clean(x.takeoff),tk);x.takeoff=tk;x.takeoffSource="PUBLIC_LIVE:FR24BOARD";x.takeoffUpdatedAt=at}}
       }else if(row.time&&row.time!==row.std&&row.status!=="departed"&&row.status!=="canceled"&&!clean(x.atd)&&!clean(x.takeoff)&&!manual(x,"etd")){
         const e=parisClock(row.time),from=clean(x.etd||x.edt),stale=nowMs-(Date.parse(x.etdUpdatedAt||0)||0)>15*60000;
-        if(e!==from&&(!from||/FR24BOARD/.test(upper(x.etdSource))||(stale&&!/FIDS/.test(upper(x.etdSource))))){note("etd",from,e);x.etd=e;x.edt=e;x.etdSource="PUBLIC_LIVE:FR24BOARD";x.etdUpdatedAt=at;x.etdTimeBasis="CDG_LOCAL"}
+        // Le tableau de bord FR24 CDG est la source de l'ETD pour le moment : il remplace tout ETD non saisi à la main (FIDS, pages publiques), et personne ne remplace le sien.
+        if(e!==from){note("etd",from,e);x.etd=e;x.edt=e;x.etdSource="PUBLIC_LIVE:FR24BOARD";x.etdUpdatedAt=at;x.etdTimeBasis="CDG_LOCAL"}
       }
     }
     if(!changed)continue;
