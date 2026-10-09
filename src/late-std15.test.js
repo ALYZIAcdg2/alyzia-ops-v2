@@ -4,9 +4,17 @@ import {lateBeyondStd15} from "./late-std15.js";
 import {flightOperationalStatus} from "./flight-operational-status.js";
 // 2026-10-07 15:00 à Paris (UTC+2) = 13:00 UTC
 const at=(hhmm)=>Date.parse(`2026-10-07T${hhmm}:00Z`);
-test("avant STD + 15 min : pas en retard, même avec un ETD très supérieur",()=>{
-  assert.equal(lateBeyondStd15({std:"20:00",etd:"20:40"},"2026-10-07",at("13:00")),false);
-  assert.equal(lateBeyondStd15({std:"15:00",etd:"15:40"},"2026-10-07",at("13:14")),false);
+test("avant STD + 15 min : pas en retard sans ETD, ni avec un ETD de moins de 15 min",()=>{
+  assert.equal(lateBeyondStd15({std:"20:00"},"2026-10-07",at("13:00")),false);
+  assert.equal(lateBeyondStd15({std:"15:00",etd:"15:14"},"2026-10-07",at("13:00")),false);
+  assert.equal(lateBeyondStd15({std:"15:00",etd:"15:05"},"2026-10-07",at("13:14")),false);
+});
+test("ETD supérieur à la STD de 15 min ou plus : RETARDÉ tout de suite (vol du jour)",()=>{
+  assert.equal(lateBeyondStd15({std:"20:00",etd:"20:15"},"2026-10-07",at("13:00")),true);
+  assert.equal(lateBeyondStd15({std:"20:00",edt:"20:40"},"2026-10-07",at("13:00")),true);
+  assert.equal(lateBeyondStd15({std:"23:50",etd:"00:10"},"2026-10-07",at("13:00")),true);   // ETD passé minuit
+  assert.equal(lateBeyondStd15({std:"20:00",etd:"20:40"},"2026-10-08",at("13:00")),false);  // vol de demain : inchangé
+  assert.equal(lateBeyondStd15({std:"20:00",etd:"19:30"},"2026-10-07",at("13:00")),false);  // ETD plus tôt : pas un retard
 });
 test("à STD + 15 min et après : en retard",()=>{
   assert.equal(lateBeyondStd15({std:"15:00"},"2026-10-07",at("13:15")),true);
