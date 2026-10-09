@@ -26,7 +26,10 @@ html body #app .flight-home-row.alyzia-status-hidden.alyzia-status-hidden,html b
 <script id="alyzia-status-filter-js">(function(){
 if(window.__alyziaStatusFilter)return;window.__alyziaStatusFilter=true;
 var KEYS=[['PARTI','PARTI'],['HEURE','À L’HEURE'],['RETARD','RETARDÉ'],['ENVOL','EN VOL'],['EMBARQ','EMBARQUEMENT + CLOS'],['ATTERRI','ATTERRI'],['ARRIVE','ARRIVÉE'],['ANNULE','ANNULÉ']];
-var selected='',menuOpen=false,lastToggle=0,deferred=0;
+var STORE='alyziaStatusFilter',KEEP_MS=20*60000,selected='',menuOpen=false,lastToggle=0,deferred=0;
+// Le choix survit au rechargement de la page (un téléphone qui renvoie l'onglet en arrière-plan la recharge) mais seulement 20 minutes : une nouvelle visite repart sur TOUS.
+try{var sv=JSON.parse(sessionStorage.getItem(STORE)||'null');if(sv&&sv.k&&Date.now()-sv.at<KEEP_MS)selected=sv.k}catch(e){}
+function save(){try{selected?sessionStorage.setItem(STORE,JSON.stringify({k:selected,at:Date.now()})):sessionStorage.removeItem(STORE)}catch(e){}}
 function labelOf(k){for(var i=0;i<KEYS.length;i++)if(KEYS[i][0]===k)return KEYS[i][1];return 'TOUS'}
 function norm(t){return String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/[’']/g,"'").replace(/\s+/g,' ').trim()}
 function keyOf(text){var t=norm(text);if(!t)return 'AUTRE';if(t.indexOf('EMBARQ')===0)return 'EMBARQ';if(t.indexOf('RETARD')===0)return 'RETARD';if(t.indexOf('ANNUL')===0)return 'ANNULE';if(t.indexOf('ARRIV')===0)return 'ARRIVE';if(t.indexOf('ATTERR')===0||t.indexOf('ATTERI')===0)return 'ATTERRI';if(t==='EN VOL')return 'ENVOL';if(t.indexOf('PARTI')===0)return 'PARTI';if(t.indexOf("A L'HEURE")===0||t==='PREVU'||t==='PROGRAMME')return 'HEURE';return 'AUTRE'}
@@ -95,20 +98,21 @@ function quick(){
   if(selected)rows().forEach(function(r){setHidden(r,rowKey(r)!==selected)});
 }
 function hook(){var o=window.__alyziaApplyHomeFilters;if(typeof o==='function'&&!o.__alzStatus){var f=function(){var r=o.apply(this,arguments);try{quick()}catch(e){}return r};f.__alzStatus=1;window.__alyziaApplyHomeFilters=f}}
-function choose(k){selected=(k==='*'||selected===k)?'':k;setOpen(false);quick();sync()}
+function choose(k){selected=(k==='*'||selected===k)?'':k;save();setOpen(false);quick();sync()}
 // Comme HORAIRES : bascule à l'appui (pointerdown), donc insensible à un redessin de la liste pendant le clic ; le click qui suit est ignoré.
 document.addEventListener('pointerdown',function(e){
   if(e.button>0)return;var t=e.target&&e.target.closest?e.target:null;if(!t)return;
-  var btn=t.closest('#app .alyzia-status-filter-btn'),it=t.closest('#app .alyzia-status-choice');
-  if(btn){e.preventDefault();e.stopPropagation();lastToggle=Date.now();setOpen(!menuOpen);return}
-  if(it){e.preventDefault();e.stopPropagation();lastToggle=Date.now();choose(it.getAttribute('data-k'))}
+  // Seul le bouton bascule à l'appui. Un choix du menu se fait au click : fermer le menu à l'appui laissait le click tomber sur la carte de vol dessous (la fiche du vol s'ouvrait).
+  var btn=t.closest('#app .alyzia-status-filter-btn');
+  if(btn){e.preventDefault();e.stopPropagation();lastToggle=Date.now();setOpen(!menuOpen)}
 },true);
 document.addEventListener('click',function(e){
   var t=e.target&&e.target.closest?e.target:null;if(!t)return;
   var btn=t.closest('#app .alyzia-status-filter-btn'),it=t.closest('#app .alyzia-status-choice');
-  if(btn||it){e.preventDefault();e.stopPropagation();if(Date.now()-lastToggle>700){if(btn)setOpen(!menuOpen);else choose(it.getAttribute('data-k'))}return}
+  if(it){e.preventDefault();e.stopPropagation();choose(it.getAttribute('data-k'));return}
+  if(btn){e.preventDefault();e.stopPropagation();if(Date.now()-lastToggle>700)setOpen(!menuOpen);return}
   if(menuOpen&&!t.closest('.alyzia-status-filter-wrap'))setOpen(false);
-  if(t.closest('#app .alyzia-home-clear'))selected='';   // la croix efface recherche et filtres, statut compris
+  if(t.closest('#app .alyzia-home-clear')){selected='';save()}   // la croix efface recherche et filtres, statut compris
   if(t.closest('#app .terminal-filter-bar,#app .home-pin,#app .alyzia-time-filter-wrap,#app .alyzia-home-clear,#app .day-nav-btn'))setTimeout(later,0);
 },true);
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&menuOpen)setOpen(false)});
@@ -120,7 +124,7 @@ try{new MutationObserver(function(list){
   for(var i=0;i<list.length;i++){var t=list[i].target;if(!own(t.nodeType===1?t:t.parentNode)){hook();quick();later();return}}
 }).observe(document.getElementById('app')||document.body,{childList:true,subtree:true})}catch(e){}
 [0,300,900,2000].forEach(function(ms){setTimeout(function(){hook();sync()},ms)});
-setInterval(function(){if(selected&&!document.hidden)quick()},1500);
+setInterval(function(){if(selected&&!document.hidden){quick();save()}},1500);
 window.__alyziaStatusFilterKey=keyOf;
 window.__alyziaStatusDebug=function(){return {selected:selected,counts:counts(),rows:rows().length,hidden:rows().filter(function(r){return r.hasAttribute('data-alz-hid')}).length,narrow:window.innerWidth<=900}};
 })();</script>`;
