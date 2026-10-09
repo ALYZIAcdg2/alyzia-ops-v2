@@ -10,7 +10,7 @@ async function patchJsonResponse(response,kind){
   if(!type.includes("application/json"))return response;
   let data;try{data=await response.clone().json()}catch{return response}
   if(kind==="flow"&&data?.ok&&Array.isArray(data.flights)){
-    data.flights=data.flights.map(f=>f?.nextSource==="STA OK"?f:{...f,nextSource:"FlightStats",nextChain:STA_PUBLIC_SOURCE_ORDER});
+    data.flights=data.flights.map(f=>f?.nextSource==="STA OK"?f:{...f,nextSource:"FIDS · FlightStats",nextChain:STA_PUBLIC_SOURCE_ORDER});
   }
   if(kind==="push"&&data?.ok)data.sources=STA_PUBLIC_SOURCE_ORDER;
   return json(data,response.status);

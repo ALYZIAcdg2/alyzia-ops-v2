@@ -6,12 +6,12 @@ const upper=v=>clean(v).toUpperCase();
 const json=(o,status=200)=>new Response(JSON.stringify(o),{status,headers:{"content-type":"application/json; charset=UTF-8","cache-control":"no-store"}});
 
 const PUBLIC_SOURCE_LABELS=[
-  ["FLIGHTSTATS","FlightStats"],["FLIGHTAWARE","FlightAware"],["FR24","Flightradar24"],["FLIGHTRADAR24","Flightradar24"],
+  ["FIDS","FIDS"],["FLIGHTSTATS","FlightStats"],["FLIGHTAWARE","FlightAware"],["FR24","Flightradar24"],["FLIGHTRADAR24","Flightradar24"],
   ["PLANEFINDER","PlaneFinder"],["SKYSCANNER","Skyscanner"],["FLIGHTVIEW","FlightView"],["WEGO","Wego"],
   ["IXIGO","Ixigo"],["KAYAK","Kayak"],["FLIGHTY","Flighty"],["PARIS_AEROPORT","Paris Aéroport"],
   ["SIMPLEFLYING","SimpleFlying"],["FLIGHTRADARS24","Flightradars24.fr"],["FLIGHTERA","Flightera"]
 ];
-const STA_CHAIN=["FlightStats","FlightAware","Flightradar24 exact","Flightera"];
+const STA_CHAIN=["FIDS","FlightStats","FlightAware","Flightradar24 exact","Flightera"];
 function publicLabel(source){const s=upper(source);if(!s)return "";for(const [key,label] of PUBLIC_SOURCE_LABELS)if(s.includes(key))return label;return ""}
 function flightNumber(airline,flight){const a=upper(airline),f=upper(flight);if(f.startsWith(a))return f.slice(a.length);return f.replace(/^[A-Z0-9]{2,3}(?=\d)/,"")}
 function latestPublicSourceInfo(x){
@@ -26,7 +26,7 @@ function latestPublicSourceInfo(x){
   for(const e of log){const label=publicLabel(e?.source);if(label)return {source:label,at:clean(e?.at)}}
   return {source:"DONNÉE EXISTANTE / IMPORT",at:""};
 }
-function cronPlan(x){const sta=clean(x.sta);return sta&&sta!=="—"?{next:"STA OK",chain:[]}:{next:"FlightStats",chain:STA_CHAIN}}
+function cronPlan(x){const sta=clean(x.sta);return sta&&sta!=="—"?{next:"STA OK",chain:[]}:{next:"FIDS · FlightStats",chain:STA_CHAIN}}
 async function publicFlow(env){
   const today=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const d=new Date(`${today}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+2);const until=d.toISOString().slice(0,10);

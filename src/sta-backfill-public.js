@@ -1,5 +1,6 @@
 import {withIcaoFallback,matchesFlightStatsOccurrence} from "./public-flight-alias.js";
 import {fetchStaFallbacks} from "./sta-public-fallbacks.js";
+import {getFeed,indexFeed,pickFeedRow,staFromRow} from "./fids-atd-sweep.js";
 
 const clean=v=>String(v??"").trim();
 const upper=v=>clean(v).toUpperCase();
@@ -93,8 +94,11 @@ export async function runStaBackfill(env,{limit=48,concurrency=4}={}){
   if(!missingBefore){const done={ok:true,mode:"STA_J_J1_PUBLIC_BACKFILL",date:scope.today,j1:scope.tomorrow,total:scope.flights.length,missingBefore:0,attempted:0,filled:0,missingAfter:0,complete:true,checkedAt:at};await saveLastRun(env,done);return done}
   const orderedMissing=fairMissingOrder(scope.missing);
   const batch=orderedMissing.slice(0,Math.max(1,Math.min(96,Number(limit)||48)));
+  let fidsIdx=null;try{const feed=await getFeed();if(feed?.rows)fidsIdx={[scope.today]:indexFeed(feed.rows,scope.today),[scope.tomorrow]:indexFeed(feed.rows,scope.tomorrow)}}catch{}
   const results=await mapLimit(batch,Math.max(1,Math.min(8,Number(concurrency)||4)),async flight=>{
-    const source=await fetchSta(flight);
+    // 1) FIDS : un seul appel pour tous les vols, déjà en cache ; 2) puis FlightStats et la chaîne habituelle.
+    const fr=fidsIdx&&pickFeedRow(fidsIdx[flight.date]||new Map(),{designator:flight.designator,std:String(flight.x.std||"").slice(0,5)}),fsta=fr?staFromRow(fr):"";
+    const source=fsta?{source:"FIDS_FLIGHTRADAR_LIVE",status:"OK",sta:fsta,checkedAt:new Date().toISOString(),attempts:[{source:"FIDS",status:"OK",checkedAt:new Date().toISOString()}]}:await fetchSta(flight);
     if(source.status!=="OK"||!source.sta){await writeAttempts(env,flight,source);return {identity:flight.identity,flight:flight.designator,status:source.status,changed:false,source:source.source||null,attempts:source.attempts||[]}}
     const write=await writeSta(env,flight,source);return {identity:flight.identity,flight:flight.designator,status:source.status,lookupDesignator:source.lookupDesignator||flight.designator,attempts:source.attempts||[],...write};
   });
