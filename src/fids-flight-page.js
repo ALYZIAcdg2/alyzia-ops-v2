@@ -71,6 +71,14 @@ export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now()
     if(!dryRun)await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();
     done.push({flight,ata:x.ata,atd:x.atd});
   }
+  if(!dryRun&&checked.length)await saveLastRun(env,{at,candidates:cand.length,updated:done.length,checked:checked.map(c=>({flight:c.flight,http:c.http,err:c.err,ata:c.parsed?.ata||"",atd:c.parsed?.atd||""}))});
   return {ok:true,candidates:cand.length,checked,updated:done.length,items:done};
 }
+// Dernier passage réel du cron (le diagnostic à blanc tourne dans une autre requête et ne prouve pas ce que le cron a pu lire).
+const KEY="fids_flight_page_v1";
+async function saveLastRun(env,state){try{
+  await env.OPS_DB.prepare(`CREATE TABLE IF NOT EXISTS ops_meta(k TEXT PRIMARY KEY,v TEXT)`).run();
+  await env.OPS_DB.prepare(`INSERT INTO ops_meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`).bind(KEY,JSON.stringify(state)).run();
+}catch{}}
+export async function loadLastRun(env){try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k=?`).bind(KEY).first();return r?.v?JSON.parse(r.v):null}catch{return null}}
 export function _resetFlightPageMemo(){tried.clear()}
