@@ -1,7 +1,7 @@
 // Passage « tableau FR24 » sur TOUS les vols CDG du jour, à chaque cron : l'index du tableau est en cache (8 min), donc aucune requête de plus.
 // Met à jour porte, immatriculation, type d'avion, ETD (vol pas encore parti) et heure de décollage (vol parti) quand ils changent ;
 // retire un ATD écrit par erreur à partir du tableau. Jamais une saisie manuelle. Évite de dépendre de l'ordre de priorité des vols.
-import {getBoard,matchRow,gateValue} from "./fr24-board.js";
+import {getBoard,matchRow,gateValue,fetchBoardRange,indexRows} from "./fr24-board.js";
 import {isJunkRegistration} from "./registration-guard.js";
 import {noteActualAircraft} from "./aircraft-change.js";
 
@@ -15,6 +15,18 @@ const normReg=v=>upper(v).replace(/[^A-Z0-9]/g,"");
 export function stdAlreadyPassed(std,nowMs){const m=/^(\d{2}):(\d{2})$/.exec(clean(std));if(!m)return false;const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(nowMs)).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)>Number(m[1])*60+Number(m[2])}
 const regOf=x=>clean(x?.reg||x?.registration||x?.aircraftRegistration);
 
+
+// Le tableau lu à chaque passage ne remonte que de 3 h : un vol d'hier soir retardé après minuit y est hors fenêtre (TU2655, STD 19:45 lu à 01:50). Une lecture du tableau depuis sa STD (2 pages au plus, au plus toutes les 8 min, seulement si un tel vol existe et que le tableau n'est pas en pause) le rapproche.
+let lateCache=null;
+const parisEpochSec=(date,clock)=>{const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(date),c=/^(\d{2}):(\d{2})$/.exec(clock);if(!m||!c)return 0;const guess=Date.UTC(+m[1],+m[2]-1,+m[3],+c[1],+c[2]);const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",day:"2-digit",hourCycle:"h23"}).formatToParts(new Date(guess)).map(x=>[x.type,x.value]));let d=(Number(p.hour)*60+Number(p.minute))-(+c[1]*60+ +c[2]);if(d>720)d-=1440;if(d<-720)d+=1440;return Math.floor((guess-d*60000)/1000)};
+async function lateRows(pending,{fetchImpl,nowMs}){
+  if(!pending.length)return [];
+  if(lateCache&&nowMs-lateCache.at<8*60000)return lateCache.rows;
+  const stds=pending.map(f=>parisEpochSec(f.date,f.std)).filter(Boolean);if(!stds.length)return [];
+  let rows=[];try{const r=await fetchBoardRange({fromSec:Math.min(...stds)-1800,maxPages:2,stopAfterSec:Math.max(...stds)+3600,fetchImpl});rows=r.rows||[]}catch{}
+  lateCache={at:nowMs,rows};return rows;
+}
+
 export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryRun=false}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const board=await getBoard({fetchImpl,nowMs});
@@ -22,12 +34,19 @@ export async function sweepBoardToday(env,{fetchImpl=fetch,nowMs=Date.now(),dryR
   // Aujourd'hui, et hier pour les vols d'hier soir retardés après minuit et pas encore atterris (le tableau les rapproche par leur date et leur STD d'origine).
   const date=parisDate(nowMs),yesterday=parisDate(nowMs-86400000),{results:all=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date IN (?,?) AND airline<>'SYS'`).bind(date,yesterday).all();
   const results=all.filter(r=>r.flight_date!==yesterday||(()=>{try{const x=JSON.parse(r.data_json||"{}");return !clean(x.ata)&&!clean(x.landing)}catch{return false}})());
+  // Vols d'hier pas retrouvés dans le tableau habituel : lecture complémentaire depuis leur STD.
+  let index=board.index;
+  {const pending=[];for(const r of results){if(r.flight_date===date)continue;let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}if(upper(x.origin||"CDG")!=="CDG")continue;
+    const airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,""),f={date:r.flight_date,airline,number,designator,std:hhmm(x.std||r.std)};
+    if(!matchRow(board.index,f))pending.push(f)}
+   const extra=await lateRows(pending,{fetchImpl,nowMs});
+   if(extra.length){const merged=new Map(board.index);for(const [k,v] of indexRows(extra))merged.set(k,[...(merged.get(k)||[]),...v]);index=merged}}
   const at=new Date(nowMs).toISOString(),counts={gate:0,reg:0,type:0,etd:0,takeoff:0,atdRemoved:0};let checked=0,updated=0;
   for(const r of results){
     let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
     if(upper(x.origin||"CDG")!=="CDG")continue;
     const airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):String(r.flight_number||"").replace(/^[A-Z0-9]{2,3}(?=\d)/,"");
-    const rowDate=r.flight_date||date,f={date:rowDate,airline,number,designator,std:hhmm(x.std||r.std)},row=matchRow(board.index,f);
+    const rowDate=r.flight_date||date,f={date:rowDate,airline,number,designator,std:hhmm(x.std||r.std)},row=matchRow(index,f);
     let changed=false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     const note=(field,from,to)=>{log.unshift({at,source:"PUBLIC_LIVE:FR24BOARD",field,from,to});changed=true;counts[field==="aircraft"?"type":field]=(counts[field==="aircraft"?"type":field]||0)+1};
     // ATD écrit à partir du tableau par une version précédente : c'était l'heure de décollage.

@@ -10,5 +10,5 @@ test("STD dépassée (heure de Paris)", () => {
 });
 test("l'ETD du tableau n'est plus effacé quand la STD est dépassée", () => {
   const s=fs.readFileSync(new URL("./fr24-board-sweep.js",import.meta.url),"utf8");
-  assert.match(s,/cur!==std&&\/FR24BOARD\/\.test\(upper\(x\.etdSource\)\)&&!stdAlreadyPassed\(std,nowMs\)/);
+  assert.match(s,/cur!==std&&\/FR24BOARD\/\.test\(upper\(x\.etdSource\)\)&&!\(rowDate<date\|\|stdAlreadyPassed\(std,nowMs\)\)/);
 });
