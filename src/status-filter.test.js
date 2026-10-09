@@ -33,6 +33,6 @@ test("sélection simple : un statut à la fois, re-toucher ou « TOUS LES STATUT
   assert.match(js,/dispatchEvent\(new Event\('resize'\)\)/);                                 // la croix de la recherche se repositionne
 });
 test("après un redessin de la liste, le bouton et le filtre sont remis dans le même cycle ; le bouton colle à la recherche",()=>{
-  assert.match(js,/obs=new MutationObserver\(function\(\)\{now\(\);later\(\)\}\)/);assert.match(js,/obs\.takeRecords\(\)/);
+  assert.match(js,/function quick\(\)/);assert.match(js,/function own\(/);assert.ok(!/getComputedStyle/.test(js.slice(js.indexOf('function quick'),js.indexOf('function own'))));assert.match(js,/setTimeout\(sync,300\)/);
   assert.match(STATUS_FILTER_UI,/\.alz-search-row\{[^}]*justify-content:flex-start/);
 });

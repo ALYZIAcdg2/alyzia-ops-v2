@@ -65,13 +65,21 @@ document.addEventListener('click',function(e){
   if(menuOpen&&!t.closest('.alz-status-wrap,.alz-status-band'))setOpen(false);
 },true);
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&menuOpen)setOpen(false)});
-var timer=null;function later(){clearTimeout(timer);timer=setTimeout(sync,60)}
+var timer=null;function later(){clearTimeout(timer);timer=setTimeout(sync,300)}
 document.addEventListener('input',function(e){if(e.target&&e.target.closest&&e.target.closest('.home-flight-search'))later()},true);
 document.addEventListener('click',function(e){if(e.target&&e.target.closest&&e.target.closest('#app .terminal-filter-bar,#app .home-pin,#app .alyzia-time-filter-wrap,#app .alyzia-home-clear,#app .day-nav-btn'))setTimeout(later,0)},true);
-// Quand l'application redessine la liste (rafraîchissement), le bouton et le filtre sont remis AVANT l'affichage suivant (dans le même cycle) : plus d'apparition / disparition.
-var busy=false,obs=null;
-function now(){if(busy)return;busy=true;try{sync()}catch(e){}finally{busy=false;try{obs&&obs.takeRecords()}catch(e){}}}
-try{obs=new MutationObserver(function(){now();later()});obs.observe(document.getElementById('app')||document.body,{childList:true,subtree:true})}catch(e){}
+// Quand l'application redessine la liste (rafraîchissement), le bouton et le filtre sont remis AVANT l'affichage suivant, par un passage léger (aucune mesure de mise en page).
+// Le calcul complet des nombres reste espacé (300 ms) : l'application a déjà beaucoup d'observateurs et ne doit pas être ralentie.
+function quick(){
+  var search=document.querySelector('#app .home-flight-search');if(!search)return;
+  if(!document.querySelector('#app .alz-status-wrap')){build(search);setOpen(menuOpen)}
+  var lb=document.querySelector('#app .alz-status-btn .alz-lbl'),bt=document.querySelector('#app .alz-status-btn');if(lb){var tx=selected?labelOf(selected):'STATUT';if(lb.textContent!==tx)lb.textContent=tx;bt.classList.toggle('active',!!selected)}
+  if(selected)rows().forEach(function(r){var hide=rowKey(r)!==selected;if(r.classList.contains('alz-status-hidden')!==hide)r.classList.toggle('alz-status-hidden',hide)});
+}
+function own(n){return !!(n&&n.closest&&n.closest('.alz-status-wrap,.alz-status-band'))}
+try{new MutationObserver(function(list){
+  for(var i=0;i<list.length;i++){var t=list[i].target;if(!own(t.nodeType===1?t:t.parentNode)){quick();later();return}}
+}).observe(document.getElementById('app')||document.body,{childList:true,subtree:true})}catch(e){}
 [0,300,900].forEach(function(ms){setTimeout(sync,ms)});
 window.__alyziaStatusFilterKey=keyOf;
 })();</script>`;
