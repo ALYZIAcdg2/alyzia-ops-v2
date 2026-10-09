@@ -16,8 +16,8 @@ test("les statuts affichés sur les cartes sont rangés dans les bons filtres",(
   for(const [t,k] of Object.entries(cases))assert.equal(keyOf(t),k,t);
 });
 test("bandeau de statuts : à côté de la recherche, défilant, suit le terminal et la recherche",()=>{
-  assert.match(js,/alz-search-row/);                        // même ligne que la recherche
-  assert.match(js,/overflow-x:auto/);                       // bandeau défilant
+  assert.match(STATUS_FILTER_UI,/\.alz-search-row\{display:flex/);  // même ligne que la recherche
+  assert.match(STATUS_FILTER_UI,/overflow-x:auto/);              // bandeau défilant
   assert.match(js,/function visibleWithoutUs/);             // comptage = sélection affichée (terminal, recherche, favoris, horaires)
   assert.match(js,/alz-sf-none/);                           // un statut sans vol disparaît du bandeau
   assert.match(js,/\.home-flight-search'\)\)later\(\)/);    // recalcul à chaque frappe dans la recherche
