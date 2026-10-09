@@ -8,7 +8,7 @@ const mins=v=>{const m=hhmm(v).match(/(\d+):(\d+)/);return m?Number(m[1])*60+Num
 const manual=(x,f)=>upper(x?.[f+"Source"]).includes("MANUAL")||Boolean(x?.manual?.[f]||x?.manualOverrides?.[f]||x?.manual_fields?.[f]);
 const parisDate=ms=>new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(ms));
 const UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";   // mêmes en-têtes que la lecture du flux FIDS général
-const tried=new Map();
+const tried=new Map(),GONE_MS=3*3600000;   // 404 / 410 : la page du vol n'existe plus, inutile de la relire avant longtemps
 export function flightPageUrl({flight,origin="CDG",dest,date,std}){
   const s=hhmm(std);if(!flight||!dest||!date||!s)return "";
   return `${BASE}/${encodeURIComponent(upper(flight))}/${upper(origin)}/${upper(dest)}/${date.replace(/-/g,"")}${s.replace(":","")}`;
@@ -18,7 +18,7 @@ export function parseFlightPage(html){
   const t=String(html||"");if(!/Flight Departure Times/.test(t))return null;
   const i=t.indexOf("Flight Arrival Times"),dep=i<0?t:t.slice(0,i),arr=i<0?"":t.slice(i);
   const act=b=>{const m=b.match(/Actual<br\s*\/?>\s*<strong[^>]*>\s*(\d{1,2}:\d{2})/i);return m?hhmm(m[1]):""};
-  const st=(t.match(/board__header-status[^>]*>\s*([^<]+?)\s*</)||[])[1]||"";
+  const st=(t.match(/class="board__header-status[^"]*"[^>]*>\s*([^<]+?)\s*</)||[])[1]||"";
   return {status:clean(st).toLowerCase(),atd:act(dep),ata:act(arr)};
 }
 export function pageAta(p,x){
@@ -59,6 +59,7 @@ export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now()
     if(!url)continue;
     let p=null,http=0,err="";
     try{const res=await fetchImpl(url,{headers:{accept:"text/html,*/*","user-agent":UA,referer:"https://flightradar.live/"},redirect:"follow",signal:AbortSignal.timeout(6000)});http=res.status;if(res.ok)p=parseFlightPage(await res.text())}catch(e){err=String(e?.message||e)}
+    if(!dryRun&&(http===404||http===410))tried.set(r.identity,nowMs+GONE_MS-RETRY_MS);
     checked.push({flight,url,http,err,parsed:p});if(!p)continue;
     let changed=false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     const ata=pageAta(p,x);
