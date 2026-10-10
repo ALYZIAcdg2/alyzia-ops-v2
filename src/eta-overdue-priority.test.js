@@ -1,5 +1,5 @@
 import test from "node:test";import assert from "node:assert/strict";
-import {priority,pickSlots,etaOverdueMin} from "./ops-public-live-flow-optimized.js";
+import {priority,pickSlots,etaOverdueMin,ataReadWanted} from "./ops-public-live-flow-optimized.js";
 const now=Date.parse("2026-10-09T20:00:00Z"),iso=min=>new Date(now+min*60000).toISOString();
 const dep={std:"18:00",atd:"18:05",takeoff:"18:15"};
 test("vol parti dont l'ETA est dépassée de 15 min sans LDG ni ATA : rang 0,1, avant tout vol plus lointain",()=>{
@@ -21,3 +21,12 @@ test("délai entre deux lectures : 6 min (jusqu'à 2 h), 15 min (jusqu'à 6 h), 
   assert.equal(at(500,40),false);assert.equal(at(500,61),true);
 });
 test("etaOverdueMin : null sans heure d'arrivée du modèle",()=>{assert.equal(etaOverdueMin({},now),null);assert.equal(Math.round(etaOverdueMin({statusArrivalUtc:iso(-30)},now)),30)});
+
+test("FlightStats est interrogé pour l'ATA d'un vol parti dont l'ETA est dépassée de 15 min, sans LDG ni ATA, même sans identifiant FS connu",()=>{
+  const x={atd:"18:05",takeoff:"18:15",eta:"19:30",statusArrivalUtc:iso(-20)};
+  assert.equal(ataReadWanted(x,now),true);
+  assert.equal(ataReadWanted({...x,statusArrivalUtc:iso(-10)},now),false);   // pas encore 15 min
+  assert.equal(ataReadWanted({...x,ata:"19:50"},now),false);
+  assert.equal(ataReadWanted({...x,landing:"19:40"},now),false);
+  assert.equal(ataReadWanted({eta:"19:30",statusArrivalUtc:iso(-20)},now),false);   // pas parti
+});

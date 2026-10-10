@@ -22,5 +22,7 @@ Ces règles ont été décidées avec l'exploitant. **Aucune nouvelle fonction n
 13. Un vol COMPLET (ATA réelle + ATD) n'est plus lu du tout.
 14. Un vol qui ne répond pas (TIMEOUT 25 s) passe au bout de la file ; le passage a une échéance de 40 s pour les lectures par vol.
 
+15. FlightStats est interrogé pour l'ATA (priorité FIDS, puis FlightStats, puis FlightAware) de tout vol parti dont l'ETA est dépassée de 15 min ou plus sans atterrissage ni ATA, même sans identifiant FlightStats connu (dans la limite des pages FlightStats permises par passage et de la pause automatique, qui ne sont pas modifiées).
+
 ## Passage automatique (cron)
-15. Étapes essentielles, jamais sautées : Gatenavo, flux FIDS en bloc, lectures par vol, tableau FR24, statuts. Les autres sont facultatives (sautées passé 60 s, durée maximale chacune). Les pages FIDS par vol sont en fin de passage.
+16. Étapes essentielles, jamais sautées : Gatenavo, flux FIDS en bloc, lectures par vol, tableau FR24, statuts. Les autres sont facultatives (sautées passé 60 s, durée maximale chacune). Les pages FIDS par vol sont en fin de passage.

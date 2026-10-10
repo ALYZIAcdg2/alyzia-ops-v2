@@ -3,7 +3,7 @@
 import test from "node:test";import assert from "node:assert/strict";import fs from "node:fs";
 import {derive} from "./status-model-test.js";
 import {lateBeyondStd15} from "./late-std15.js";
-import {priority,needsLiveRead,flightComplete,deriveAta} from "./ops-public-live-flow-optimized.js";
+import {priority,needsLiveRead,flightComplete,deriveAta,ataReadWanted} from "./ops-public-live-flow-optimized.js";
 import {fillStaFromFr24} from "./ops-public-live-flow-optimized.js";
 import {flightAwareEnabled} from "./fa-policy.js";
 import {wantsPage} from "./fids-flight-page.js";
@@ -59,7 +59,7 @@ test("R1 — une STA présente n'est jamais modifiée ; vide : renseignée une f
   assert.equal(fillStaFromFr24({staSource:"MANUAL"},"23:00","t"),false);
 });
 test("R6 — FlightAware coupé par défaut",()=>{assert.equal(flightAwareEnabled(),false)});
-test("R15 — étapes essentielles du passage jamais facultatives ; pages FIDS facultatives et en fin",()=>{
+test("R16 — étapes essentielles du passage jamais facultatives ; pages FIDS facultatives et en fin",()=>{
   const w=src("./v2-etd-public-wrapper.js");
   for(const n of ["gatenavo","fids-bulk","live-per-flight","fr24-board","status-model","status-model-final"])assert.ok(!new RegExp('B\\.step\\("'+n+'"[^\\n]*optional:true').test(w),n);
   assert.match(w,/B\.step\("fids-flight-pages"[^\n]*optional:true/);
@@ -69,6 +69,10 @@ test("R2 — seules deux ATD estimées existent (FIDS_ONTIME, FR24MOVE) ; la pag
   const f=src("./fids-flight-page.js");
   assert.match(f,/const atdOpen=x=>!clean\(x\.atd\)\|\|\/FIDS_ONTIME\|FR24MOVE\/\.test/);
 });
-test("le fichier des règles existe et liste les 15 règles",()=>{
-  const d=src("../docs/REGLES_VERROUILLEES.md");for(let i=1;i<=15;i++)assert.match(d,new RegExp("^"+i+"\\. ","m"),"règle "+i);
+test("R15 — FlightStats est interrogé pour l'ATA des vols parti dont l'ETA est dépassée de 15 min sans LDG ni ATA",()=>{
+  assert.equal(ataReadWanted({atd:"18:05",takeoff:"18:15",statusArrivalUtc:iso(-20)},NOW),true);
+  assert.match(src("./ops-public-live-flow-optimized.js"),/lastResort=forced\|\|\(pastStd&&atdMissing\)\|\|etaWanted\|\|ataReadWanted\(base\)/);
+});
+test("le fichier des règles existe et liste les 16 règles",()=>{
+  const d=src("../docs/REGLES_VERROUILLEES.md");for(let i=1;i<=16;i++)assert.match(d,new RegExp("^"+i+"\\. ","m"),"règle "+i);
 });
