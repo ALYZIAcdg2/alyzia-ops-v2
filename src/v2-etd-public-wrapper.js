@@ -380,8 +380,8 @@ export default {
         await loadRuntimeState(env);
         // Live facts (ATD, takeoff, landing…) first: they are the most time-critical; the ETD pass over every flight can be long.
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
-        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : juste après les lectures par vol, AVANT les étapes lentes (relecture FlightStats, ETD) qui la faisaient sauter ; facultative, lectures parallèles bornées à 4 s.
-        await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000,optional:true});
+        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : juste après les lectures par vol, AVANT les étapes lentes (relecture FlightStats, ETD) qui la faisaient sauter ; jamais sautée (8 s au plus : elle donne les ATA réelles) ; lectures parallèles bornées à 4 s.
+        await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000});
         // Relecture unique FlightStats des LDG manquants / ATA calculées : 1 vol par passage (8 s au plus), étape à part, après les pages FIDS (elle ne ralentit pas les lectures par vol).
         await B.step("fs-repair",()=>runFsRepair(env,{limit:1,perFlightMs:8000}),{ms:10000,optional:true});
         await B.step("etd-pass",()=>runEtd(env),{ms:30000,optional:true});

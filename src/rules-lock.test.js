@@ -63,10 +63,11 @@ test("R1 — une STA présente n'est jamais modifiée ; vide : renseignée une f
   assert.equal(fillStaFromFr24({staSource:"MANUAL"},"23:00","t"),false);
 });
 test("R6 — FlightAware coupé par défaut",()=>{assert.equal(flightAwareEnabled(),false)});
-test("R15 — étapes essentielles du passage jamais facultatives ; pages FIDS facultatives, avant les étapes lentes",()=>{
+test("R15 — étapes essentielles du passage jamais facultatives ; pages FIDS non sautables, avant les étapes lentes",()=>{
   const w=src("./v2-etd-public-wrapper.js");
   for(const n of ["gatenavo","fids-bulk","live-per-flight","fr24-board","status-model","status-model-final"])assert.ok(!new RegExp('B\\.step\\("'+n+'"[^\\n]*optional:true').test(w),n);
-  assert.match(w,/B\.step\("fids-flight-pages"[^\n]*optional:true/);
+  assert.ok(!/B\.step\("fids-flight-pages"[^\n]*optional:true/.test(w),"pages FIDS jamais sautées");
+  assert.match(w,/B\.step\("fids-flight-pages"[^\n]*ms:8000/);
   assert.ok(w.indexOf('B.step("fids-flight-pages"')<w.indexOf('B.step("status-model-final"'),"pages FIDS avant les statuts finaux");
   assert.ok(w.indexOf('B.step("fids-flight-pages"')<w.indexOf('B.step("fs-repair"')&&w.indexOf('B.step("fids-flight-pages"')<w.indexOf('B.step("etd-pass"'),"pages FIDS avant les étapes lentes");
 });
