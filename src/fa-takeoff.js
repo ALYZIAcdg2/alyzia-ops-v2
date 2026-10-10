@@ -61,10 +61,10 @@ export async function runFaTakeoff(env,{limit=1,perFlightMs=9000,nowMs=Date.now(
     const cur0=await env.OPS_DB.prepare(`SELECT data_json FROM flights WHERE identity=? LIMIT 1`).bind(r.identity).first();
     let cur={};try{cur=JSON.parse(cur0?.data_json||"{}")}catch{}
     cur.faTakeoffCheckedAt=at;if(fa?.url&&!clean(cur.flightAwareHistoryUrl))cur.flightAwareHistoryUrl=fa.url;
-    let res={flight:designator,status};
+    let res={flight:designator,status,read:{takeoff:clean(fa?.semantic?.takeoff),atd:clean(fa?.semantic?.atd)},url:clean(fa?.url).slice(-60)};
     if(!clean(cur.takeoff)&&!manual(cur,"takeoff")){
       const d=decideFaTakeoff(cur,fa?.semantic?.takeoff,nowMs);
-      if(d.ok){cur=applyFaTakeoff(cur,d.value,at);res={flight:designator,status:"TAKEOFF_WRITTEN",takeoff:d.value}}else res.reason=d.reason;
+      if(d.ok){cur=applyFaTakeoff(cur,d.value,at);res={...res,status:"TAKEOFF_WRITTEN",takeoff:d.value}}else res.reason=d.reason;
     }
     await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(cur),r.identity).run();
     out.push(res);
