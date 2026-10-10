@@ -385,8 +385,8 @@ export default {
         await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000});
         // Décollage (TO) réel sur FlightAware (règle 18) : un vol par passage, pour un vol parti sans TO dont FR24 n'a rien donné.
         {const faTo=await B.step("fa-takeoff",()=>runFaTakeoff(env,{limit:1}),{ms:12000});B.note("faTakeoff",faTo?(faTo.disabled?{disabled:true}:(faTo.results?.[0]||{pending:faTo.pending,checked:faTo.checked})):null)}   // le résultat (vol lu, réponse FlightAware, raison d'un rejet) figure dans /api/admin/cron-timing
-        // Relecture unique FlightStats des LDG manquants / ATA calculées : 1 vol par passage (8 s au plus), étape à part, après les pages FIDS (elle ne ralentit pas les lectures par vol).
-        await B.step("fs-repair",()=>runFsRepair(env,{limit:1,perFlightMs:8000}),{ms:10000,optional:true});
+        // Relecture unique FlightStats des LDG manquants / ATA calculées : 3 vols par passage (6 s chacun), étape à part, après les pages FIDS (elle ne ralentit pas les lectures par vol).
+        await B.step("fs-repair",()=>runFsRepair(env,{limit:3,perFlightMs:6000}),{ms:15000,optional:true});
         await B.step("etd-pass",()=>runEtd(env),{ms:30000,optional:true});
         if(isQuarterHour(controller))await B.step("ground",()=>runGround(env),{ms:20000,optional:true});
         // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.

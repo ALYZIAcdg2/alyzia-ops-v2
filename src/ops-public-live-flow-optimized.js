@@ -394,8 +394,10 @@ export function needsFsRepair(x){
   if(!x||clean(x.fsRepairAt)||manual(x,"ata")||manual(x,"landing"))return false;
   if(!(clean(x.atd)||clean(x.takeoff)))return false;
   const ataSrc=upper(x.ataSource),ldgSrc=upper(x.landingSource);
-  return (Boolean(clean(x.ata))&&!clean(x.landing))||(Boolean(clean(x.ata))&&/DERIVED/.test(ataSrc))||/FLIGHTSTATS/.test(ldgSrc)||(Boolean(clean(x.ata))&&/FLIGHTSTATS/.test(ataSrc));
+  return (Boolean(clean(x.ata))&&(!clean(x.landing)||!clean(x.takeoff)))||(Boolean(clean(x.ata))&&/DERIVED/.test(ataSrc))||/FLIGHTSTATS/.test(ldgSrc)||(Boolean(clean(x.ata))&&/FLIGHTSTATS/.test(ataSrc));
 }
+// ATA réelle (FIDS) mais LDG / TO manquant : FR24 d'abord (rapide, sans pause) ; FlightStats seulement si FR24 n'a rien donné à la première lecture (ldgFr24Tries).
+export function fr24FirstRepair(x){return Boolean(clean(x?.ata))&&!/DERIVED|FLIGHTSTATS/.test(upper(x?.ataSource))&&!/FLIGHTSTATS/.test(upper(x?.landingSource))&&!/FLIGHTSTATS/.test(upper(x?.takeoffSource))&&(!clean(x?.landing)||!clean(x?.takeoff))&&!Number(x?.ldgFr24Tries)}
 export function flightComplete(x){return Boolean(clean(x?.ata))&&!/DERIVED/.test(upper(x?.ataSource))&&Boolean(clean(x?.atd))}
 export function needsLiveRead(flightDate,today,x){
   if(flightComplete(x))return false;
@@ -411,7 +413,7 @@ export function pickSlots(sorted,size){
 function parisMinutes(){const p=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));return Number(p.hour)*60+Number(p.minute)}
 function attemptOf(source,r){return {source,status:r?.status||"ERROR",httpStatus:r?.httpStatus||0,checkedAt:r?.checkedAt||new Date().toISOString(),lookupCodeType:r?.lookupCodeType||"",lookupDesignator:r?.lookupDesignator||"",...(r?.detailsInfo?{detailsInfo:r.detailsInfo}:{})}}
 
-async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false,repair=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let fillStamp="",fsRepairStamp="",needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
+async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false,repair=false,skipFs=false}={}){let fr24Id="";let base={};try{base=JSON.parse(row.data_json||"{}")}catch{}const f=normalizeFlight(row,base),at=new Date().toISOString(),attempts=[],map={};let fillStamp="",fsRepairStamp="",needs=needFromCurrent(base),fsIdFound="",fsRefused=false,fsOk=false;const tooEarly=!recheck&&farFromDeparture(f.date,base.std||row.std,base);const pastStd=!farFromDeparture(f.date,base.std||row.std,{},Date.now(),0),forced=recheck||onDemand;if(recheck)needs=Object.fromEntries(Object.keys(needs).map(k=>[k,true]));
   // Tableau des départs FR24 de CDG (lecture en lot, mise en cache) : heure de départ réelle, immatriculation, type, identifiant FR24.
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
   {const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft,gate:false,etd:false};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
@@ -419,7 +421,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false,repai
   const atdMissing=(!clean(base.atd)||suspectAtd(base))&&!clean(map.FR24BOARD?.atd),etaWanted=needs.eta&&(clean(base.atd)||clean(base.takeoff))&&!clean(base.landing)&&!clean(base.ata),lastResort=forced||(pastStd&&atdMissing)||etaWanted||fidsGone(base);
   // FlightStats: seulement si un champ gate-time/status manque.
   const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
-  const fsFill=!forced&&fsFillLeft>0&&atdFillDue(base,f.date),repairFs=(repair||onDemand)&&needsFsRepair(base);
+  const fsFill=!forced&&fsFillLeft>0&&atdFillDue(base,f.date),repairMode=(repair||onDemand)&&needsFsRepair(base),repairFs=repairMode&&!skipFs;
   if(!tooEarly&&(forced||fsFill||repairFs||!arrivedStale(base,f.date))&&(repairFs||anyNeed(needs,["atd","eta","ata","status"]))&&(lastResort||repairFs||(fsIdKnown&&!clean(base.ata)&&(clean(base.atd)||clean(base.takeoff))))&&(fsIdKnown||((!repairFs||onDemand||fsPageLeft>1)&&flightStatsMayTry({...base,date:f.date},Date.now(),onDemand?1:fsPageLeft)))){if(!fsIdKnown&&!onDemand)fsPageLeft--;if(fsFill)fsFillLeft--;const fs=await fetchHtmlSource("FLIGHTSTATS",f);attempts.push(attemptOf("FLIGHTSTATS",fs));map.FLIGHTSTATS=fs?.semantic||{};if(/^\d+$/.test(clean(fs?.flightId)))fsIdFound=clean(fs.flightId);fsRefused=(fs?.httpStatus===403||fs?.httpStatus===429);fsOk=fs?.status==="OK";if(repairFs&&fsOk)fsRepairStamp=at;if(fsFill&&!fsRefused&&fs?.status!=="COOLDOWN")fillStamp=at}
   // FR24: seulement pour les faits trajectoire/appareil ou ETA/status manquants.
   needs={...needs,atd:needs.atd&&!clean(map.FLIGHTSTATS?.atd),eta:needs.eta&&!clean(map.FLIGHTSTATS?.eta),ata:needs.ata&&!clean(map.FLIGHTSTATS?.ata),status:needs.status&&!clean(map.FLIGHTSTATS?.status)};
@@ -479,7 +481,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false,repai
   }
   if(fillStaFromFr24(current,map.FR24?.sta,at))changed=true;
   // Relecture unique : seuls LDG et ATA sont écrits ; un LDG d'une autre source (FR24) n'est pas remplacé par celui de FlightStats.
-  if(repairFs){for(const h of [atd,takeoff,eta,reg,ac])h.value="";if(clean(current.landing)&&!/FLIGHTSTATS/.test(upper(current.landingSource)))landing.value=""}
+  if(repairMode){for(const h of [atd,eta,reg,ac])h.value="";if(clean(current.takeoff))takeoff.value="";if(clean(current.landing)&&!/FLIGHTSTATS/.test(upper(current.landingSource)))landing.value=""}
   if(setField(current,"atd",atd.value?atd:(moveAtdHit(current,map.FR24,takeoff.value||current.takeoff,Date.now(),f.origin)||atd),at))changed=true;if(setField(current,"takeoff",takeoff,at))changed=true;if(setField(current,"eta",eta,at))changed=true;if(setField(current,"landing",landing,at))changed=true;let ataHit=ata;if(!ataHit.value&&!clean(current.ata)){const d=deriveAta(landing.value||current.landing,AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(repairFs&&!ataHit.value&&/DERIVED/.test(upper(current.ataSource))&&!manual(current,"ata")){const d=deriveAta(clean(current.landing),AIRPORT_TZ[upper(f.destination)]||"",f.airline);if(d)ataHit=d}if(setField(current,"ata",ataHit,at))changed=true;if(setField(current,"reg",reg,at))changed=true;if(ac.value&&!manual(current,"aircraft")&&noteActualAircraft(current,ac.value,`PUBLIC_LIVE:${ac.source}`,at))changed=true;
   // Confirmation: stored on each time field (xxxConfirmed + xxxSources); read by the diagnostic and the admin.
   const conf={};for(const [field,hit] of [["atd",atd],["takeoff",takeoff],["eta",eta],["landing",landing],["ata",ataHit]]){if(!clean(current[field])||clean(current[field])!==clean(hit?.value))continue;const c=confirmation(map,field,hit.value);if(current[field+"Confirmed"]!==c.confirmed||clean(current[field+"Sources"])!==c.sources.join(",")){current[field+"Confirmed"]=c.confirmed;current[field+"Sources"]=c.sources.join(",");changed=true}conf[field]=c}
@@ -509,10 +511,14 @@ export async function runPublicLiveFlow(env,{limit=12,concurrency=3,recheck=fals
 export async function runFsRepair(env,{limit=3,perFlightMs=9000,nowMs=Date.now()}={}){
   if(!env?.OPS_DB)return {ok:false,error:"NO_DB"};
   const date=parisDate(),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date BETWEEN ? AND ? AND airline<>'SYS' ORDER BY flight_date,std,flight_number`).bind(addDaysIso(date,-1),date).all();
-  const todo=[];for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}if(!needsFsRepair(x))continue;const checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0;if(nowMs-checked<4*60000)continue;todo.push({r,checked})}
+  const todo=[];for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}if(!needsFsRepair(x))continue;const checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0;if(nowMs-checked<4*60000)continue;todo.push({r,x,checked})}
   todo.sort((a,b)=>a.checked-b.checked);
-  const timings=[],readOne=makeReadOne(r=>applyOne(env,r,{repair:true}),timings,perFlightMs),out=[];
-  for(const z of todo.slice(0,Math.max(1,limit)))out.push(await readOne(z.r));
+  const timings=[],out=[];
+  for(const z of todo.slice(0,Math.max(1,limit))){
+    const frFirst=fr24FirstRepair(z.x),readOne=makeReadOne(r=>applyOne(env,r,{repair:true,skipFs:frFirst}),timings,perFlightMs),res=await readOne(z.r);out.push(res);
+    // Première lecture FR24 sans résultat : FlightStats prendra la suite à la lecture suivante.
+    if(frFirst){try{const cur=await readCurrent(env,z.r.identity);if(cur&&(!clean(cur.landing)||!clean(cur.takeoff))){cur.ldgFr24Tries=1;await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(cur),z.r.identity).run()}}catch{}}
+  }
   return {ok:true,mode:"FS_REPAIR",pending:todo.length,checked:out.length,results:out.map(o=>({flight:o.flight,status:o.status}))};
 }
 export async function publicLiveStatus(env){let last=null;try{const r=await env.OPS_DB.prepare(`SELECT v FROM ops_meta WHERE k='v2_public_live_last'`).first();if(r?.v)last=JSON.parse(r.v)}catch{}return {ok:true,cadenceMinutes:2,sources:LIVE_PUBLIC_SOURCE_ORDER,disabledAutomatic:["FlightView","Wego","Ixigo","Kayak","Flightera","FlightAware generic"],lastRun:last}}

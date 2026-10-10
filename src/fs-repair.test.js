@@ -1,6 +1,6 @@
 import test,{beforeEach,afterEach,mock} from "node:test";
 import assert from "node:assert/strict";
-import {runFsRepair,runPublicLiveFlow,needsFsRepair,needsLiveRead,priority} from "./ops-public-live-flow-optimized.js";
+import {runFsRepair,runPublicLiveFlow,needsFsRepair,needsLiveRead,priority,fr24FirstRepair} from "./ops-public-live-flow-optimized.js";
 
 const today=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 beforeEach(()=>mock.timers.enable({apis:["Date"],now:Date.parse(today+"T10:00:00Z")}));
@@ -49,7 +49,7 @@ function mockFs(runway,gate){
 test("relecture FlightStats : LDG manquant rempli avec la première valeur (runway), ATA FIDS et ATD inchangés",async()=>{
   const restore=mockFs("07:48","07:55");
   try{
-    const u=await run({...flightBase,ata:"07:55",ataSource:"PUBLIC_LIVE:FIDS"});
+    const u=await run({...flightBase,ata:"07:55",ataSource:"PUBLIC_LIVE:FIDS",ldgFr24Tries:1});
     assert.ok(u,"enregistré");
     assert.equal(u.landing,"07:48");assert.equal(u.landingSource,"PUBLIC_LIVE:FLIGHTSTATS");
     assert.equal(u.ata,"07:55");assert.equal(u.ataSource,"PUBLIC_LIVE:FIDS");
@@ -94,4 +94,49 @@ test("relecture FlightStats : ATA manuelle jamais touchée",async()=>{
     const u=await run({...flightBase,ata:"08:00",ataSource:"MANUAL"});
     assert.equal(u,null,"vol manuel : aucune relecture, rien d'écrit");
   }finally{restore()}
+});
+
+
+function mkEnv(rows){const saved=[],store=rows.map(x=>JSON.stringify(x));
+  const env={OPS_DB:{prepare(sql){return {bind(...a){this.a=a;return this},
+    async all(){return {results:store.map((d,i)=>({identity:"id"+i,flight_date:today,flight_number:"E4777",airline:"E4",std:"05:00",data_json:d}))}},
+    async first(){return {data_json:store[0]}},
+    async run(){if(sql.startsWith("UPDATE")){store[0]=this.a[0];saved.push(JSON.parse(this.a[0]))}return {}}}}}};
+  return {env,saved};
+}
+// --- ATA réelle (FIDS) mais LDG manquant : FR24 d'abord, FlightStats seulement ensuite ---
+const [yy,mm,dd]=today.split("-"),mon=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(mm)-1];
+const history=`<html><tr><td>ZA-ABC</td><td>${dd} ${mon} ${yy}</td><td>2:08</td><td>Landed 07:48</td><td>STD 05:00</td><td>ATD 05:20</td><td>STA 07:25</td><td>FROM Paris (CDG)</td><td>TO Tirana (TIA)</td></tr></html>`;
+function mockFr24(withLanding){const real=globalThis.fetch,urls=[];
+  globalThis.fetch=async url=>{url=String(url);urls.push(url);
+    if(url.includes("/data/flights/e4777"))return new Response(withLanding?history:"<html></html>",{status:200,headers:{"content-type":"text/html"}});
+    return new Response("<html></html>",{status:200,headers:{"content-type":"text/html"}})};
+  return {urls,restore:()=>{globalThis.fetch=real}};
+}
+const ldgFlight={...flightBase,ata:"07:55",ataSource:"PUBLIC_LIVE:FIDS"};
+test("fr24FirstRepair : ATA FIDS réelle + LDG vide, jamais tenté → FR24 d'abord ; ATA calculée / FlightStats / déjà tenté → non",()=>{
+  assert.equal(fr24FirstRepair(ldgFlight),true);
+  assert.equal(fr24FirstRepair({...ldgFlight,ldgFr24Tries:1}),false);
+  assert.equal(fr24FirstRepair({...ldgFlight,ataSource:"PUBLIC_LIVE:DERIVED_LANDING_PLUS_10"}),false);
+  assert.equal(fr24FirstRepair({...ldgFlight,ataSource:"PUBLIC_LIVE:FLIGHTSTATS"}),false);
+  assert.equal(fr24FirstRepair({...ldgFlight,landing:"07:48",takeoff:"05:20"}),false,"rien ne manque");
+  assert.equal(needsFsRepair({...ldgFlight,landing:"07:48",takeoff:""}),true,"TO manquant : à réparer aussi");
+});
+test("LDG manquant, FR24 le donne : écrit depuis FR24, FlightStats jamais appelé, ATA FIDS intacte",async()=>{
+  const {env,saved}=mkEnv([ldgFlight]),m=mockFr24(true);
+  try{
+    await runFsRepair(env,{limit:3,nowMs:Date.now()});
+    const w=saved.at(-1);
+    assert.equal(w.landing,"07:48");assert.equal(w.landingSource,"PUBLIC_LIVE:FR24");
+    assert.equal(w.ata,"07:55");assert.equal(w.ataSource,"PUBLIC_LIVE:FIDS");assert.equal(w.atd,"05:10");
+    assert.ok(!m.urls.some(u=>/flightstats/i.test(u)),"FlightStats non appelé : "+m.urls.join(" | "));
+  }finally{m.restore()}
+});
+test("LDG manquant, FR24 n'a rien : FlightStats non appelé à la 1re lecture, ldgFr24Tries=1 (FlightStats à la suivante)",async()=>{
+  const {env,saved}=mkEnv([ldgFlight]),m=mockFr24(false);
+  try{
+    await runFsRepair(env,{limit:3,nowMs:Date.now()});
+    assert.ok(!m.urls.some(u=>/flightstats/i.test(u)),"FlightStats non appelé : "+m.urls.join(" | "));
+    const w=saved.at(-1);assert.equal(w.ldgFr24Tries,1);assert.ok(!w.landing);assert.equal(w.ata,"07:55");
+  }finally{m.restore()}
 });
