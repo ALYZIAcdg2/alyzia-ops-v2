@@ -43,7 +43,8 @@ function find(flight,date){return (flightsCache||[]).find(x=>x.flight===flight&&
 function latest(x,key){return (x.attempts||[]).filter(a=>a.s===key).slice(-1)[0]}
 // Dernière lecture « utile » pour le bilan : FlightAware ne concerne plus que les vols JU (les autres ne sont plus lus : ils n'entrent plus dans ses chiffres) ;
 // un « en pause » ancien sans pause en cours n'est plus un refus actuel, le vol est simplement à relire (« non lu »).
-const SRC_ONLY={FLIGHTAWARE:['JU']};
+// FlightAware est ARRÊTÉ (défi anti-robot, aucune lecture automatique) : plus aucun vol n'est compté pour lui, les vols JU n'y figurent plus.
+const SRC_ONLY={FLIGHTAWARE:[]};
 const pauseActive=key=>(typeof pausesCache!=='undefined'?pausesCache:[]).some(p=>p.key===key&&Date.parse(p.until)>Date.now());
 function latestEff(x,key){const a=latest(x,key);if(!a)return a;const only=SRC_ONLY[key];if(only&&!only.includes(String(x.flight||'').replace(/\s+/g,'').slice(0,2).toUpperCase()))return undefined;if(a.st==='COOLDOWN'&&!pauseActive(key))return undefined;return a}
 function pills(x){const by=contributions(x);return SRC.map(s=>{const a=latestEff(x,s[0]);let k=kind(a),t=a?label(a):'pas encore lu';if(k==='none'&&by[s[0]]&&by[s[0]].length){k='ok';t='a apporté '+by[s[0]].map(c=>c.f).join(', ')}return '<span class="adx-p '+k+'" title="'+esc(s[2]+' : '+t)+'">'+s[1]+'</span>'}).join('')}
@@ -79,7 +80,7 @@ function openSourceList(key){
   const row=e=>{const a=e.a,why=a?esc(label(a)+(a.d?' · '+a.d:'')+(a.h?' · HTTP '+a.h:'')):(e.c.length?'a apporté '+esc(e.c.map(v=>v.f).join(', ')):'pas encore lu'),at=(a&&a.at)||(e.c[0]&&e.c[0].at)||'';
     return '<tr><td><b>'+esc(e.x.flight)+'</b></td><td>'+esc(e.x.std||'')+'</td><td>'+esc(e.x.destination||'')+'</td><td>'+esc(e.x.flightStatus||'')+'</td><td>'+why+'</td><td class="adx-t">'+(at?hm(at):'—')+'</td></tr>'};
   const sec=(k,open)=>{const c=cats[k];if(!c.l.length)return '';return '<details'+(open?' open':'')+' style="margin:8px 0"><summary style="cursor:pointer;font-weight:900;padding:6px 0"><span class="adx-p '+(k==='unread'||k==='old'?'none':k)+'">'+c.t+'</span> '+c.l.length+' vol'+(c.l.length>1?'s':'')+'</summary><div class="adx-scroll"><table><colgroup><col style="width:14%"><col style="width:9%"><col style="width:9%"><col style="width:16%"><col style="width:44%"><col style="width:8%"></colgroup><thead><tr><th>VOL</th><th>STD</th><th>DEST</th><th>STATUT</th><th>DÉTAIL</th><th>HEURE</th></tr></thead><tbody>'+c.l.map(row).join('')+'</tbody></table></div></details>'};
-  const html='<div class="adx-modal"><div class="miss">'+flights.length+' vols du '+esc(date)+' · '+Object.keys(cats).map(k=>cats[k].t+' '+cats[k].l.length).join(' · ')+'</div>'+sec('err',true)+sec('block',true)+sec('none',false)+sec('unread',false)+sec('old',false)+sec('ok',false)+'</div>';
+  const html='<div class="adx-modal"><div class="miss">'+(key==='FLIGHTAWARE'?'FLIGHTAWARE ARRÊTÉ · aucune lecture automatique (défi anti-robot de FlightAware) · aucun vol suivi':flights.length+' vols du '+esc(date)+' · '+Object.keys(cats).map(k=>cats[k].t+' '+cats[k].l.length).join(' · '))+'</div>'+sec('err',true)+sec('block',true)+sec('none',false)+sec('unread',false)+sec('old',false)+sec('ok',false)+'</div>';
   if(typeof showModal==='function')showModal(def[2]+' · détail du bilan',date,html);
 }
 window.alzAdminSourceList=openSourceList;

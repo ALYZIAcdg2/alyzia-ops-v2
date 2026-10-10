@@ -21,8 +21,8 @@ function ceilFive(d){return nextFive(new Date(d.getTime()-1))}
 function atLocal(date,hhmm='00:00'){const [h,m]=String(hhmm||'00:00').split(':').map(Number);const d=new Date(date+'T00:00:00');d.setHours(Number.isFinite(h)?h:0,Number.isFinite(m)?m:0,0,0);return d}
 function colIdx(tr,name){const heads=[...(tr.closest('table')?.querySelectorAll('thead th')||[])].map(t=>t.textContent.trim().toUpperCase());return heads.indexOf(name)}
 function cellText(tr,name,fallback){const i=colIdx(tr,name);return String(tr.cells?.[i>=0?i:fallback]?.textContent||'')}
-function stateText(tr){return cellText(tr,'ÉTAT',11).trim().toUpperCase()}
-function missText(tr){return cellText(tr,'MANQUE',13).toUpperCase()}
+function stateText(tr){return cellText(tr,'ÉTAT',14).trim().toUpperCase()}
+function missText(tr){return cellText(tr,'MANQUE',16).toUpperCase()}
 function futureBaseTime(date,std,now){
   if(/^\d{2}:\d{2}$/.test(std)){const at=atLocal(date,std);at.setMinutes(at.getMinutes()-180);return at>now?ceilFive(at):nextFive(now)}
   return atLocal(date,'00:05');
@@ -31,7 +31,7 @@ function planFromRow(tr){
   // Prochain traitement = ce que le cron fait réellement (toutes les 2 min) avec les sources publiques : FIDS (ATD / ETA / ATA / ETD),
   // tableau FR24 CDG (porte, immatriculation, type, ETD, décollage), FlightStats (STA), FlightAware (dernier recours). Aucune API payante.
   const date=document.getElementById('adminDateInput')?.value||'';if(!date)return null;
-  const std=String(tr.cells?.[3]?.textContent||'').trim(),sta=String(tr.cells?.[4]?.textContent||'').trim(),atd=String(tr.cells?.[6]?.textContent||'').trim(),reg=String(tr.cells?.[10]?.textContent||'').trim();
+  const std=cellText(tr,'STD',3).trim(),sta=cellText(tr,'STA',4).trim(),atd=cellText(tr,'ATD',6).trim(),reg=cellText(tr,'REG',10).trim();
   const state=stateText(tr),miss=missText(tr),today=adminData?.date||new Date().toISOString().slice(0,10),now=new Date();
   if(state==='OK'&&date<=today)return {done:true,label:'TERMINÉ'};
   if(date>today){

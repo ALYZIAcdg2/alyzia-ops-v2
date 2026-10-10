@@ -40,7 +40,7 @@ function setHidden(r,hide){if(r.classList.contains('alyzia-status-hidden')!==hid
 function visibleWithoutUs(r){var had=r.classList.contains('alyzia-status-hidden');if(had)setHidden(r,false);var ok=getComputedStyle(r).display!=='none';if(had)setHidden(r,true);return ok}
 // Nombre de vols par statut dans la sélection affichée (terminal, recherche, favoris, tranche horaire, vols passés), sans tenir compte du statut choisi.
 function counts(){var c={};rows().forEach(function(r){if(r.classList.contains('ops-skip')||!visibleWithoutUs(r))return;var k=rowKey(r);c[k]=(c[k]||0)+1});return c}
-function controlsHost(){var all=Array.prototype.slice.call(document.querySelectorAll('#app button')).filter(function(b){return norm(b.textContent)==='ALL'&&!b.closest('.flight-home-row')})[0];return all?all.parentElement:null}
+function controlsHost(){var all=Array.prototype.slice.call(document.querySelectorAll('#app button')).filter(function(b){return norm(b.textContent)==='ALL'&&!b.closest('.flight-home-row')&&!b.closest('.admin-native')})[0];return all?all.parentElement:null}
 function setOpen(v){menuOpen=!!v;var m=document.querySelector('#app .alyzia-status-filter-menu');if(m)m.classList.toggle('open',menuOpen)}
 function ensure(){
   var host=controlsHost();if(!host)return null;
