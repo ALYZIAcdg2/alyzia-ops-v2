@@ -21,7 +21,8 @@ let enabled=false;
 export const flightAwareEnabled=()=>enabled;
 export const setFlightAwareEnabled=v=>{enabled=Boolean(v)};
 // Usage étroit, réglage à part : lire UNIQUEMENT le décollage (TO) réel sur FlightAware pour un vol parti dont FR24 n'a pas donné le TO (règle 18). L'interrupteur général ci-dessus ne le commande pas.
-let takeoffEnabled=true;
+// ARRÊTÉ le 10/10 : FlightAware répond 429 « Enable JavaScript and cookies to continue » (défi anti-robot Cloudflare) à chaque lecture de la page du vol ; pas de contournement. Réactivable ici si cela change.
+let takeoffEnabled=false;
 export const faTakeoffEnabled=()=>takeoffEnabled;
 export const setFaTakeoffEnabled=v=>{takeoffEnabled=Boolean(v)};
 export function flightAwareAllowed(flight,x,nowMs=Date.now(),flightDate=""){return enabled&&atdOverdue(x,nowMs,flightDate)}

@@ -1,7 +1,15 @@
 import test from "node:test";import assert from "node:assert/strict";
 import {wantsFaTakeoff,decideFaTakeoff,applyFaTakeoff,runFaTakeoff,faTakeoffOrder} from "./fa-takeoff.js";
 import {fetchFlightAwareLive} from "./ops-public-live-flow-optimized.js";
-import {setFaTakeoffEnabled,flightAwareEnabled} from "./fa-policy.js";
+import {setFaTakeoffEnabled,faTakeoffEnabled,flightAwareEnabled} from "./fa-policy.js";
+
+// L'usage est arrêté par défaut (défi anti-robot de FlightAware) : les tests de la logique l'allument explicitement.
+setFaTakeoffEnabled(true);
+test("par défaut (hors tests) le TO FlightAware est arrêté",async()=>{
+  const {readFileSync}=await import("node:fs");
+  assert.match(readFileSync(new URL("./fa-policy.js",import.meta.url),"utf8"),/let takeoffEnabled=false;/);
+  assert.equal(faTakeoffEnabled(),true,"allumé pour ce fichier de tests");
+});
 
 const NOW=Date.parse("2026-10-10T10:44:00Z");   // 12:44 Paris
 const tk={flight:"TK1830",airline:"TK",std:"07:20",origin:"CDG",destination:"IST",atd:"10:56",atdSource:"PUBLIC_LIVE:FIDS",status:"PARTI"};

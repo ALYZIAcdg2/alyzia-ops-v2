@@ -103,4 +103,5 @@ test("R18 — TO FlightAware : usage étroit, étape du cron à part ; FlightAwa
   assert.match(f,/FIDS_ONTIME\|FR24MOVE/);assert.match(f,/takeoff:\s*value|takeoff:value/);
   assert.ok(!/atd:\s*(?:fa|d\.)/.test(f),"jamais d'ATD lue sur FlightAware");
   assert.match(p,/let enabled=false/,"FlightAware général arrêté");
+  assert.match(p,/let takeoffEnabled=false;/,"TO FlightAware arrêté (défi anti-robot, 10/10)");
 });
