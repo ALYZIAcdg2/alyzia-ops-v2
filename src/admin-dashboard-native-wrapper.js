@@ -20,7 +20,7 @@ function statusText(x){return upper([x.opsStatus,x.status,x.flight_status,x.prov
 function isCancelled(x){const s=statusText(x);return s.includes("CANCEL")||s.includes("ANNUL")}
 export function classify({row,x},now){
   const date=row.flight_date;
-  const std=hhmm(x.std||row.std),sta=hhmm(x.sta),etd=hhmm(x.etd||x.edt),atd=hhmm(x.atd),eta=hhmm(x.eta),ata=hhmm(x.ata);
+  const std=hhmm(x.std||row.std),sta=hhmm(x.sta),etd=hhmm(x.etd||x.edt),atd=hhmm(x.atd),eta=hhmm(x.eta),ata=hhmm(x.ata),takeoff=hhmm(x.takeoff),landing=hhmm(x.landing);
   const gate=clean(x.gate||x.departureGate||x.departure_gate),reg=clean(x.reg||x.registration||x.aircraftRegistration);
   const flight=upper(x.flight||x.flight_number||row.flight_number),destination=upper(x.destination||x.dest||x.arrival||"");
   const missing=[];if(!std)missing.push("STD");if(!sta)missing.push("STA");
@@ -38,6 +38,9 @@ export function classify({row,x},now){
   else if(future){if(!std&&!sta)state="NON TRAITÉ"}
   else if(past||departed){
     if(!atd)missing.push("ATD");
+    // Décollage manquant : vol parti (ATD, ou statut parti / en vol / posé / arrivé). Atterrissage manquant : vol posé (ATA ou statut atterri / arrivé).
+    if(!takeoff)missing.push("TO");
+    if(!landing&&(ata||["ATTERI","ATTERRI","ARRIVÉE"].includes(flightStatus)))missing.push("LDG");
     if(!ata)missing.push("ATA");
     state=missing.length?"EN ATTENTE":"OK";
   }else if(today){
@@ -62,7 +65,7 @@ export function classify({row,x},now){
   if(atdConflict&&!cancelled){state="À CONTRÔLER";missing.push("ATD à vérifier")}
   const log=(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field).slice(0,80).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:scrubPaidNames(clean(e.source))}));
   // Affichage : « PRÉVU » devient « À L'HEURE » comme dans la liste et la fiche vol (la valeur interne reste PRÉVU pour les règles).
-  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus:flightStatus==="PRÉVU"?"À L'HEURE":flightStatus,std,sta,etd,atd,eta,ata,gate,reg,aircraft:clean(x.aircraftActual||x.aircraft),log,changes:(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field&&Date.now()-(Date.parse(e.at)||0)<6*3600000).slice(0,8).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:scrubPaidNames(clean(e.source))})),state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at),liveAt:clean(x.publicLiveBackfill?.checkedAt),attempts:[...(Array.isArray(x.publicLiveBackfill?.attempts)?x.publicLiveBackfill.attempts:[]).map(a=>({s:upper(a.source),st:clean(a.status),h:Number(a.httpStatus||0)||0,d:clean(a.detailsInfo),at:clean(a.checkedAt)})),...(upper(x.parisAeroportVia)==="GATENAVO"&&clean(x.parisAeroportStatusCheckedAt)?[{s:"GATENAVO",st:"OK",h:0,d:"",at:clean(x.parisAeroportStatusCheckedAt)}]:[])]};
+  return {date,flight,destination,airline:upper(x.airline||row.airline||""),flightStatus:flightStatus==="PRÉVU"?"À L'HEURE":flightStatus,std,sta,etd,atd,takeoff,eta,landing,ata,gate,reg,aircraft:clean(x.aircraftActual||x.aircraft),log,changes:(Array.isArray(x.flightInfoLog)?x.flightInfoLog:[]).filter(e=>e&&e.field&&Date.now()-(Date.parse(e.at)||0)<6*3600000).slice(0,8).map(e=>({at:clean(e.at),f:clean(e.field),from:clean(e.from),to:clean(e.to),s:scrubPaidNames(clean(e.source))})),state,missing:[...new Set(missing)],checkedAt:clean(x.liveLastCheckedAt||x.oagLastCheckedAt||x.skylinkRecoveryLastCheckedAt||x.updatedAt||row.updated_at),liveAt:clean(x.publicLiveBackfill?.checkedAt),attempts:[...(Array.isArray(x.publicLiveBackfill?.attempts)?x.publicLiveBackfill.attempts:[]).map(a=>({s:upper(a.source),st:clean(a.status),h:Number(a.httpStatus||0)||0,d:clean(a.detailsInfo),at:clean(a.checkedAt)})),...(upper(x.parisAeroportVia)==="GATENAVO"&&clean(x.parisAeroportStatusCheckedAt)?[{s:"GATENAVO",st:"OK",h:0,d:"",at:clean(x.parisAeroportStatusCheckedAt)}]:[])]};
 }
 function baseProvider(v){const p=upper(v);if(p.startsWith("AIRLABS"))return "AIRLABS";if(p.startsWith("SKYLINK"))return "SKYLINK";if(p.startsWith("OAG"))return "OAG";if(p.includes("AERODATABOX")||p.startsWith("ADB"))return "AERODATABOX";if(p.startsWith("OPENSKY"))return "OPENSKY";if(p.startsWith("QUARK"))return "QUARK";if(p.startsWith("AVIATIONDATA"))return "AVIATIONDATA";if(p.startsWith("FLIGHTERA"))return "FLIGHTERA";if(p.startsWith("KAYAK"))return "KAYAK";if(p.startsWith("SERPAPI"))return "SERPAPI";if(p.startsWith("FLIGHTRADAR1"))return "FLIGHTRADAR1";if(p.startsWith("FLIGHTRADAR8"))return "FLIGHTRADAR8";if(p.startsWith("FR24DEP"))return "FR24DEP";if(p.startsWith("FR24API"))return "FR24API";if(p.startsWith("CDGBOARD"))return "CDGBOARD";return p}
 function quotaLimit(env,key){
