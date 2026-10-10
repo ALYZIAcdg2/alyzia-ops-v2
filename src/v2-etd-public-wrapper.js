@@ -4,7 +4,7 @@ import {ETD_PUBLIC_SOURCE_ORDER} from "./etd-public-flow.js";
 import {runEtdPublicFlowSafe,etdPublicStatusSafe} from "./etd-public-runner.js";
 import {normalizeFr24EtdLocalTime} from "./etd-fr24-localtime.js";
 import {runGroundPublicFlow,groundPublicStatus} from "./ground-public-flow.js";
-import {runPublicLiveFlow,runLiveForFlight,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER,LIVE_RUN_BUDGET_MS,FLIGHT_READ_TIMEOUT_MS} from "./ops-public-live-flow-optimized.js";
+import {runPublicLiveFlow,runFsRepair,runLiveForFlight,publicLiveStatus,LIVE_PUBLIC_SOURCE_ORDER,LIVE_RUN_BUDGET_MS,FLIGHT_READ_TIMEOUT_MS} from "./ops-public-live-flow-optimized.js";
 import {recoverValidatedLiveFacts} from "./ops-public-live-validated-recovery.js";
 import {recoverFlightAwareExactHistory} from "./flightaware-exact-history.js";
 import {runPublicSourceCandidateTest,CANDIDATE_PUBLIC_SOURCES} from "./public-source-candidate-test.js";
@@ -375,6 +375,8 @@ export default {
         await loadRuntimeState(env);
         // Live facts (ATD, takeoff, landing…) first: they are the most time-critical; the ETD pass over every flight can be long.
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
+        // Relecture unique FlightStats des LDG manquants / ATA calculées : 3 vols par passage, étape à part (elle ne ralentit pas les lectures par vol).
+        await B.step("fs-repair",()=>runFsRepair(env,{limit:3}),{ms:25000,optional:true});
         await B.step("etd-pass",()=>runEtd(env),{ms:30000,optional:true});
         if(isQuarterHour(controller))await B.step("ground",()=>runGround(env),{ms:20000,optional:true});
         // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.

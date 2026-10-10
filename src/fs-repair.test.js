@@ -1,6 +1,6 @@
 import test,{beforeEach,afterEach,mock} from "node:test";
 import assert from "node:assert/strict";
-import {runPublicLiveFlow,needsFsRepair,needsLiveRead,priority} from "./ops-public-live-flow-optimized.js";
+import {runFsRepair,runPublicLiveFlow,needsFsRepair,needsLiveRead,priority} from "./ops-public-live-flow-optimized.js";
 
 const today=new Intl.DateTimeFormat("fr-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 beforeEach(()=>mock.timers.enable({apis:["Date"],now:Date.parse(today+"T10:00:00Z")}));
@@ -19,11 +19,10 @@ test("needsFsRepair : vols visés et vols exclus",()=>{
   assert.equal(needsFsRepair({...base}),false,"en vol, sans ATA");
 });
 
-test("un vol à réparer est relu (même « complet ») après les vols urgents, un vol réparé ne l'est plus",()=>{
+test("la relecture normale ne change pas : un vol complet n'est pas relu par les lectures par vol (la réparation a sa propre étape)",()=>{
   const x={atd:"05:10",takeoff:"05:20",ata:"07:55",ataSource:"PUBLIC_LIVE:FIDS",std:"05:00"};
-  assert.equal(needsLiveRead(today,today,x),false,"un vol complet n'est pas relu par la lecture normale");
-  assert.equal(priority({flight_date:today,std:"05:00"},x,720)[0],1.7);
-  assert.equal(needsLiveRead(today,today,{...x,landing:"07:45",fsRepairAt:"x"}),false);
+  assert.equal(needsLiveRead(today,today,x),false);
+  assert.ok(priority({flight_date:today,std:"05:00"},x,720)[0]>=2);
 });
 
 const page=(runway,gate)=>`<html><body>CDG Paris Flight Gate Times 09-Oct-2026 Scheduled 05:00 CEST Actual 05:10 CEST Flight Runway Times 09-Oct-2026 Scheduled -- Actual 05:20 CEST Terminal 2D Arrival TIA Tirana Flight Gate Times 09-Oct-2026 Scheduled 07:25 CEST Actual ${gate} CEST Flight Runway Times 09-Oct-2026 Scheduled -- Actual ${runway} CEST Terminal - Tail Number ZA-ABC Flight Time Actual 2h 23m VIEW FLIGHT STATUS Event Timeline Time Date UTC CEST Event Data Updated 9 Oct 20:14 Estimated Runway Arrival changed Actual 09:59 Actual 09:58</body></html>`;
@@ -34,8 +33,8 @@ async function run(flight){
     async all(){return {results:[{identity:"id1",flight_date:today,flight_number:"E4777",airline:"E4",std:"05:00",data_json:JSON.stringify(flight)}]}},
     async first(){return sql.includes("SELECT data_json")?{data_json:JSON.stringify(flight)}:null},
     async run(){return {}}}},batch:async()=>[]}};
-  await runPublicLiveFlow(env,{limit:1,concurrency:1});
-  return update;
+  const r=await runFsRepair(env,{limit:3,nowMs:Date.now()});
+  run.last=r;return update;
 }
 const flightBase={airline:"E4",flight:"E4777",std:"05:00",sta:"07:25",origin:"CDG",destination:"TIA",dest:"TIA",atd:"05:10",atdSource:"PUBLIC_LIVE:FIDS",takeoff:"05:20",takeoffSource:"PUBLIC_LIVE:FR24",flightStatsId:"123456",flightStatsIdDate:today,reg:"ZA-ABC",regSource:"FR24",aircraftActual:"B738"};
 function mockFs(runway,gate){
@@ -74,6 +73,18 @@ test("relecture FlightStats : LDG faux d'origine FlightStats (heure de décollag
   try{
     const u=await run({...flightBase,landing:"05:20",landingSource:"PUBLIC_LIVE:FLIGHTSTATS",ata:"05:30",ataSource:"PUBLIC_LIVE:DERIVED_LANDING_PLUS_10"});
     assert.equal(u.landing,"07:48");assert.equal(u.ata,"07:55");assert.equal(u.ataSource,"PUBLIC_LIVE:FLIGHTSTATS");
+  }finally{restore()}
+});
+
+test("étape fs-repair : 3 vols au plus par passage, les plus anciennement lus d'abord, un vol lu il y a moins de 4 min attend",async()=>{
+  const restore=mockFs("07:48","07:55");
+  const mk=(n,checked)=>({identity:"id"+n,flight_date:today,flight_number:"E477"+n,airline:"E4",std:"05:00",data_json:JSON.stringify({...flightBase,flight:"E477"+n,flightStatsId:"12345"+n,ata:"07:55",ataSource:"PUBLIC_LIVE:FIDS",publicLiveBackfill:{checkedAt:checked}})});
+  const rows=[mk(1,"2026-01-01T00:00:00Z"),mk(2,"2026-01-02T00:00:00Z"),mk(3,"2026-01-03T00:00:00Z"),mk(4,"2026-01-04T00:00:00Z"),mk(5,new Date().toISOString())];
+  const env={OPS_DB:{prepare(sql){return {bind(){return this},async all(){return {results:rows}},async first(){return null},async run(){return {}}}}}};
+  try{
+    const r=await runFsRepair(env,{limit:3});
+    assert.equal(r.pending,4,"le vol lu à l'instant n'est pas candidat");
+    assert.equal(r.checked,3);
   }finally{restore()}
 });
 
