@@ -100,6 +100,7 @@ test("R18 — TO FlightAware : usage étroit, étape du cron à part ; FlightAwa
   const w=src("./v2-etd-public-wrapper.js"),f=src("./fa-takeoff.js"),p=src("./fa-policy.js");
   assert.ok(w.includes('B.step("fa-takeoff"')&&!/B\.step\("fa-takeoff"[^\n]*optional:true/.test(w)&&/B\.step\("fa-takeoff"[^\n]*ms:12000/.test(w),"étape à part, non sautable, 12 s au plus");
   assert.ok(/limit:1/.test(w.slice(w.indexOf('B.step("fa-takeoff"'),w.indexOf('B.step("fa-takeoff"')+120)),"un vol par passage");
+  assert.ok(w.includes("runFsRepair(env,{limit:3"),"réparation : 3 vols par passage");
   assert.match(f,/FIDS_ONTIME\|FR24MOVE/);assert.match(f,/takeoff:\s*value|takeoff:value/);
   assert.ok(!/atd:\s*(?:fa|d\.)/.test(f),"jamais d'ATD lue sur FlightAware");
   assert.match(p,/let enabled=false/,"FlightAware général arrêté");
