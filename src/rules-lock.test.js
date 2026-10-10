@@ -75,8 +75,8 @@ test("R2 — seules deux ATD estimées existent (FIDS_ONTIME, FR24MOVE) ; la pag
   const f=src("./fids-flight-page.js");
   assert.match(f,/const atdOpen=x=>!clean\(x\.atd\)\|\|\/FIDS_ONTIME\|FR24MOVE\/\.test/);
 });
-test("le fichier des règles existe et liste les 17 règles",()=>{
-  const d=src("../docs/REGLES_VERROUILLEES.md");for(let i=1;i<=17;i++)assert.match(d,new RegExp("^"+i+"\\. ","m"),"règle "+i);
+test("le fichier des règles existe et liste les 18 règles",()=>{
+  const d=src("../docs/REGLES_VERROUILLEES.md");for(let i=1;i<=18;i++)assert.match(d,new RegExp("^"+i+"\\. ","m"),"règle "+i);
 });
 
 test("R17 — relecture unique FlightStats : visées, exclues (manuelle, déjà faite), LDG = runway et ATA = gate, première valeur",()=>{
@@ -94,4 +94,13 @@ test("R17 — la réparation FlightStats est une étape du cron à part, pas dan
   assert.ok(w.includes('B.step("fs-repair"'),"étape fs-repair");
   assert.ok(!/needsLiveRead\(z\.r\.flight_date,date,z\.x\)\|\|needsFsRepair/.test(l),"pas dans la liste des lectures par vol");
   assert.ok(!l.includes("return [1.7"),"pas de rang 1,7");
+});
+
+test("R18 — TO FlightAware : usage étroit, étape du cron à part ; FlightAware général reste arrêté",()=>{
+  const w=src("./v2-etd-public-wrapper.js"),f=src("./fa-takeoff.js"),p=src("./fa-policy.js");
+  assert.ok(w.includes('B.step("fa-takeoff"')&&/B\.step\("fa-takeoff"[^\n]*optional:true/.test(w),"étape facultative à part");
+  assert.ok(/limit:1/.test(w.slice(w.indexOf('B.step("fa-takeoff"'),w.indexOf('B.step("fa-takeoff"')+120)),"un vol par passage");
+  assert.match(f,/FIDS_ONTIME\|FR24MOVE/);assert.match(f,/takeoff:\s*value|takeoff:value/);
+  assert.ok(!/atd:\s*(?:fa|d\.)/.test(f),"jamais d'ATD lue sur FlightAware");
+  assert.match(p,/let enabled=false/,"FlightAware général arrêté");
 });

@@ -87,8 +87,8 @@ export function flightAwareHistoryUrl(raw,f){
   }
   return best;
 }
-export async function fetchFlightAwareLive(f,knownUrl){
-  if(!flightAwareEnabled())return null;   // FlightAware arrêté : aucune lecture
+export async function fetchFlightAwareLive(f,knownUrl,{narrow=false}={}){
+  if(!flightAwareEnabled()&&!narrow)return null;   // FlightAware arrêté : aucune lecture
   if(Date.now()<flightAwareCooldownUntil)return {status:"COOLDOWN"};
   let url=cleanFlightAwareUrl(knownUrl),discovered=false;
   if(!url){
