@@ -86,3 +86,10 @@ test("R17 — relecture unique FlightStats : visées, exclues (manuelle, déjà 
   const code=src("./ops-public-live-flow-optimized.js");
   assert.ok(code.includes('if(clean(current.landing)&&!/FLIGHTSTATS/.test(upper(current.landingSource)))landing.value=""'),"un LDG FR24 n'est pas remplacé");
 });
+
+test("R17 — la réparation FlightStats est une étape du cron à part, pas dans les lectures par vol",()=>{
+  const w=src("./v2-etd-public-wrapper.js"),l=src("./ops-public-live-flow-optimized.js");
+  assert.ok(w.includes('B.step("fs-repair"'),"étape fs-repair");
+  assert.ok(!/needsLiveRead\(z\.r\.flight_date,date,z\.x\)\|\|needsFsRepair/.test(l),"pas dans la liste des lectures par vol");
+  assert.ok(!l.includes("return [1.7"),"pas de rang 1,7");
+});
