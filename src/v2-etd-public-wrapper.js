@@ -375,15 +375,15 @@ export default {
         await loadRuntimeState(env);
         // Live facts (ATD, takeoff, landing…) first: they are the most time-critical; the ETD pass over every flight can be long.
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
-        // Relecture unique FlightStats des LDG manquants / ATA calculées : 3 vols par passage, étape à part (elle ne ralentit pas les lectures par vol).
-        await B.step("fs-repair",()=>runFsRepair(env,{limit:3}),{ms:25000,optional:true});
+        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : juste après les lectures par vol, AVANT les étapes lentes (relecture FlightStats, ETD) qui la faisaient sauter ; facultative, lectures parallèles bornées à 4 s.
+        await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000,optional:true});
+        // Relecture unique FlightStats des LDG manquants / ATA calculées : 1 vol par passage (8 s au plus), étape à part, après les pages FIDS (elle ne ralentit pas les lectures par vol).
+        await B.step("fs-repair",()=>runFsRepair(env,{limit:1,perFlightMs:8000}),{ms:10000,optional:true});
         await B.step("etd-pass",()=>runEtd(env),{ms:30000,optional:true});
         if(isQuarterHour(controller))await B.step("ground",()=>runGround(env),{ms:20000,optional:true});
         // Daily control: between 03:00 and 06:00 Paris, every flight of yesterday and today is re-read by all sources, a batch per run, to correct times if needed.
         if(isDailyCheckWindow())await B.step("daily-recheck",()=>runPublicLiveFlow(env,{limit:12,concurrency:4,recheck:true}),{ms:40000,optional:true});
         await B.step("status-model-final",()=>runStatusModelTest(env),{ms:20000});
-        // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : en toute fin de passage, facultative, lectures parallèles bornées à 4 s, pour ne jamais retarder statuts ni lectures des vols.
-        await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000,optional:true});
       }finally{globalThis.__cronBudget=null;await saveCronTiming(env,B.summary());await saveRuntimeState(env);await releaseCronLock(env)}
     })());
   }
