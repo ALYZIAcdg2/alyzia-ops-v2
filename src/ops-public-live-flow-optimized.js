@@ -117,10 +117,12 @@ function aircraft(t,f){const re=/\b(A20N|A21N|A319|A320|A321|A332|A333|A339|A343
 function statusValue(t){const s=upper(t);if(/CANCEL|ANNUL/.test(s))return "ANNULÉ";if(/DIVERT|DÉROUT|DEROUT/.test(s))return "DÉROUTÉ";if(/ARRIVED AT GATE|ARRIVÉE|ARRIVED\b/.test(s))return "ARRIVÉE";if(/LANDED|ATTERI/.test(s))return "ATTERI";if(/IN AIR|AIRBORNE|IN FLIGHT|EN VOL|EN ROUTE|DEPARTED/.test(s))return "EN VOL";if(/DELAY|RETARD/.test(s))return "RETARDÉ";if(/ON TIME|SCHEDULED|PRÉVU|PREVU/.test(s))return "PRÉVU";return ""}
 // FlightStats "Flight Details" layout: Departure / Arrival, each with "Flight Gate Times" (gate = ATD / ATA) and "Flight Runway Times" (runway = takeoff / landing).
 // Labels (Scheduled / Estimated / Actual) may sit above their values or in front of each one: both orders are read.
+// Heure affichée en 12 h ("8:51 PM") : convertie en 24 h, sinon "8:51" serait lu comme 08:51. Sans AM/PM, la valeur reste telle quelle.
+function to24(v,ap){if(!v||!ap)return v||"";const[h,mi]=v.split(":").map(Number);if(!(h>=1&&h<=12))return v;const hh=/^[Pp]/.test(ap)?(h%12)+12:h%12;return String(hh).padStart(2,"0")+":"+String(mi).padStart(2,"0")}
 export function flightStatsBlockTimes(segment){
-  const toks=[],re=/\b(Scheduled|Estimated|Actual)\b|(?<![+\d:])(\d{1,2}:\d{2})(?![\d:])|(--)/g;let m;
+  const toks=[],re=/\b(Scheduled|Estimated|Actual)\b|(?<![+\d:])(\d{1,2}:\d{2})(?![\d:])(?:\s*([AaPp])\.?[Mm]\b\.?)?|(--)/g;let m;
   const seg=String(segment||"").replace(/UTC\s*[+\-−]\s*\d{1,2}(?::?\d{2})?/g," ");
-  while((m=re.exec(seg)))toks.push(m[1]?{l:m[1]}:{v:m[2]||""});
+  while((m=re.exec(seg)))toks.push(m[1]?{l:m[1]}:{v:to24(m[2],m[3])});
   const labels=[],values=[];let grouped=false;
   if(toks.length>1&&toks[0].l!==undefined&&toks[1].l!==undefined)grouped=true;
   if(grouped){for(const t of toks){if(t.l!==undefined){if(!values.length)labels.push(t.l)}else values.push(t.v)}}
