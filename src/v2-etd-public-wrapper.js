@@ -23,6 +23,7 @@ import {flightStatsStatus} from "./flightstats-status.js";
 import {missingAtdReport} from "./missing-atd.js";
 import {ataSourcesReport} from "./ata-sources.js";
 import {clearArrival} from "./clear-arrival.js";
+import {runFaTakeoff} from "./fa-takeoff.js";
 import {probeFlightStats} from "./flightstats-probe.js";
 import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
@@ -382,6 +383,8 @@ export default {
         await runLive(env,{limit:18,concurrency:4}).catch(()=>{});
         // Page FIDS du vol (ATA / ATD réels des vols sortis du flux général) : juste après les lectures par vol, AVANT les étapes lentes (relecture FlightStats, ETD) qui la faisaient sauter ; jamais sautée (8 s au plus : elle donne les ATA réelles) ; lectures parallèles bornées à 4 s.
         await B.step("fids-flight-pages",()=>sweepFidsFlightPages(env),{ms:8000});
+        // Décollage (TO) réel sur FlightAware (règle 18) : un vol par passage, pour un vol parti sans TO dont FR24 n'a rien donné.
+        await B.step("fa-takeoff",()=>runFaTakeoff(env,{limit:1}),{ms:12000,optional:true});
         // Relecture unique FlightStats des LDG manquants / ATA calculées : 1 vol par passage (8 s au plus), étape à part, après les pages FIDS (elle ne ralentit pas les lectures par vol).
         await B.step("fs-repair",()=>runFsRepair(env,{limit:1,perFlightMs:8000}),{ms:10000,optional:true});
         await B.step("etd-pass",()=>runEtd(env),{ms:30000,optional:true});

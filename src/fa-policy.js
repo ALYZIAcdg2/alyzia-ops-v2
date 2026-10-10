@@ -20,6 +20,10 @@ export function atdOverdue(x,nowMs=Date.now(),flightDate=""){
 let enabled=false;
 export const flightAwareEnabled=()=>enabled;
 export const setFlightAwareEnabled=v=>{enabled=Boolean(v)};
+// Usage étroit, réglage à part : lire UNIQUEMENT le décollage (TO) réel sur FlightAware pour un vol parti dont FR24 n'a pas donné le TO (règle 18). L'interrupteur général ci-dessus ne le commande pas.
+let takeoffEnabled=true;
+export const faTakeoffEnabled=()=>takeoffEnabled;
+export const setFaTakeoffEnabled=v=>{takeoffEnabled=Boolean(v)};
 export function flightAwareAllowed(flight,x,nowMs=Date.now(),flightDate=""){return enabled&&atdOverdue(x,nowMs,flightDate)}
 
 // Arrivée manquante : vol parti dont ni l'atterrissage ni l'ATA ne sont connus alors que la durée prévue du vol + 30 min est écoulée depuis le décollage
