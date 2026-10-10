@@ -4,7 +4,7 @@ import test from "node:test";import assert from "node:assert/strict";import fs f
 import {derive} from "./status-model-test.js";
 import {lateBeyondStd15} from "./late-std15.js";
 import {priority,needsLiveRead,flightComplete,deriveAta,fidsGone} from "./ops-public-live-flow-optimized.js";
-import {fillStaFromFr24} from "./ops-public-live-flow-optimized.js";
+import {fillStaFromFr24,needsFsRepair,flightStatsBlockTimes} from "./ops-public-live-flow-optimized.js";
 import {flightAwareEnabled} from "./fa-policy.js";
 import {wantsPage} from "./fids-flight-page.js";
 const NOW=Date.parse("2026-10-09T20:00:00Z"),iso=m=>new Date(NOW+m*60000).toISOString();
@@ -73,6 +73,16 @@ test("R2 — seules deux ATD estimées existent (FIDS_ONTIME, FR24MOVE) ; la pag
   const f=src("./fids-flight-page.js");
   assert.match(f,/const atdOpen=x=>!clean\(x\.atd\)\|\|\/FIDS_ONTIME\|FR24MOVE\/\.test/);
 });
-test("le fichier des règles existe et liste les 15 règles",()=>{
-  const d=src("../docs/REGLES_VERROUILLEES.md");for(let i=1;i<=15;i++)assert.match(d,new RegExp("^"+i+"\\. ","m"),"règle "+i);
+test("le fichier des règles existe et liste les 17 règles",()=>{
+  const d=src("../docs/REGLES_VERROUILLEES.md");for(let i=1;i<=17;i++)assert.match(d,new RegExp("^"+i+"\\. ","m"),"règle "+i);
+});
+
+test("R17 — relecture unique FlightStats : visées, exclues (manuelle, déjà faite), LDG = runway et ATA = gate, première valeur",()=>{
+  const x={atd:"05:10",takeoff:"05:20",ata:"07:55",ataSource:"PUBLIC_LIVE:FIDS"};
+  assert.equal(needsFsRepair(x),true);
+  assert.equal(needsFsRepair({...x,fsRepairAt:"2026-10-10T01:00:00Z"}),false);
+  assert.equal(needsFsRepair({...x,ataSource:"MANUAL"}),false);
+  assert.equal(flightStatsBlockTimes("Scheduled -- Actual 20:48 CET Event Timeline Actual 20:51").actual,"20:48");
+  const code=src("./ops-public-live-flow-optimized.js");
+  assert.ok(code.includes('if(clean(current.landing)&&!/FLIGHTSTATS/.test(upper(current.landingSource)))landing.value=""'),"un LDG FR24 n'est pas remplacé");
 });
