@@ -29,7 +29,8 @@ test("timebox rend un résultat tardif invisible mais ne laisse aucune minuterie
 test("branchement : étapes essentielles jamais facultatives ; pages FIDS facultatives et en dernier",()=>{
   const w=fs.readFileSync(new URL("./v2-etd-public-wrapper.js",import.meta.url),"utf8");
   for(const n of ["live-per-flight","fr24-board","status-model","fids-bulk","gatenavo"])assert.ok(!new RegExp('B\\.step\\("'+n+'"[^\\n]*optional:true').test(w),n);
-  assert.match(w,/B\.step\("fids-flight-pages"[^\n]*optional:true/);
+  assert.ok(!/B\.step\("fids-flight-pages"[^\n]*optional:true/.test(w),"pages FIDS jamais sautées");
+  assert.match(w,/B\.step\("fids-flight-pages"[^\n]*ms:8000/);
   assert.ok(w.indexOf('B.step("fids-flight-pages"')<w.indexOf('B.step("status-model-final"'),"pages FIDS avant les statuts finaux");
   assert.ok(w.indexOf('B.step("fids-flight-pages"')<w.indexOf('B.step("fs-repair"')&&w.indexOf('B.step("fids-flight-pages"')<w.indexOf('B.step("etd-pass"'),"pages FIDS avant les étapes lentes");
   assert.match(w,/globalThis\.__cronBudget=B/);assert.match(w,/saveCronTiming\(env,B\.summary\(\)\)/);
