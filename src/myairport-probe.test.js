@@ -17,6 +17,7 @@ test("sonde : lisible, protégée (arrêt), erreur HTTP — une seule requête, 
   assert.equal(ok.takeoff,"11:13");assert.match(ok.verdict,/LISIBLE : décollage réel 11:13/);assert.equal(n,1);
   const bot=await probeMyAirport({flight:"TK1830",date:"2026-10-10",destination:"IST"},{fetchImpl:mk(200,"<h1>Pardon Our Interruption</h1>")});
   assert.equal(bot.botProtection,true);assert.match(bot.verdict,/PROTÉGÉE/);assert.equal(bot.takeoff,undefined);
+  assert.equal(bot.botMarker,"Pardon Our Interruption");assert.match(bot.pageTextHead,/Pardon Our Interruption/);
   const e403=await probeMyAirport({flight:"TK1830",date:"2026-10-10",destination:"IST"},{fetchImpl:mk(403,"nope")});
   assert.match(e403.verdict,/HTTP 403/);
   assert.equal((await probeMyAirport({})).ok,false);
