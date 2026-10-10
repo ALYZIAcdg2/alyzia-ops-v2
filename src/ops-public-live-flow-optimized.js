@@ -121,13 +121,14 @@ function statusValue(t){const s=upper(t);if(/CANCEL|ANNUL/.test(s))return "ANNUL
 function to24(v,ap){if(!v||!ap)return v||"";const[h,mi]=v.split(":").map(Number);if(!(h>=1&&h<=12))return v;const hh=/^[Pp]/.test(ap)?(h%12)+12:h%12;return String(hh).padStart(2,"0")+":"+String(mi).padStart(2,"0")}
 export function flightStatsBlockTimes(segment){
   const toks=[],re=/\b(Scheduled|Estimated|Actual)\b|(?<![+\d:])(\d{1,2}:\d{2})(?![\d:])(?:\s*([AaPp])\.?[Mm]\b\.?)?|(--)/g;let m;
-  const seg=String(segment||"").replace(/UTC\s*[+\-−]\s*\d{1,2}(?::?\d{2})?/g," ");
+  const seg=String(segment||"").split(/Event Timeline/)[0].replace(/UTC\s*[+\-−]\s*\d{1,2}(?::?\d{2})?/g," ");
   while((m=re.exec(seg)))toks.push(m[1]?{l:m[1]}:{v:to24(m[2],m[3])});
   const labels=[],values=[];let grouped=false;
   if(toks.length>1&&toks[0].l!==undefined&&toks[1].l!==undefined)grouped=true;
   if(grouped){for(const t of toks){if(t.l!==undefined){if(!values.length)labels.push(t.l)}else values.push(t.v)}}
   else{for(let i=0;i<toks.length;i++){if(toks[i].l!==undefined&&toks[i+1]&&toks[i+1].l===undefined){labels.push(toks[i].l);values.push(toks[i+1].v);i++}}}
-  const out={};labels.forEach((l,i)=>{out[l.toLowerCase()]=values[i]||""});return out;
+  // La première valeur de chaque libellé fait foi : plus bas, la page répète « Actual / Estimated » dans l'historique des changements (Event Timeline) avec d'autres heures (AH1115 : atterrissage 20:48 lu 20:51).
+  const out={};labels.forEach((l,i)=>{const k=l.toLowerCase();if(!(k in out))out[k]=values[i]||""});return out;
 }
 // The FlightStats page names the flight of the requested date in several places: the "view details" link (…/flight-details/MH/21?year=2026&month=10&date=5&flightId=…),
 // the path form (…/flight-details/TS/111/2026/10/5/1412363884) and the JSON data ("flightId":1412363884 followed by its date). Every form is read; the id is used only when they all agree.
