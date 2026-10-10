@@ -2,7 +2,7 @@
 // Lecture seulement, 4 vols au plus par passage du cron ; STD/STA ne sont jamais modifiées, une saisie manuelle n'est jamais écrasée.
 // ATA : seulement si vide, calculée (LDG + 10) ou déjà du FIDS. ATD : seulement si vide, « parti à l'heure » ou premier mouvement FR24.
 import {tzOffsetMinutes} from "./airport-tz.js";
-const BASE="https://fids.flightradar.live/flight-status",MAX_PER_RUN=6,FETCH_TIMEOUT_MS=4000,RETRY_MS=10*60000,OVERDUE_RETRY_MS=4*60000,MAX_AGE_H=6;
+const BASE="https://fids.flightradar.live/flight-status",MAX_PER_RUN=12,FETCH_TIMEOUT_MS=4000,RETRY_MS=90*1000,OVERDUE_RETRY_MS=90*1000,MAX_AGE_H=6;
 const clean=v=>String(v??"").trim(),upper=v=>clean(v).toUpperCase();
 const hhmm=v=>{const m=clean(v).match(/(\d{1,2}):(\d{2})/);return m?m[1].padStart(2,"0")+":"+m[2]:""};
 const mins=v=>{const m=hhmm(v).match(/(\d+):(\d+)/);return m?Number(m[1])*60+Number(m[2]):null};
@@ -56,8 +56,8 @@ export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now()
   const cand=[];
   for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{continue}
     if(!wantsPage(x,nowMs))continue;
-    // Vol d'hier : sa page a disparu (410) sauf s'il est parti après minuit ; seuls les départs de 20 h ou plus sont relus.
-    if(r.flight_date<today&&(mins(x.std||r.std)??0)<20*60)continue;
+    // Les vols d'hier passent après ceux d'aujourd'hui ; une page déjà marquée disparue n'est plus relue (FlightStats a pris le relais).
+    if(clean(x.fidsPageGoneAt))continue;
     if(only&&!upper(x.flight||r.flight_number).includes(upper(only)))continue;
     {const a=Date.parse(clean(x.statusArrivalUtc)),late=Number.isFinite(a)&&nowMs-a>=15*60000&&!clean(x.ata);if(!dryRun&&nowMs-(tried.get(r.identity)||0)<(late?OVERDUE_RETRY_MS:RETRY_MS))continue}
     cand.push({r,x})}
@@ -79,7 +79,10 @@ export async function sweepFidsFlightPages(env,{fetchImpl=fetch,nowMs=Date.now()
   }));
   for(const pg of pages){
     if(!pg)continue;const {r,x,flight,url,http,err,p}=pg;
-    checked.push({flight,url,http,err,parsed:p});if(!p)continue;
+    checked.push({flight,url,http,err,parsed:p});
+    // Page disparue (404 / 410) : le FIDS n'a plus accès à ce vol. Marqué une fois ; FlightStats prend alors le relais pour l'ATA (voir fidsGone dans la lecture par vol).
+    if(!p&&(http===404||http===410)&&!clean(x.fidsPageGoneAt)&&!dryRun){x.fidsPageGoneAt=at;await env.OPS_DB.prepare(`UPDATE flights SET data_json=?,updated_at=CURRENT_TIMESTAMP WHERE identity=?`).bind(JSON.stringify(x),r.identity).run();continue}
+    if(!p)continue;
     let changed=false;const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog:[];
     const ata=pageAta(p,x,nowMs);
     if(ata&&!manual(x,"ata")&&ataOpen(x)&&clean(x.ata)!==ata){log.unshift({at,source:"PUBLIC_LIVE:FIDS",field:"ata",from:clean(x.ata),to:ata});x.ata=ata;x.ataSource="PUBLIC_LIVE:FIDS";x.ataUpdatedAt=at;changed=true}

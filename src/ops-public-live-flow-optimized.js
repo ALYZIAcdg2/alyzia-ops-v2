@@ -366,6 +366,8 @@ export function suspectAtd(x){return Boolean(clean(x?.atd))&&clean(x.atd)===clea
 const INFLIGHT_WINDOW_MIN=120,INFLIGHT_REREAD_MIN=3;
 export function arrivingSoon(x,nowMs=Date.now()){const a=Date.parse(clean(x?.statusArrivalUtc));if(!Number.isFinite(a)||clean(x?.ata))return false;const m=(a-nowMs)/60000;return m<=INFLIGHT_WINDOW_MIN&&m>=-120}
 export function etaOverdueMin(x,nowMs=Date.now()){const a=Date.parse(clean(x?.statusArrivalUtc));return Number.isFinite(a)?(nowMs-a)/60000:null}
+// FIDS n'a plus accès au vol (page du vol disparue, marquée par la lecture des pages FIDS) : FlightStats prend le relais pour l'ATA d'un vol parti sans atterrissage ni ATA. FlightStats reste dernier secours (pause automatique inchangée) ; tant que le FIDS répond, il n'est pas appelé pour cela.
+export function fidsGone(x){return Boolean(clean(x?.fidsPageGoneAt))&&!clean(x?.ata)&&!clean(x?.landing)&&Boolean(clean(x?.atd)||clean(x?.takeoff))}
 export function priority(row,x,nowMin,nowMs=Date.now()){const std=mins(x.std||row.std),checked=Date.parse(x.publicLiveBackfill?.checkedAt||0)||0,departed=Boolean(clean(x.atd)||clean(x.takeoff));if(suspectAtd(x))return [0,checked];
   // ETA dépassée de 15 min ou plus (vol parti) sans atterrissage ni ATA : relu AVANT les vols plus lointains, pour récupérer LDG / ATA. Délai entre deux lectures du même vol : 6 min jusqu'à 2 h après l'ETA, 15 min jusqu'à 6 h, puis 1 h (un vol resté sans donnée ne monopolise plus les places).
   {const ov=etaOverdueMin(x,nowMs);if(departed&&!clean(x.ata)&&!clean(x.landing)&&ov!==null&&ov>=15){const gap=ov<120?6:ov<360?15:60;if(nowMs-checked>=gap*60000)return [0.1,checked]}}
@@ -404,7 +406,7 @@ async function applyOne(env,row,{dryRun=false,recheck=false,onDemand=false}={}){
   needs={...needs,gate:!gateValue(base)||/FR24BOARD/.test(upper(base.gateSource)),etd:!clean(base.atd)&&!clean(base.takeoff)};
   {const bl=await boardLookup(f).catch(()=>null);if(bl){attempts.push(bl.attempt);map.FR24BOARD=bl.semantic;needs={...needs,atd:needs.atd&&!bl.semantic.atd,reg:needs.reg&&!bl.semantic.reg,aircraft:needs.aircraft&&!bl.semantic.aircraft,gate:false,etd:false};if(bl.fr24Id&&!clean(f.raw?.fr24OccurrenceId))f.raw={...f.raw,fr24OccurrenceId:bl.fr24Id}}}
   // FlightStats / FlightAware : dernier secours. Appelés pour un vol dont la STD est passée sans ATD après FIDS et FR24, pour lire une arrivée d'un vol parti (id FS connu / page FA connue), ou à la demande.
-  const atdMissing=(!clean(base.atd)||suspectAtd(base))&&!clean(map.FR24BOARD?.atd),etaWanted=needs.eta&&(clean(base.atd)||clean(base.takeoff))&&!clean(base.landing)&&!clean(base.ata),lastResort=forced||(pastStd&&atdMissing)||etaWanted;
+  const atdMissing=(!clean(base.atd)||suspectAtd(base))&&!clean(map.FR24BOARD?.atd),etaWanted=needs.eta&&(clean(base.atd)||clean(base.takeoff))&&!clean(base.landing)&&!clean(base.ata),lastResort=forced||(pastStd&&atdMissing)||etaWanted||fidsGone(base);
   // FlightStats: seulement si un champ gate-time/status manque.
   const fsIdKnown=/^\d+$/.test(clean(f.raw?.flightStatsId))&&clean(f.raw?.flightStatsIdDate)===f.date;
   const fsFill=!forced&&fsFillLeft>0&&atdFillDue(base,f.date);

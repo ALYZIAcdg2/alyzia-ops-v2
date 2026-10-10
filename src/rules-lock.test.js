@@ -3,7 +3,7 @@
 import test from "node:test";import assert from "node:assert/strict";import fs from "node:fs";
 import {derive} from "./status-model-test.js";
 import {lateBeyondStd15} from "./late-std15.js";
-import {priority,needsLiveRead,flightComplete,deriveAta} from "./ops-public-live-flow-optimized.js";
+import {priority,needsLiveRead,flightComplete,deriveAta,fidsGone} from "./ops-public-live-flow-optimized.js";
 import {fillStaFromFr24} from "./ops-public-live-flow-optimized.js";
 import {flightAwareEnabled} from "./fa-policy.js";
 import {wantsPage} from "./fids-flight-page.js";
@@ -32,6 +32,10 @@ test("R11 — ETA dépassée de 15 min sans LDG/ATA : rang 0,1, avant tout autre
   assert.equal(priority({std:"18:00"},x,1100,NOW)[0],0.1);
   assert.ok(priority({std:"18:00"},x,1100,NOW)[0]<priority({std:"21:00"},{std:"21:00"},1100,NOW)[0]);
   assert.notEqual(priority({std:"18:00"},{...x,statusArrivalUtc:iso(-10)},1100,NOW)[0],0.1);
+});
+test("R12 — la page FIDS est relue à chaque passage (RETRY ≤ 2 min), jamais FlightStats élargi : pas de clause ataReadWanted",()=>{
+  const f=src("./fids-flight-page.js");assert.match(f,/RETRY_MS=90\*1000/);
+  assert.ok(!/ataReadWanted/.test(src("./ops-public-live-flow-optimized.js")));   // FlightStats n'est pas appelé sans raison : seulement quand le FIDS n'a plus accès (fidsGone)
 });
 test("R12 — la page FIDS du vol est lue pour un vol décollé SANS atterrissage connu (AH1115 / AH1543 / AH1083 / AH1013)",()=>{
   const ah={origin:"CDG",destination:"BJA",takeoff:"19:59",atd:"19:30",atdSource:"PUBLIC_LIVE:FIDS"};
