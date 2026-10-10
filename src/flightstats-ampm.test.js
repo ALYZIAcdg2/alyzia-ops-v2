@@ -8,6 +8,6 @@ test("FlightStats : heure en 12 h convertie en 24 h (8:51 PM → 20:51)",()=>{
 });
 test("FlightStats : heure en 24 h inchangée, sans AM/PM rien n'est deviné",()=>{
   assert.equal(flightStatsBlockTimes("Scheduled 20:40 Actual 20:53").actual,"20:53");
-  assert.equal(flightStatsBlockTimes("Actual 8:51").actual,"8:51");
+  assert.equal(flightStatsBlockTimes("Actual 8:51").actual,"08:51");
   assert.equal(flightStatsBlockTimes("Scheduled 20:40 Actual --").actual,"");
 });
