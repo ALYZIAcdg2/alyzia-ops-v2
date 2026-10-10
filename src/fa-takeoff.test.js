@@ -55,7 +55,7 @@ test("runFaTakeoff : cas TK1830, FlightAware 11:13 → TO écrit (source FLIGHTA
   const {env,saved}=mkEnv([tk]),m=mockFa(true);
   try{
     const r=await runFaTakeoff(env,{limit:1,nowMs:NOW});
-    assert.equal(r.results[0].status,"TAKEOFF_WRITTEN");assert.equal(r.results[0].takeoff,"11:13");
+    assert.equal(r.results[0].status,"TAKEOFF_WRITTEN");assert.equal(r.results[0].takeoff,"11:13");assert.equal(r.results[0].read.takeoff,"11:13");assert.match(r.results[0].url,/LFPG\/LTFM$/);
     const w=saved.at(-1);assert.equal(w.takeoff,"11:13");assert.equal(w.takeoffSource,"PUBLIC_LIVE:FLIGHTAWARE_TAKEOFF");assert.equal(w.atd,"10:56");assert.equal(w.atdSource,"PUBLIC_LIVE:FIDS");
     assert.ok(w.faTakeoffCheckedAt);assert.match(w.flightAwareHistoryUrl,/LFPG\/LTFM/);
     assert.equal(m.urls.length,2,"2 requêtes au plus pour un vol (page de recherche puis page du vol)");
@@ -65,7 +65,7 @@ test("runFaTakeoff : FlightAware sans décollage réel → rien d'écrit pour le
   const {env,saved}=mkEnv([tk]),m=mockFa(false);
   try{
     const r=await runFaTakeoff(env,{limit:1,nowMs:NOW});
-    assert.equal(r.results[0].status,"OK");assert.equal(r.results[0].reason,"AUCUN_TO");
+    assert.equal(r.results[0].status,"OK");assert.equal(r.results[0].reason,"AUCUN_TO");assert.equal(r.results[0].read.takeoff,"");
     const w=saved.at(-1);assert.equal(w.takeoff,undefined);assert.ok(w.faTakeoffCheckedAt);
   }finally{m.restore()}
 });
