@@ -22,6 +22,7 @@ import {runFlighteraBoardTest} from "./flightera-board-test.js";
 import {flightStatsStatus} from "./flightstats-status.js";
 import {missingAtdReport} from "./missing-atd.js";
 import {ataSourcesReport} from "./ata-sources.js";
+import {clearArrival} from "./clear-arrival.js";
 import {probeFlightStats} from "./flightstats-probe.js";
 import {flightAwareStatus,probeFlightAware} from "./flightaware-probe.js";
 import {runFidsWidgetTest} from "./fids-widget-test.js";
@@ -257,6 +258,10 @@ export default {
     if(url.pathname==="/api/admin/ata-sources"&&request.method==="GET"){
       // Lecture seule : qui a écrit chaque ATA de la date (?date=AAAA-MM-JJ), avec LDG, ATD et résumé par source.
       try{return json(await ataSourcesReport(env,{date:url.searchParams.get("date")||""}))}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
+    }
+    if(url.pathname==="/api/admin/clear-arrival"){
+      // Test : vide l'ATA et le LDG d'UN vol d'hier ou d'aujourd'hui (?flight=DE4292&date=AAAA-MM-JJ). Sans `&apply=OUI` : aperçu (rien n'est écrit). Avec `&apply=OUI` (ou POST) : vide. Refuse un champ saisi à la main.
+      try{const r=await clearArrival(env,{flight:url.searchParams.get("flight")||"",date:url.searchParams.get("date")||"",dryRun:!(request.method==="POST"||url.searchParams.get("apply")==="OUI")});return json(r,r.ok?200:400)}catch(error){return json({ok:false,error:String(error?.message||error)},500)}
     }
     if(url.pathname==="/api/admin/missing-atd"&&request.method==="GET"){
       // Lecture seule : vols du jour partis depuis plus de 20 min sans ATD, avec l'état de FIDS, FlightStats et FlightAware pour chacun.
