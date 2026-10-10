@@ -33,6 +33,11 @@ export function decideFaTakeoff(x,value,nowMs=Date.now()){
   if(since===null||since<0||since>FA_TO_MAX_SINCE_ATD_MIN+FA_TO_MAX_AFTER_GATE_MIN)return {ok:false,reason:"DANS_LE_FUTUR"};
   return {ok:true,value:v};
 }
+// Ordre de lecture : jamais lus d'abord, puis le plus anciennement lu ; à égalité, le vol parti depuis LE PLUS LONGTEMPS (ATD le plus ancien) passe en premier.
+export function faTakeoffOrder(nowMs=Date.now()){
+  const age=x=>minutesSinceLocalClock(x?.atd,zoneOf(x),new Date(nowMs))??0;
+  return (a,b)=>a.checked-b.checked||age(b.x)-age(a.x);
+}
 export function applyFaTakeoff(x,value,at){
   const log=Array.isArray(x.flightInfoLog)?x.flightInfoLog.slice():[];
   log.unshift({at,source:SOURCE,field:"takeoff",from:"",to:value});
@@ -44,8 +49,8 @@ export async function runFaTakeoff(env,{limit=1,perFlightMs=9000,nowMs=Date.now(
   if(!faTakeoffEnabled())return {ok:true,mode:"FA_TAKEOFF",disabled:true};
   const today=parisDate(nowMs),{results=[]}=await env.OPS_DB.prepare(`SELECT identity,flight_date,flight_number,airline,std,data_json FROM flights WHERE flight_date BETWEEN ? AND ? AND airline<>'SYS' ORDER BY flight_date,std,flight_number`).bind(addDays(today,-1),today).all();
   const todo=[];for(const r of results){let x={};try{x=JSON.parse(r.data_json||"{}")}catch{}if(!wantsFaTakeoff(x,nowMs))continue;todo.push({r,x,checked:Date.parse(clean(x.faTakeoffCheckedAt))||0})}
-  todo.sort((a,b)=>a.checked-b.checked);
   const out=[];
+  todo.sort(faTakeoffOrder(nowMs));
   for(const z of todo.slice(0,Math.max(1,limit))){
     const {r,x}=z,airline=upper(x.airline||r.airline),designator=upper(x.flight||r.flight_number),number=designator.startsWith(airline)?designator.slice(airline.length):designator;
     const f={date:r.flight_date,airline,number,designator,origin:upper(x.origin||"CDG"),destination:upper(x.destination||x.dest||""),std:clean(x.std||r.std)};

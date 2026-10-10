@@ -1,5 +1,5 @@
 import test from "node:test";import assert from "node:assert/strict";
-import {wantsFaTakeoff,decideFaTakeoff,applyFaTakeoff,runFaTakeoff} from "./fa-takeoff.js";
+import {wantsFaTakeoff,decideFaTakeoff,applyFaTakeoff,runFaTakeoff,faTakeoffOrder} from "./fa-takeoff.js";
 import {fetchFlightAwareLive} from "./ops-public-live-flow-optimized.js";
 import {setFaTakeoffEnabled,flightAwareEnabled} from "./fa-policy.js";
 
@@ -73,4 +73,10 @@ test("runFaTakeoff : interrupteur du TO arrêté → aucune lecture",async()=>{
   const {env,saved}=mkEnv([tk]),m=mockFa(true);setFaTakeoffEnabled(false);
   try{const r=await runFaTakeoff(env,{limit:1,nowMs:NOW});assert.equal(r.disabled,true);assert.equal(m.urls.length,0);assert.equal(saved.length,0)}
   finally{setFaTakeoffEnabled(true);m.restore()}
+});
+
+test("ordre de lecture : le vol parti depuis le plus longtemps (TK1830, ATD 10:56) passe avant un vol parti plus récemment ; un vol déjà lu passe après",()=>{
+  const items=[{x:{...tk,flight:"AA1",atd:"12:10"},checked:0},{x:tk,checked:0},{x:{...tk,flight:"BB2",atd:"09:30"},checked:Date.parse("2026-10-10T10:00:00Z")},{x:{...tk,flight:"CC3",atd:"11:40"},checked:0}];
+  const order=items.slice().sort(faTakeoffOrder(NOW)).map(z=>z.x.flight+"@"+z.x.atd);
+  assert.deepEqual(order,["TK1830@10:56","CC3@11:40","AA1@12:10","BB2@09:30"]);
 });
